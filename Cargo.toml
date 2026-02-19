@@ -1,0 +1,19 @@
+[package]
+name = "claude-scriptcheck"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+thaum = { git = "https://github.com/bindreams/thaum.git" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+glob-match = "0.2"
+dirs = "6"
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+pretty_assertions = "1"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
