@@ -100,9 +100,11 @@ pub fn well_known_file_accesses(
     }
 }
 
-/// Returns true if this command is known to access files through its arguments.
-#[allow(dead_code)]
-pub fn is_file_accessing_command(cmd_name: &str) -> bool {
+/// Returns true if this command's only effect is file I/O. For these commands,
+/// a matching Read/Write rule is sufficient — a separate Bash() rule is not required.
+///
+/// `source` / `.` are excluded because they execute the sourced file.
+pub fn is_file_only_command(cmd_name: &str) -> bool {
     matches!(
         cmd_name,
         "cat"
@@ -139,8 +141,6 @@ pub fn is_file_accessing_command(cmd_name: &str) -> bool {
             | "tee"
             | "ln"
             | "install"
-            | "source"
-            | "."
             | "strings"
             | "readelf"
             | "objdump"
@@ -386,5 +386,30 @@ mod tests {
         assert_eq!(accesses.len(), 1);
         assert_eq!(accesses[0].path, "/tmp/file.txt");
         assert_eq!(accesses[0].kind, AccessKind::Read);
+    }
+
+    #[test]
+    fn file_only_commands_recognized() {
+        assert!(is_file_only_command("mkdir"));
+        assert!(is_file_only_command("touch"));
+        assert!(is_file_only_command("cat"));
+        assert!(is_file_only_command("cp"));
+        assert!(is_file_only_command("rm"));
+        assert!(is_file_only_command("grep"));
+        assert!(is_file_only_command("awk"));
+        assert!(is_file_only_command("sed"));
+    }
+
+    #[test]
+    fn source_is_not_file_only() {
+        assert!(!is_file_only_command("source"));
+        assert!(!is_file_only_command("."));
+    }
+
+    #[test]
+    fn non_file_commands_not_file_only() {
+        assert!(!is_file_only_command("echo"));
+        assert!(!is_file_only_command("git"));
+        assert!(!is_file_only_command("curl"));
     }
 }

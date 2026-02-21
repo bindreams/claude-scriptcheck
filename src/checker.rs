@@ -196,10 +196,6 @@ fn check_command(
         .iter()
         .any(|rule| permission::bash_rule_matches(rule, &cmd_tokens));
 
-    if !bash_allowed {
-        unmatched.push(format!("Bash({})", cmd_tokens.join(" ")));
-    }
-
     // Extract file accesses from redirects
     let redirect_accesses = extract_redirect_accesses(&cmd.redirects, cwd);
 
@@ -209,6 +205,22 @@ fn check_command(
     // Check all file accesses
     for access in redirect_accesses.iter().chain(cmd_accesses.iter()) {
         try_check!(check_file_access(access, perms, unmatched));
+    }
+
+    // For file-only commands (mkdir, touch, rm, cp, …), the file access rules are
+    // sufficient — no separate Bash() rule is needed, provided:
+    //   1. the command has at least one resolved file access to gate it, and
+    //   2. all arguments are static (no dynamic args that could hide unchecked paths).
+    if !bash_allowed {
+        let has_file_accesses = !redirect_accesses.is_empty() || !cmd_accesses.is_empty();
+        let has_dynamic_args = arg_literals[1..].iter().any(|a| a.is_none());
+        let can_skip = file_access::is_file_only_command(&cmd_name)
+            && has_file_accesses
+            && !has_dynamic_args;
+
+        if !can_skip {
+            unmatched.push(format!("Bash({})", cmd_tokens.join(" ")));
+        }
     }
 
     // Check process substitutions in arguments
@@ -670,6 +682,124 @@ mod tests {
         let d = check(
             "sed 's/foo/bar/' /tmp/f.txt",
             &["Bash(sed *)", "Read(/tmp/**)"],
+            &[],
+        );
+        assert_eq!(d, Decision::Allow);
+    }
+
+    // ---- File-only command tests ----
+
+    #[test]
+    fn mkdir_allowed_by_write_rule() {
+        let d = check("mkdir /tmp/claude/foo", &["Write(/tmp/claude/**)"], &[]);
+        assert_eq!(d, Decision::Allow);
+    }
+
+    #[test]
+    fn mkdir_p_allowed_by_write_rule() {
+        let d = check(
+            "mkdir -p /tmp/claude/foo/bar",
+            &["Write(/tmp/claude/**)"],
+            &[],
+        );
+        assert_eq!(d, Decision::Allow);
+    }
+
+    #[test]
+    fn mkdir_missing_write_rule_asks_for_write_not_bash() {
+        let d = check("mkdir /home/user/foo", &[], &[]);
+        if let Decision::Ask(ref rules) = d {
+            assert!(rules.iter().any(|r| r.contains("Write(")));
+            assert!(!rules.iter().any(|r| r.starts_with("Bash(")));
+        } else {
+            panic!("expected Ask, got {:?}", d);
+        }
+    }
+
+    #[test]
+    fn mkdir_dynamic_arg_needs_bash_rule() {
+        let d = check("mkdir $VAR", &["Write(/tmp/**)"], &[]);
+        assert!(matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))));
+    }
+
+    #[test]
+    fn mkdir_no_args_needs_bash_rule() {
+        let d = check("mkdir", &["Write(/tmp/**)"], &[]);
+        assert!(matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))));
+    }
+
+    #[test]
+    fn touch_allowed_by_write_rule() {
+        let d = check("touch /tmp/claude/foo", &["Write(/tmp/claude/**)"], &[]);
+        assert_eq!(d, Decision::Allow);
+    }
+
+    #[test]
+    fn cat_allowed_by_read_rule() {
+        let d = check("cat /tmp/file.txt", &["Read(/tmp/**)"], &[]);
+        assert_eq!(d, Decision::Allow);
+    }
+
+    #[test]
+    fn rm_allowed_by_write_rule() {
+        let d = check("rm /tmp/claude/foo.txt", &["Write(/tmp/claude/**)"], &[]);
+        assert_eq!(d, Decision::Allow);
+    }
+
+    #[test]
+    fn source_still_needs_bash_rule() {
+        let d = check("source /tmp/script.sh", &["Read(/tmp/**)"], &[]);
+        assert!(matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))));
+    }
+
+    #[test]
+    fn cp_allowed_by_file_rules() {
+        let d = check(
+            "cp /tmp/a.txt /tmp/b.txt",
+            &["Read(/tmp/**)", "Write(/tmp/**)"],
+            &[],
+        );
+        assert_eq!(d, Decision::Allow);
+    }
+
+    #[test]
+    fn cp_missing_write_asks_for_write_not_bash() {
+        let d = check("cp /tmp/a.txt /home/user/b.txt", &["Read(/tmp/**)"], &[]);
+        if let Decision::Ask(ref rules) = d {
+            assert!(rules.iter().any(|r| r.contains("Write(")));
+            assert!(!rules.iter().any(|r| r.starts_with("Bash(")));
+        } else {
+            panic!("expected Ask, got {:?}", d);
+        }
+    }
+
+    #[test]
+    fn grep_with_file_allowed_by_read_rule() {
+        let d = check("grep pattern /tmp/data.txt", &["Read(/tmp/**)"], &[]);
+        assert_eq!(d, Decision::Allow);
+    }
+
+    #[test]
+    fn grep_stdin_only_needs_bash_rule() {
+        let d = check("grep pattern", &["Read(/tmp/**)"], &[]);
+        assert!(matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))));
+    }
+
+    #[test]
+    fn file_only_with_bash_deny_still_denied() {
+        let d = check(
+            "mkdir /tmp/claude/foo",
+            &["Write(/tmp/claude/**)"],
+            &["Bash(mkdir *)"],
+        );
+        assert!(matches!(d, Decision::Deny(_)));
+    }
+
+    #[test]
+    fn file_only_with_explicit_bash_rule_still_works() {
+        let d = check(
+            "mkdir /tmp/claude/foo",
+            &["Bash(mkdir *)", "Write(/tmp/claude/**)"],
             &[],
         );
         assert_eq!(d, Decision::Allow);
