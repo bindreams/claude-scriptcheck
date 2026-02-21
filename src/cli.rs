@@ -154,17 +154,96 @@ pub fn log(clear: bool) {
     }
 }
 
-/// Upgrade claude-scriptcheck to the latest version.
+const CRATE_NAME: &str = "claude-scriptcheck";
+const DEFAULT_GIT_URL: &str = "https://github.com/bindreams/claude-scriptcheck.git";
+
+/// Installation source detected from cargo metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InstallSource {
+    Git(String),
+    Registry,
+    Path(String),
+}
+
+/// Upgrade claude-scriptcheck to the latest version, respecting the original install source.
 pub fn upgrade() {
-    let status = std::process::Command::new("cargo")
-        .args(["install", "--git", "https://github.com/bindreams/claude-scriptcheck.git"])
-        .status()
-        .unwrap_or_else(|e| {
-            eprintln!("Failed to run cargo: {e}");
-            process::exit(1);
-        });
+    let source = detect_install_source();
+    let mut cmd = std::process::Command::new("cargo");
+
+    match &source {
+        Some(InstallSource::Git(url)) => {
+            eprintln!("Upgrading {CRATE_NAME} (installed from git: {url})");
+            cmd.args(["install", "--git", url]);
+        }
+        Some(InstallSource::Registry) => {
+            eprintln!("Upgrading {CRATE_NAME} (installed from crates.io)");
+            cmd.args(["install", CRATE_NAME]);
+        }
+        Some(InstallSource::Path(path)) => {
+            eprintln!("Upgrading {CRATE_NAME} (installed from path: {path})");
+            cmd.args(["install", "--path", path]);
+        }
+        None => {
+            eprintln!("Upgrading {CRATE_NAME} (install source unknown, defaulting to git)");
+            cmd.args(["install", "--git", DEFAULT_GIT_URL]);
+        }
+    }
+
+    let status = cmd.status().unwrap_or_else(|e| {
+        eprintln!("Failed to run cargo: {e}");
+        process::exit(1);
+    });
 
     process::exit(status.code().unwrap_or(1));
+}
+
+fn detect_install_source() -> Option<InstallSource> {
+    let cargo_home = std::env::var("CARGO_HOME")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(|| dirs::home_dir().map(|h| h.join(".cargo")))?;
+
+    let crates_file = cargo_home.join(".crates2.json");
+    let content = std::fs::read_to_string(crates_file).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    parse_install_source(&json, CRATE_NAME)
+}
+
+fn parse_install_source(
+    crates_json: &serde_json::Value,
+    crate_name: &str,
+) -> Option<InstallSource> {
+    let installs = crates_json.get("installs")?.as_object()?;
+    let prefix = format!("{crate_name} ");
+
+    for key in installs.keys() {
+        if !key.starts_with(&prefix) {
+            continue;
+        }
+
+        // Key format: "name version (source_id)"
+        let open = key.find('(')?;
+        let close = key.rfind(')')?;
+        if open >= close {
+            return None;
+        }
+        let source_id = &key[open + 1..close];
+
+        if let Some(url) = source_id.strip_prefix("git+") {
+            // Strip the #commit_hash suffix
+            let url = url.split('#').next().unwrap_or(url);
+            return Some(InstallSource::Git(url.to_string()));
+        } else if source_id.starts_with("registry+") {
+            return Some(InstallSource::Registry);
+        } else if let Some(path) = source_id.strip_prefix("path+file://") {
+            return Some(InstallSource::Path(path.to_string()));
+        }
+
+        return None;
+    }
+
+    None
 }
 
 /// Print the path to the log file.
@@ -235,4 +314,99 @@ fn entry_matches(entry: &serde_json::Value, binary_path: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_git_source() {
+        let json = serde_json::json!({
+            "installs": {
+                "claude-scriptcheck 0.1.0 (git+https://github.com/bindreams/claude-scriptcheck.git#abc123def)": {
+                    "bins": ["claude-scriptcheck"]
+                }
+            }
+        });
+        assert_eq!(
+            parse_install_source(&json, "claude-scriptcheck"),
+            Some(InstallSource::Git("https://github.com/bindreams/claude-scriptcheck.git".into()))
+        );
+    }
+
+    #[test]
+    fn detect_registry_source() {
+        let json = serde_json::json!({
+            "installs": {
+                "claude-scriptcheck 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)": {
+                    "bins": ["claude-scriptcheck"]
+                }
+            }
+        });
+        assert_eq!(
+            parse_install_source(&json, "claude-scriptcheck"),
+            Some(InstallSource::Registry)
+        );
+    }
+
+    #[test]
+    fn detect_path_source() {
+        let json = serde_json::json!({
+            "installs": {
+                "claude-scriptcheck 0.1.0 (path+file:///home/user/src/claude-scriptcheck)": {
+                    "bins": ["claude-scriptcheck"]
+                }
+            }
+        });
+        assert_eq!(
+            parse_install_source(&json, "claude-scriptcheck"),
+            Some(InstallSource::Path("/home/user/src/claude-scriptcheck".into()))
+        );
+    }
+
+    #[test]
+    fn detect_missing_crate() {
+        let json = serde_json::json!({
+            "installs": {
+                "some-other-crate 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)": {
+                    "bins": ["other"]
+                }
+            }
+        });
+        assert_eq!(parse_install_source(&json, "claude-scriptcheck"), None);
+    }
+
+    #[test]
+    fn detect_empty_installs() {
+        let json = serde_json::json!({ "installs": {} });
+        assert_eq!(parse_install_source(&json, "claude-scriptcheck"), None);
+    }
+
+    #[test]
+    fn detect_malformed_key() {
+        let json = serde_json::json!({
+            "installs": {
+                "claude-scriptcheck 0.1.0": {
+                    "bins": ["claude-scriptcheck"]
+                }
+            }
+        });
+        assert_eq!(parse_install_source(&json, "claude-scriptcheck"), None);
+    }
+
+    #[test]
+    fn git_source_without_commit_hash() {
+        let json = serde_json::json!({
+            "installs": {
+                "claude-scriptcheck 0.1.0 (git+https://github.com/bindreams/claude-scriptcheck.git)": {
+                    "bins": ["claude-scriptcheck"]
+                }
+            }
+        });
+        assert_eq!(
+            parse_install_source(&json, "claude-scriptcheck"),
+            Some(InstallSource::Git("https://github.com/bindreams/claude-scriptcheck.git".into()))
+        );
+    }
 }
