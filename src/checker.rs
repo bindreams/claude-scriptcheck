@@ -1,10 +1,10 @@
 use thaum::ast::*;
+use thaum::visit::Visit;
 
 use crate::cmd_parser::{self, CmdParseResult};
 use crate::file_access::{self, AccessKind, FileAccess};
 use crate::logging;
 use crate::permission::{self, ParsedPermissions};
-use crate::word_util;
 
 /// Final decision for a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,430 +14,333 @@ pub enum Decision {
     Ask(Vec<String>),
 }
 
-/// Internal result while walking the AST.
-enum CheckResult {
-    Ok,
-    Denied(String),
-}
-
-/// Early-return on denial. Use in place of `?` for CheckResult.
-macro_rules! try_check {
-    ($expr:expr) => {
-        match $expr {
-            CheckResult::Ok => {}
-            denied @ CheckResult::Denied(_) => return denied,
-        }
-    };
-}
-
 /// Top-level entry point: check a parsed program against permission rules.
 pub fn check_program(program: &Program, perms: &ParsedPermissions, cwd: &str) -> Decision {
-    let mut unmatched = Vec::new();
-
-    for statement in &program.statements {
-        if let CheckResult::Denied(reason) =
-            check_expression(&statement.expression, perms, cwd, &mut unmatched)
-        {
-            return Decision::Deny(reason);
-        }
-    }
-
-    if unmatched.is_empty() {
-        Decision::Allow
-    } else {
-        // Deduplicate
-        unmatched.sort();
-        unmatched.dedup();
-        Decision::Ask(unmatched)
-    }
-}
-
-fn check_expression(
-    expr: &Expression,
-    perms: &ParsedPermissions,
-    cwd: &str,
-    unmatched: &mut Vec<String>,
-) -> CheckResult {
-    match expr {
-        Expression::Command(cmd) => check_command(cmd, perms, cwd, unmatched),
-
-        Expression::Pipe { left, right, .. }
-        | Expression::And { left, right }
-        | Expression::Or { left, right } => {
-            try_check!(check_expression(left, perms, cwd, unmatched));
-            check_expression(right, perms, cwd, unmatched)
-        }
-
-        Expression::Not(inner) => check_expression(inner, perms, cwd, unmatched),
-
-        Expression::Compound { body, redirects } => {
-            try_check!(check_redirects(redirects, perms, cwd, unmatched));
-            check_compound(body, perms, cwd, unmatched)
-        }
-
-        Expression::FunctionDef(fndef) => {
-            try_check!(check_redirects(&fndef.redirects, perms, cwd, unmatched));
-            check_compound(&fndef.body, perms, cwd, unmatched)
-        }
-    }
-}
-
-fn check_compound(
-    compound: &CompoundCommand,
-    perms: &ParsedPermissions,
-    cwd: &str,
-    unmatched: &mut Vec<String>,
-) -> CheckResult {
-    let statement_lists: Vec<&[Statement]> = match compound {
-        CompoundCommand::BraceGroup { body, .. } | CompoundCommand::Subshell { body, .. } => {
-            vec![body.as_slice()]
-        }
-        CompoundCommand::ForClause { body, .. } => vec![body.as_slice()],
-        CompoundCommand::IfClause {
-            condition,
-            then_body,
-            elifs,
-            else_body,
-            ..
-        } => {
-            let mut lists = vec![condition.as_slice(), then_body.as_slice()];
-            for elif in elifs {
-                lists.push(elif.condition.as_slice());
-                lists.push(elif.body.as_slice());
-            }
-            if let Some(eb) = else_body {
-                lists.push(eb.as_slice());
-            }
-            lists
-        }
-        CompoundCommand::WhileClause {
-            condition, body, ..
-        }
-        | CompoundCommand::UntilClause {
-            condition, body, ..
-        } => {
-            vec![condition.as_slice(), body.as_slice()]
-        }
-        CompoundCommand::CaseClause { arms, .. } => {
-            arms.iter().map(|a| a.body.as_slice()).collect()
-        }
-        CompoundCommand::BashDoubleBracket { .. }
-        | CompoundCommand::BashArithmeticCommand { .. } => vec![],
-        CompoundCommand::BashSelectClause { body, .. } => vec![body.as_slice()],
-        CompoundCommand::BashCoproc { body, .. } => {
-            return check_expression(body, perms, cwd, unmatched);
-        }
-        CompoundCommand::BashArithmeticFor { body, .. } => vec![body.as_slice()],
-    };
-
-    for stmts in statement_lists {
-        for stmt in stmts {
-            try_check!(check_expression(&stmt.expression, perms, cwd, unmatched));
-        }
-    }
-    CheckResult::Ok
-}
-
-fn check_command(
-    cmd: &Command,
-    perms: &ParsedPermissions,
-    cwd: &str,
-    unmatched: &mut Vec<String>,
-) -> CheckResult {
-    // Assignment-only command (no command name)
-    if cmd.arguments.is_empty() {
-        return CheckResult::Ok;
-    }
-
-    // Extract argument literals
-    let arg_literals: Vec<Option<String>> = cmd
-        .arguments
-        .iter()
-        .map(|a| word_util::try_argument_literal(a))
-        .collect();
-
-    // Get command name
-    let cmd_name = match &arg_literals[0] {
-        Some(name) => name.clone(),
-        None => {
-            // Dynamic command name — can't determine identity
-            unmatched.push("Bash(<dynamic command>)".to_string());
-            // Still check redirects and process substitutions
-            try_check!(check_redirects(&cmd.redirects, perms, cwd, unmatched));
-            try_check!(check_argument_atoms(&cmd.arguments, perms, cwd, unmatched));
-            return CheckResult::Ok;
-        }
-    };
-
-    // eval — always ask
-    if cmd_name == "eval" {
-        unmatched.push("Bash(eval ...) -- cannot statically analyze eval".to_string());
-        return CheckResult::Ok;
-    }
-
-    // Build token list for Bash() rule matching — only static tokens
-    let cmd_tokens: Vec<String> = arg_literals
-        .iter()
-        .take_while(|a| a.is_some())
-        .map(|a| a.clone().unwrap())
-        .collect();
-
-    // Check against Bash() deny rules first
-    for rule in &perms.deny_bash {
-        if permission::bash_rule_matches(rule, &cmd_tokens) {
-            return CheckResult::Denied(format!(
-                "Command '{}' matched deny rule",
-                cmd_tokens.join(" ")
-            ));
-        }
-    }
-
-    // Check against Bash() allow rules
-    let bash_allowed = perms
-        .allow_bash
-        .iter()
-        .any(|rule| permission::bash_rule_matches(rule, &cmd_tokens));
-
-    // Extract file accesses from redirects
-    let redirect_accesses = extract_redirect_accesses(&cmd.redirects, cwd);
-
-    // Extract file accesses from well-known command semantics (clap-based parsers)
-    let cmd_parse_result = cmd_parser::parse_file_accesses(&cmd_name, &arg_literals[1..], cwd);
-    let (cmd_accesses, parse_failed) = match cmd_parse_result {
-        CmdParseResult::Parsed(cfa) => {
-            let accesses = cfa
-                .reads
-                .into_iter()
-                .map(|p| FileAccess {
-                    path: p,
-                    kind: AccessKind::Read,
-                })
-                .chain(cfa.writes.into_iter().map(|p| FileAccess {
-                    path: p,
-                    kind: AccessKind::Write,
-                }))
-                .collect::<Vec<_>>();
-            (accesses, false)
-        }
-        CmdParseResult::ParseFailed {
-            cmd_name: cn,
-            message,
-        } => {
-            let cmd_str = cmd_tokens.join(" ");
-            logging::log_parse_error(&cmd_str, &cn, &message);
-            unmatched.push(format!(
-                "Bash({cmd_str}) -- failed to parse arguments for `{cn}`: {message}"
-            ));
-            (vec![], true)
-        }
-    };
-
-    // Check all file accesses
-    for access in redirect_accesses.iter().chain(cmd_accesses.iter()) {
-        try_check!(check_file_access(access, perms, unmatched));
-    }
-
-    // For file-only commands (mkdir, touch, rm, cp, …), the file access rules are
-    // sufficient — no separate Bash() rule is needed, provided:
-    //   1. the command has at least one resolved file access to gate it,
-    //   2. all arguments are static (no dynamic args that could hide unchecked paths), and
-    //   3. the parser didn't fail (we trust the extracted accesses).
-    if !bash_allowed && !parse_failed {
-        let has_file_accesses = !redirect_accesses.is_empty() || !cmd_accesses.is_empty();
-        let has_dynamic_args = arg_literals[1..].iter().any(|a| a.is_none());
-        let can_skip = file_access::is_file_only_command(&cmd_name)
-            && has_file_accesses
-            && !has_dynamic_args;
-
-        if !can_skip {
-            unmatched.push(format!("Bash({})", cmd_tokens.join(" ")));
-        }
-    }
-
-    // Check process substitutions in arguments
-    try_check!(check_argument_atoms(&cmd.arguments, perms, cwd, unmatched));
-
-    // Check command substitutions in argument fragments
-    try_check!(check_argument_command_subs(
-        &cmd.arguments,
+    let mut checker = PermissionChecker {
         perms,
         cwd,
-        unmatched
-    ));
-
-    CheckResult::Ok
-}
-
-/// Check file access against Read/Write/Edit rules.
-fn check_file_access(
-    access: &FileAccess,
-    perms: &ParsedPermissions,
-    unmatched: &mut Vec<String>,
-) -> CheckResult {
-    // Check deny first
-    let denied = match access.kind {
-        AccessKind::Read => perms
-            .deny_read
-            .iter()
-            .any(|pat| permission::file_rule_matches(pat, &access.path)),
-        AccessKind::Write => {
-            perms
-                .deny_write
-                .iter()
-                .any(|pat| permission::file_rule_matches(pat, &access.path))
-                || perms
-                    .deny_edit
-                    .iter()
-                    .any(|pat| permission::file_rule_matches(pat, &access.path))
-        }
+        unmatched: Vec::new(),
+        denied: None,
     };
-    if denied {
-        return CheckResult::Denied(format!(
-            "File access '{}' ({:?}) matched deny rule",
-            access.path, access.kind
-        ));
-    }
+    checker.visit_program(program);
 
-    // Check allow
-    let allowed = match access.kind {
-        AccessKind::Read => perms
-            .allow_read
-            .iter()
-            .any(|pat| permission::file_rule_matches(pat, &access.path)),
-        AccessKind::Write => {
-            perms
-                .allow_write
-                .iter()
-                .any(|pat| permission::file_rule_matches(pat, &access.path))
-                || perms
-                    .allow_edit
-                    .iter()
-                    .any(|pat| permission::file_rule_matches(pat, &access.path))
+    if let Some(reason) = checker.denied {
+        Decision::Deny(reason)
+    } else if checker.unmatched.is_empty() {
+        Decision::Allow
+    } else {
+        checker.unmatched.sort();
+        checker.unmatched.dedup();
+        Decision::Ask(checker.unmatched)
+    }
+}
+
+struct PermissionChecker<'a> {
+    perms: &'a ParsedPermissions,
+    cwd: &'a str,
+    unmatched: Vec<String>,
+    denied: Option<String>,
+}
+
+// ─── Visit trait implementation ──────────────────────────────────────────────
+//
+// Default traversal handles: program → statement → expression → compound → etc.
+// We only override the nodes where domain logic lives.
+
+impl<'ast> Visit<'ast> for PermissionChecker<'_> {
+    fn visit_command(&mut self, cmd: &'ast Command) {
+        if self.denied.is_some() {
+            return;
         }
-    };
-    if !allowed {
-        let rule_needed = match access.kind {
-            AccessKind::Read => format!("Read({})", access.path),
-            AccessKind::Write => format!("Write({})", access.path),
-        };
-        unmatched.push(rule_needed);
+        self.check_command(cmd);
+        // Walk arguments for embedded process substitutions / command substitutions.
+        // Don't call walk_command — we already handled redirects inside check_command.
+        for arg in &cmd.arguments {
+            self.visit_argument(arg);
+        }
     }
 
-    CheckResult::Ok
-}
-
-/// Check redirects for file access.
-fn check_redirects(
-    redirects: &[Redirect],
-    perms: &ParsedPermissions,
-    cwd: &str,
-    unmatched: &mut Vec<String>,
-) -> CheckResult {
-    let accesses = extract_redirect_accesses(redirects, cwd);
-    for access in &accesses {
-        try_check!(check_file_access(access, perms, unmatched));
+    fn visit_redirect(&mut self, redirect: &'ast Redirect) {
+        // Handles redirects for compound / function-def contexts.
+        // Command redirects are handled inside check_command.
+        if self.denied.is_some() {
+            return;
+        }
+        if let Some(access) = extract_redirect_access(redirect, self.cwd) {
+            self.check_file_access(&access);
+        }
     }
-    CheckResult::Ok
-}
 
-/// Extract file accesses from redirects.
-fn extract_redirect_accesses(redirects: &[Redirect], cwd: &str) -> Vec<FileAccess> {
-    let mut accesses = Vec::new();
-
-    for redirect in redirects {
-        let (word, kind) = match &redirect.kind {
-            RedirectKind::Input(w) => (Some(w), AccessKind::Read),
-            RedirectKind::Output(w) | RedirectKind::Clobber(w) => (Some(w), AccessKind::Write),
-            RedirectKind::Append(w) => (Some(w), AccessKind::Write),
-            RedirectKind::ReadWrite(w) => (Some(w), AccessKind::Write),
-            RedirectKind::BashOutputAll(w) | RedirectKind::BashAppendAll(w) => {
-                (Some(w), AccessKind::Write)
-            }
-            RedirectKind::HereDoc { .. } | RedirectKind::BashHereString(_) => continue,
-            RedirectKind::DupInput(_) | RedirectKind::DupOutput(_) => continue,
-        };
-
-        if let Some(word) = word {
-            if let Some(path) = word_util::try_literal(word) {
-                // Skip /dev/* special files
-                if !path.starts_with("/dev/") {
-                    accesses.push(FileAccess {
-                        path: file_access::resolve_path(&path, cwd),
-                        kind,
-                    });
+    fn visit_argument(&mut self, arg: &'ast Argument) {
+        if self.denied.is_some() {
+            return;
+        }
+        match arg {
+            Argument::Atom(Atom::BashProcessSubstitution { body, .. }) => {
+                for stmt in body {
+                    self.visit_statement(stmt);
                 }
             }
-            // Dynamic path — skip file check (command rule still gates it)
-        }
-    }
-
-    accesses
-}
-
-/// Walk process substitutions in arguments.
-fn check_argument_atoms(
-    arguments: &[Argument],
-    perms: &ParsedPermissions,
-    cwd: &str,
-    unmatched: &mut Vec<String>,
-) -> CheckResult {
-    for arg in arguments {
-        if let Argument::Atom(Atom::BashProcessSubstitution { body, .. }) = arg {
-            for stmt in body {
-                try_check!(check_expression(&stmt.expression, perms, cwd, unmatched));
+            Argument::Word(w) => {
+                self.check_word_command_subs(w);
             }
         }
     }
-    CheckResult::Ok
 }
 
-/// Walk command substitutions embedded in argument fragments.
-fn check_argument_command_subs(
-    arguments: &[Argument],
-    perms: &ParsedPermissions,
-    cwd: &str,
-    unmatched: &mut Vec<String>,
-) -> CheckResult {
-    for arg in arguments {
-        if let Argument::Word(word) = arg {
-            try_check!(check_word_command_subs(word, perms, cwd, unmatched));
+// ─── Domain logic ────────────────────────────────────────────────────────────
+
+impl PermissionChecker<'_> {
+    fn deny(&mut self, reason: String) {
+        if self.denied.is_none() {
+            self.denied = Some(reason);
         }
     }
-    CheckResult::Ok
-}
 
-fn check_word_command_subs(
-    word: &Word,
-    perms: &ParsedPermissions,
-    cwd: &str,
-    unmatched: &mut Vec<String>,
-) -> CheckResult {
-    for fragment in &word.parts {
-        try_check!(check_fragment_command_subs(fragment, perms, cwd, unmatched));
-    }
-    CheckResult::Ok
-}
+    fn check_command(&mut self, cmd: &Command) {
+        // Assignment-only command (no command name)
+        if cmd.arguments.is_empty() {
+            return;
+        }
 
-fn check_fragment_command_subs(
-    fragment: &Fragment,
-    perms: &ParsedPermissions,
-    cwd: &str,
-    unmatched: &mut Vec<String>,
-) -> CheckResult {
-    match fragment {
-        Fragment::CommandSubstitution(stmts) => {
-            for stmt in stmts {
-                try_check!(check_expression(&stmt.expression, perms, cwd, unmatched));
+        // Extract argument literals
+        let arg_literals: Vec<Option<String>> = cmd
+            .arguments
+            .iter()
+            .map(|a| a.try_to_static_string())
+            .collect();
+
+        // Get command name
+        let cmd_name = match &arg_literals[0] {
+            Some(name) => name.clone(),
+            None => {
+                // Dynamic command name — can't determine identity
+                self.unmatched
+                    .push("Bash(<dynamic command>)".to_string());
+                // Still check redirects
+                for redirect in &cmd.redirects {
+                    if let Some(access) = extract_redirect_access(redirect, self.cwd) {
+                        self.check_file_access(&access);
+                    }
+                }
+                return;
+            }
+        };
+
+        // eval — always ask
+        if cmd_name == "eval" {
+            self.unmatched
+                .push("Bash(eval ...) -- cannot statically analyze eval".to_string());
+            return;
+        }
+
+        // Build token list for Bash() rule matching — only static tokens
+        let cmd_tokens: Vec<String> = arg_literals
+            .iter()
+            .take_while(|a| a.is_some())
+            .map(|a| a.clone().unwrap())
+            .collect();
+
+        // Check against Bash() deny rules first
+        for rule in &self.perms.deny_bash {
+            if permission::bash_rule_matches(rule, &cmd_tokens) {
+                self.deny(format!(
+                    "Command '{}' matched deny rule",
+                    cmd_tokens.join(" ")
+                ));
+                return;
             }
         }
-        Fragment::DoubleQuoted(inner) => {
-            for f in inner {
-                try_check!(check_fragment_command_subs(f, perms, cwd, unmatched));
+
+        // Check against Bash() allow rules
+        let bash_allowed = self
+            .perms
+            .allow_bash
+            .iter()
+            .any(|rule| permission::bash_rule_matches(rule, &cmd_tokens));
+
+        // Extract file accesses from redirects
+        let redirect_accesses = extract_redirect_accesses(&cmd.redirects, self.cwd);
+
+        // Extract file accesses from well-known command semantics (clap-based parsers)
+        let cmd_parse_result =
+            cmd_parser::parse_file_accesses(&cmd_name, &arg_literals[1..], self.cwd);
+        let (cmd_accesses, parse_failed) = match cmd_parse_result {
+            CmdParseResult::Parsed(cfa) => {
+                let accesses = cfa
+                    .reads
+                    .into_iter()
+                    .map(|p| FileAccess {
+                        path: p,
+                        kind: AccessKind::Read,
+                    })
+                    .chain(cfa.writes.into_iter().map(|p| FileAccess {
+                        path: p,
+                        kind: AccessKind::Write,
+                    }))
+                    .collect::<Vec<_>>();
+                (accesses, false)
+            }
+            CmdParseResult::ParseFailed {
+                cmd_name: cn,
+                message,
+            } => {
+                let cmd_str = cmd_tokens.join(" ");
+                logging::log_parse_error(&cmd_str, &cn, &message);
+                self.unmatched.push(format!(
+                    "Bash({cmd_str}) -- failed to parse arguments for `{cn}`: {message}"
+                ));
+                (vec![], true)
+            }
+        };
+
+        // Check all file accesses
+        for access in redirect_accesses.iter().chain(cmd_accesses.iter()) {
+            self.check_file_access(access);
+            if self.denied.is_some() {
+                return;
             }
         }
-        _ => {}
+
+        // For file-only commands (mkdir, touch, rm, cp, …), the file access rules are
+        // sufficient — no separate Bash() rule is needed, provided:
+        //   1. the command has at least one resolved file access to gate it,
+        //   2. all arguments are static (no dynamic args that could hide unchecked paths), and
+        //   3. the parser didn't fail (we trust the extracted accesses).
+        if !bash_allowed && !parse_failed {
+            let has_file_accesses = !redirect_accesses.is_empty() || !cmd_accesses.is_empty();
+            let has_dynamic_args = arg_literals[1..].iter().any(|a| a.is_none());
+            let can_skip = file_access::is_file_only_command(&cmd_name)
+                && has_file_accesses
+                && !has_dynamic_args;
+
+            if !can_skip {
+                self.unmatched
+                    .push(format!("Bash({})", cmd_tokens.join(" ")));
+            }
+        }
     }
-    CheckResult::Ok
+
+    /// Check file access against Read/Write/Edit rules.
+    fn check_file_access(&mut self, access: &FileAccess) {
+        if self.denied.is_some() {
+            return;
+        }
+
+        // Check deny first
+        let denied = match access.kind {
+            AccessKind::Read => self
+                .perms
+                .deny_read
+                .iter()
+                .any(|pat| permission::file_rule_matches(pat, &access.path)),
+            AccessKind::Write => {
+                self.perms
+                    .deny_write
+                    .iter()
+                    .any(|pat| permission::file_rule_matches(pat, &access.path))
+                    || self
+                        .perms
+                        .deny_edit
+                        .iter()
+                        .any(|pat| permission::file_rule_matches(pat, &access.path))
+            }
+        };
+        if denied {
+            self.deny(format!(
+                "File access '{}' ({:?}) matched deny rule",
+                access.path, access.kind
+            ));
+            return;
+        }
+
+        // Check allow
+        let allowed = match access.kind {
+            AccessKind::Read => self
+                .perms
+                .allow_read
+                .iter()
+                .any(|pat| permission::file_rule_matches(pat, &access.path)),
+            AccessKind::Write => {
+                self.perms
+                    .allow_write
+                    .iter()
+                    .any(|pat| permission::file_rule_matches(pat, &access.path))
+                    || self
+                        .perms
+                        .allow_edit
+                        .iter()
+                        .any(|pat| permission::file_rule_matches(pat, &access.path))
+            }
+        };
+        if !allowed {
+            let rule_needed = match access.kind {
+                AccessKind::Read => format!("Read({})", access.path),
+                AccessKind::Write => format!("Write({})", access.path),
+            };
+            self.unmatched.push(rule_needed);
+        }
+    }
+
+    /// Walk word fragments for command substitutions.
+    fn check_word_command_subs(&mut self, word: &Word) {
+        for fragment in &word.parts {
+            self.check_fragment_command_subs(fragment);
+        }
+    }
+
+    fn check_fragment_command_subs(&mut self, fragment: &Fragment) {
+        if self.denied.is_some() {
+            return;
+        }
+        match fragment {
+            Fragment::CommandSubstitution(stmts) => {
+                for stmt in stmts {
+                    self.visit_statement(stmt);
+                }
+            }
+            Fragment::DoubleQuoted(inner) => {
+                for f in inner {
+                    self.check_fragment_command_subs(f);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// ─── Redirect file access extraction ─────────────────────────────────────────
+
+fn extract_redirect_access(redirect: &Redirect, cwd: &str) -> Option<FileAccess> {
+    let (word, kind) = match &redirect.kind {
+        RedirectKind::Input(w) => (Some(w), AccessKind::Read),
+        RedirectKind::Output(w) | RedirectKind::Clobber(w) => (Some(w), AccessKind::Write),
+        RedirectKind::Append(w) => (Some(w), AccessKind::Write),
+        RedirectKind::ReadWrite(w) => (Some(w), AccessKind::Write),
+        RedirectKind::BashOutputAll(w) | RedirectKind::BashAppendAll(w) => {
+            (Some(w), AccessKind::Write)
+        }
+        RedirectKind::HereDoc { .. } | RedirectKind::BashHereString(_) => return None,
+        RedirectKind::DupInput(_) | RedirectKind::DupOutput(_) => return None,
+    };
+
+    let word = word?;
+    let path = word.try_to_static_string()?;
+    // Skip /dev/* special files
+    if path.starts_with("/dev/") {
+        return None;
+    }
+    Some(FileAccess {
+        path: file_access::resolve_path(&path, cwd),
+        kind,
+    })
+}
+
+fn extract_redirect_accesses(redirects: &[Redirect], cwd: &str) -> Vec<FileAccess> {
+    redirects
+        .iter()
+        .filter_map(|r| extract_redirect_access(r, cwd))
+        .collect()
 }
 
 #[cfg(test)]
