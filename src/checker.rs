@@ -1,6 +1,8 @@
 use thaum::ast::*;
 
+use crate::cmd_parser::{self, CmdParseResult};
 use crate::file_access::{self, AccessKind, FileAccess};
+use crate::logging;
 use crate::permission::{self, ParsedPermissions};
 use crate::word_util;
 
@@ -199,8 +201,36 @@ fn check_command(
     // Extract file accesses from redirects
     let redirect_accesses = extract_redirect_accesses(&cmd.redirects, cwd);
 
-    // Extract file accesses from well-known command semantics
-    let cmd_accesses = file_access::well_known_file_accesses(&cmd_name, &arg_literals[1..], cwd);
+    // Extract file accesses from well-known command semantics (clap-based parsers)
+    let cmd_parse_result = cmd_parser::parse_file_accesses(&cmd_name, &arg_literals[1..], cwd);
+    let (cmd_accesses, parse_failed) = match cmd_parse_result {
+        CmdParseResult::Parsed(cfa) => {
+            let accesses = cfa
+                .reads
+                .into_iter()
+                .map(|p| FileAccess {
+                    path: p,
+                    kind: AccessKind::Read,
+                })
+                .chain(cfa.writes.into_iter().map(|p| FileAccess {
+                    path: p,
+                    kind: AccessKind::Write,
+                }))
+                .collect::<Vec<_>>();
+            (accesses, false)
+        }
+        CmdParseResult::ParseFailed {
+            cmd_name: cn,
+            message,
+        } => {
+            let cmd_str = cmd_tokens.join(" ");
+            logging::log_parse_error(&cmd_str, &cn, &message);
+            unmatched.push(format!(
+                "Bash({cmd_str}) -- failed to parse arguments for `{cn}`: {message}"
+            ));
+            (vec![], true)
+        }
+    };
 
     // Check all file accesses
     for access in redirect_accesses.iter().chain(cmd_accesses.iter()) {
@@ -209,9 +239,10 @@ fn check_command(
 
     // For file-only commands (mkdir, touch, rm, cp, …), the file access rules are
     // sufficient — no separate Bash() rule is needed, provided:
-    //   1. the command has at least one resolved file access to gate it, and
-    //   2. all arguments are static (no dynamic args that could hide unchecked paths).
-    if !bash_allowed {
+    //   1. the command has at least one resolved file access to gate it,
+    //   2. all arguments are static (no dynamic args that could hide unchecked paths), and
+    //   3. the parser didn't fail (we trust the extracted accesses).
+    if !bash_allowed && !parse_failed {
         let has_file_accesses = !redirect_accesses.is_empty() || !cmd_accesses.is_empty();
         let has_dynamic_args = arg_literals[1..].iter().any(|a| a.is_none());
         let can_skip = file_access::is_file_only_command(&cmd_name)

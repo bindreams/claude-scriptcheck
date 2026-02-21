@@ -53,3 +53,28 @@ pub fn log_missing_rules(rules: &[String], command: &str) {
     }
     let _ = writeln!(file);
 }
+
+pub fn log_parse_error(command: &str, cmd_name: &str, error: &str) {
+    let path = log_path();
+    if let Some(dir) = path.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+
+    let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    else {
+        return;
+    };
+
+    let epoch = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let _ = writeln!(file, "--- {epoch} ---");
+    let _ = writeln!(file, "command: {command}");
+    let _ = writeln!(file, "  parse-error: failed to parse arguments for `{cmd_name}`: {error}");
+    let _ = writeln!(file);
+}
