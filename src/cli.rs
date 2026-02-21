@@ -129,8 +129,48 @@ pub fn check(command: &str, cwd: &str) {
 }
 
 /// Print the missing-rules log.
-pub fn log(clear: bool) {
+pub fn log(clear: bool, watch: bool) {
+    use std::io::{Read, Seek, SeekFrom};
+    use std::thread;
+    use std::time::Duration;
+
     let path = logging::log_path();
+
+    if watch {
+        let mut offset: u64 = 0;
+        if path.exists() {
+            if let Ok(mut f) = std::fs::File::open(&path) {
+                let mut buf = String::new();
+                let _ = f.read_to_string(&mut buf);
+                if !buf.is_empty() {
+                    print!("{buf}");
+                }
+                offset = f.stream_position().unwrap_or(0);
+            }
+        }
+        loop {
+            thread::sleep(Duration::from_secs(1));
+            let Ok(mut f) = std::fs::File::open(&path) else {
+                offset = 0;
+                continue;
+            };
+            let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+            if len < offset {
+                offset = 0; // file was truncated
+            }
+            if len == offset {
+                continue; // no new data
+            }
+            let _ = f.seek(SeekFrom::Start(offset));
+            let mut buf = String::new();
+            let _ = f.read_to_string(&mut buf);
+            if !buf.is_empty() {
+                print!("{buf}");
+            }
+            offset = f.stream_position().unwrap_or(len);
+        }
+    }
+
     if !path.exists() {
         eprintln!("No log file found at {}", path.display());
         return;

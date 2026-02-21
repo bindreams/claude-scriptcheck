@@ -38,6 +38,9 @@ enum Commands {
         /// Clear the log after printing
         #[arg(long)]
         clear: bool,
+        /// Watch for new log entries (like tail -f)
+        #[arg(long, conflicts_with = "clear")]
+        watch: bool,
     },
     /// Print the path to the log file
     LogPath,
@@ -52,7 +55,7 @@ fn main() {
         Some(Commands::Install { project }) => cli::install(project),
         Some(Commands::Uninstall { project }) => cli::uninstall(project),
         Some(Commands::Check { command, cwd }) => cli::check(&command, &cwd),
-        Some(Commands::Log { clear }) => cli::log(clear),
+        Some(Commands::Log { clear, watch }) => cli::log(clear, watch),
         Some(Commands::LogPath) => cli::log_path(),
         Some(Commands::Upgrade) => cli::upgrade(),
         None => run_hook(),
