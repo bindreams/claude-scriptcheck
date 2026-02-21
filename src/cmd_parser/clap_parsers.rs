@@ -99,6 +99,40 @@ fn parse_with(cmd: Command, args: &[&str], cwd: &str, extract: fn(&ArgMatches, &
     Ok(extract(&matches, cwd))
 }
 
+/// Strip legacy `-NUM[suffix]` / `+NUM[suffix]` shorthand args used by
+/// head and tail.  These are not file paths and don't consume the next arg,
+/// so we can safely remove them before clap parses the rest.
+///
+/// `allow_plus` enables `+NUM[suffix]` recognition (needed for `tail`).
+fn strip_legacy_numeric(args: &[&str], allow_plus: bool) -> Vec<String> {
+    let mut result = Vec::with_capacity(args.len());
+    let mut after_separator = false;
+    for &arg in args {
+        if arg == "--" {
+            after_separator = true;
+            result.push(arg.to_string());
+            continue;
+        }
+        if !after_separator {
+            let is_neg = arg.starts_with('-');
+            let is_pos = allow_plus && arg.starts_with('+');
+            if (is_neg || is_pos) && arg.len() > 1 {
+                let rest = &arg[1..];
+                let digit_end = rest.bytes()
+                    .position(|b| !b.is_ascii_digit())
+                    .unwrap_or(rest.len());
+                if digit_end > 0
+                    && rest[digit_end..].bytes().all(|b| b.is_ascii_lowercase())
+                {
+                    continue; // strip this legacy arg
+                }
+            }
+        }
+        result.push(arg.to_string());
+    }
+    result
+}
+
 // ─── Simple readers ──────────────────────────────────────────────────────────
 // All positional args → reads.
 
@@ -128,6 +162,8 @@ impl CommandParser for CatParser {
 pub(super) struct HeadParser;
 impl CommandParser for HeadParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
+        let stripped = strip_legacy_numeric(args, false);
+        let str_args: Vec<&str> = stripped.iter().map(|s| s.as_str()).collect();
         parse_with(
             base_cmd("head")
                 .arg(val('n', "lines"))
@@ -136,7 +172,7 @@ impl CommandParser for HeadParser {
                 .arg(flag('v', "verbose"))
                 .arg(flag('z', "zero-terminated"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            &str_args, cwd, extract_positional_reads,
         )
     }
 }
@@ -144,6 +180,8 @@ impl CommandParser for HeadParser {
 pub(super) struct TailParser;
 impl CommandParser for TailParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
+        let stripped = strip_legacy_numeric(args, true);
+        let str_args: Vec<&str> = stripped.iter().map(|s| s.as_str()).collect();
         parse_with(
             base_cmd("tail")
                 .arg(val('n', "lines"))
@@ -157,7 +195,7 @@ impl CommandParser for TailParser {
                 .arg(val('s', "sleep-interval"))
                 .arg(val_l("max-unchanged-stats"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            &str_args, cwd, extract_positional_reads,
         )
     }
 }
@@ -2356,12 +2394,136 @@ mod tests {
         assert!(r.reads.is_empty());
     }
 
+    #[test]
+    fn head_legacy_dash_number() {
+        let r = HeadParser.parse(&["-30", "file.txt"], "/tmp").unwrap();
+        assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
+    }
+
+    #[test]
+    fn head_legacy_dash_1() {
+        let r = HeadParser.parse(&["-1", "file.txt"], "/tmp").unwrap();
+        assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
+    }
+
+    #[test]
+    fn head_legacy_dash_number_no_file() {
+        let r = HeadParser.parse(&["-30"], "/tmp").unwrap();
+        assert!(r.reads.is_empty());
+    }
+
+    #[test]
+    fn head_legacy_dash_number_multiple_files() {
+        let r = HeadParser.parse(&["-5", "a.txt", "b.txt"], "/tmp").unwrap();
+        assert_eq!(r.reads, reads(&["/tmp/a.txt", "/tmp/b.txt"]));
+    }
+
+    #[test]
+    fn head_legacy_with_suffix() {
+        let r = HeadParser.parse(&["-30b", "file.txt"], "/tmp").unwrap();
+        assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
+    }
+
+    #[test]
+    fn head_legacy_with_k_suffix() {
+        let r = HeadParser.parse(&["-30k", "file.txt"], "/tmp").unwrap();
+        assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
+    }
+
     // ── tail ──
 
     #[test]
     fn tail_n_value_not_treated_as_file() {
         let r = TailParser.parse(&["-n", "20", "log.txt"], "/tmp").unwrap();
         assert_eq!(r.reads, reads(&["/tmp/log.txt"]));
+    }
+
+    #[test]
+    fn tail_legacy_dash_number() {
+        let r = TailParser.parse(&["-30", "log.txt"], "/tmp").unwrap();
+        assert_eq!(r.reads, reads(&["/tmp/log.txt"]));
+    }
+
+    #[test]
+    fn tail_legacy_plus_number() {
+        let r = TailParser.parse(&["+30", "log.txt"], "/tmp").unwrap();
+        assert_eq!(r.reads, reads(&["/tmp/log.txt"]));
+    }
+
+    #[test]
+    fn tail_legacy_dash_number_with_follow() {
+        let r = TailParser.parse(&["-30f", "log.txt"], "/tmp").unwrap();
+        assert_eq!(r.reads, reads(&["/tmp/log.txt"]));
+    }
+
+    #[test]
+    fn tail_legacy_plus_number_with_suffix() {
+        let r = TailParser.parse(&["+30lf", "log.txt"], "/tmp").unwrap();
+        assert_eq!(r.reads, reads(&["/tmp/log.txt"]));
+    }
+
+    #[test]
+    fn tail_legacy_bytes_suffix() {
+        let r = TailParser.parse(&["-30c", "log.txt"], "/tmp").unwrap();
+        assert_eq!(r.reads, reads(&["/tmp/log.txt"]));
+    }
+
+    // ── strip_legacy_numeric ──
+
+    #[test]
+    fn strip_legacy_dash_number() {
+        assert_eq!(
+            strip_legacy_numeric(&["-30", "file.txt"], false),
+            vec!["file.txt"],
+        );
+    }
+
+    #[test]
+    fn strip_legacy_dash_number_with_suffix() {
+        assert_eq!(
+            strip_legacy_numeric(&["-30b", "file.txt"], false),
+            vec!["file.txt"],
+        );
+    }
+
+    #[test]
+    fn strip_legacy_plus_number_allowed() {
+        assert_eq!(
+            strip_legacy_numeric(&["+30", "file.txt"], true),
+            vec!["file.txt"],
+        );
+    }
+
+    #[test]
+    fn strip_legacy_plus_number_disallowed() {
+        assert_eq!(
+            strip_legacy_numeric(&["+30", "file.txt"], false),
+            vec!["+30", "file.txt"],
+        );
+    }
+
+    #[test]
+    fn strip_legacy_normal_flags_unchanged() {
+        assert_eq!(
+            strip_legacy_numeric(&["-n", "5", "-v", "file.txt"], false),
+            vec!["-n", "5", "-v", "file.txt"],
+        );
+    }
+
+    #[test]
+    fn strip_legacy_bare_dash_unchanged() {
+        assert_eq!(
+            strip_legacy_numeric(&["-"], false),
+            vec!["-"],
+        );
+    }
+
+    #[test]
+    fn strip_legacy_after_separator_unchanged() {
+        assert_eq!(
+            strip_legacy_numeric(&["--", "-30"], false),
+            vec!["--", "-30"],
+        );
     }
 
     // ── wc ──
