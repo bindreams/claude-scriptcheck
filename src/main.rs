@@ -49,6 +49,8 @@ enum Commands {
     },
     /// Print the path to the log file
     LogPath,
+    /// Upgrade claude-scriptcheck to the latest version
+    Upgrade,
 }
 
 fn main() {
@@ -60,6 +62,7 @@ fn main() {
         Some(Commands::Check { command, cwd }) => cli::check(&command, &cwd),
         Some(Commands::Log { clear }) => cli::log(clear),
         Some(Commands::LogPath) => cli::log_path(),
+        Some(Commands::Upgrade) => cli::upgrade(),
         None => run_hook(),
     }
 }

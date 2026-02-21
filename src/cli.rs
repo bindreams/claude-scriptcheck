@@ -154,6 +154,19 @@ pub fn log(clear: bool) {
     }
 }
 
+/// Upgrade claude-scriptcheck to the latest version.
+pub fn upgrade() {
+    let status = std::process::Command::new("cargo")
+        .args(["install", "--git", "https://github.com/bindreams/claude-scriptcheck.git"])
+        .status()
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to run cargo: {e}");
+            process::exit(1);
+        });
+
+    process::exit(status.code().unwrap_or(1));
+}
+
 /// Print the path to the log file.
 pub fn log_path() {
     println!("{}", logging::log_path().display());
