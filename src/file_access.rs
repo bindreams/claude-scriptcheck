@@ -22,21 +22,23 @@ pub fn well_known_file_accesses(
     match cmd_name {
         // Pure readers: all non-flag args are read targets
         "cat" | "head" | "tail" | "less" | "more" | "wc" | "file" | "stat" | "md5sum"
-        | "shasum" | "sha256sum" | "xxd" | "hexdump" | "diff" | "grep" | "rg" | "find"
-        | "sort" | "uniq" | "cut" | "awk" | "tr" | "strings" | "readelf" | "objdump"
+        | "shasum" | "sha256sum" | "xxd" | "hexdump" | "diff" | "find"
+        | "sort" | "uniq" | "cut" | "strings" | "readelf" | "objdump"
         | "nm" | "ldd" | "size" => read_non_flag_args(args, cwd),
 
-        // sed: read unless -i flag present (in-place edit = write)
+        // Pattern-then-files readers: first non-flag arg is a pattern/program, rest are files
+        "awk" | "grep" | "rg" => pattern_then_file_args(args, cwd, AccessKind::Read),
+
+        // sed: first non-flag arg is a script; rest are read targets unless -i (write)
         "sed" => {
             let has_in_place = args
                 .iter()
                 .filter_map(|a| a.as_ref())
                 .any(|a| a == "-i" || a.starts_with("-i") || a == "--in-place");
             if has_in_place {
-                // With -i, the file args are write targets
-                write_non_flag_args(args, cwd)
+                pattern_then_file_args(args, cwd, AccessKind::Write)
             } else {
-                read_non_flag_args(args, cwd)
+                pattern_then_file_args(args, cwd, AccessKind::Read)
             }
         }
 
@@ -81,8 +83,8 @@ pub fn well_known_file_accesses(
             }
         }
 
-        // Commands that don't touch files
-        "echo" | "printf" | "pwd" | "whoami" | "hostname" | "uname" | "date" | "uptime"
+        // Commands that don't touch files (tr reads from stdin only)
+        "tr" | "echo" | "printf" | "pwd" | "whoami" | "hostname" | "uname" | "date" | "uptime"
         | "env" | "printenv" | "id" | "groups" | "true" | "false" | "test" | "[" | "which"
         | "whereis" | "type" | "basename" | "dirname" | "realpath" | "expr" | "seq"
         | "sleep" | "wait" | "exit" | "return" | "break" | "continue" | "shift" | "set"
@@ -125,7 +127,6 @@ pub fn is_file_accessing_command(cmd_name: &str) -> bool {
             | "cut"
             | "awk"
             | "sed"
-            | "tr"
             | "cp"
             | "mv"
             | "rm"
@@ -169,6 +170,32 @@ fn write_non_flag_args(args: &[Option<String>], cwd: &str) -> Vec<FileAccess> {
             kind: AccessKind::Write,
         })
         .collect()
+}
+
+/// Like `read_non_flag_args`/`write_non_flag_args`, but skips the first non-flag
+/// argument (the pattern/program text for commands like awk, grep, sed).
+/// Iterates over all args including `None` so a dynamic pattern is still counted.
+fn pattern_then_file_args(args: &[Option<String>], cwd: &str, kind: AccessKind) -> Vec<FileAccess> {
+    let mut found_pattern = false;
+    let mut accesses = Vec::new();
+    for arg in args {
+        match arg {
+            Some(s) if s.starts_with('-') => continue,
+            _ => {
+                if !found_pattern {
+                    found_pattern = true;
+                    continue;
+                }
+                if let Some(s) = arg {
+                    accesses.push(FileAccess {
+                        path: resolve_path(s, cwd),
+                        kind,
+                    });
+                }
+            }
+        }
+    }
+    accesses
 }
 
 fn copy_like_accesses(args: &[Option<String>], cwd: &str) -> Vec<FileAccess> {
@@ -269,9 +296,10 @@ mod tests {
             ],
             "/tmp",
         );
-        // -i makes it a write; s/foo/bar/ starts with s not -, so it's included
-        // but that's a regex pattern, not a file. This is a known limitation.
-        assert!(accesses.iter().any(|a| a.kind == AccessKind::Write));
+        // -i makes it a write; s/foo/bar/ is the script (skipped), file.txt is the target
+        assert_eq!(accesses.len(), 1);
+        assert_eq!(accesses[0].path, "/tmp/file.txt");
+        assert_eq!(accesses[0].kind, AccessKind::Write);
     }
 
     #[test]
@@ -289,5 +317,74 @@ mod tests {
         let accesses =
             well_known_file_accesses("my-custom-tool", &[Some("arg1".into())], "/tmp");
         assert!(accesses.is_empty());
+    }
+
+    #[test]
+    fn awk_skips_program_arg() {
+        let accesses = well_known_file_accesses(
+            "awk",
+            &[Some("/pattern/{ print }".into()), Some("data.txt".into())],
+            "/tmp",
+        );
+        assert_eq!(accesses.len(), 1);
+        assert_eq!(accesses[0].path, "/tmp/data.txt");
+        assert_eq!(accesses[0].kind, AccessKind::Read);
+    }
+
+    #[test]
+    fn awk_program_only_no_access() {
+        let accesses = well_known_file_accesses(
+            "awk",
+            &[Some("/pattern/{ print }".into())],
+            "/tmp",
+        );
+        assert!(accesses.is_empty());
+    }
+
+    #[test]
+    fn awk_dynamic_program_still_skipped() {
+        // $VAR as program → None, but should still be counted as the pattern
+        let accesses = well_known_file_accesses(
+            "awk",
+            &[None, Some("data.txt".into())],
+            "/tmp",
+        );
+        assert_eq!(accesses.len(), 1);
+        assert_eq!(accesses[0].path, "/tmp/data.txt");
+        assert_eq!(accesses[0].kind, AccessKind::Read);
+    }
+
+    #[test]
+    fn grep_skips_pattern_arg() {
+        let accesses = well_known_file_accesses(
+            "grep",
+            &[Some("-r".into()), Some("TODO".into()), Some("/tmp/src".into())],
+            "/tmp",
+        );
+        assert_eq!(accesses.len(), 1);
+        assert_eq!(accesses[0].path, "/tmp/src");
+        assert_eq!(accesses[0].kind, AccessKind::Read);
+    }
+
+    #[test]
+    fn tr_no_access() {
+        let accesses = well_known_file_accesses(
+            "tr",
+            &[Some("a-z".into()), Some("A-Z".into())],
+            "/tmp",
+        );
+        assert!(accesses.is_empty());
+    }
+
+    #[test]
+    fn sed_skips_script_arg() {
+        let accesses = well_known_file_accesses(
+            "sed",
+            &[Some("s/foo/bar/".into()), Some("file.txt".into())],
+            "/tmp",
+        );
+        assert_eq!(accesses.len(), 1);
+        assert_eq!(accesses[0].path, "/tmp/file.txt");
+        assert_eq!(accesses[0].kind, AccessKind::Read);
     }
 }

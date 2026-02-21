@@ -630,4 +630,48 @@ mod tests {
         let d = check("$CMD arg", &[], &[]);
         assert!(matches!(d, Decision::Ask(_)));
     }
+
+    #[test]
+    fn awk_pattern_not_treated_as_file() {
+        let d = check("awk '/pattern/{ print }'", &["Bash(awk *)"], &[]);
+        assert_eq!(d, Decision::Allow);
+    }
+
+    #[test]
+    fn awk_double_quoted_pattern_not_treated_as_file() {
+        let d = check(r#"awk "/pattern/{ print }""#, &["Bash(awk *)"], &[]);
+        assert_eq!(d, Decision::Allow);
+    }
+
+    #[test]
+    fn awk_with_file_reads_file_not_pattern() {
+        let d = check(
+            "awk '/p/' /tmp/data.txt",
+            &["Bash(awk *)", "Read(/tmp/**)"],
+            &[],
+        );
+        assert_eq!(d, Decision::Allow);
+    }
+
+    #[test]
+    fn grep_pattern_not_treated_as_file() {
+        let d = check("grep 'pattern'", &["Bash(grep *)"], &[]);
+        assert_eq!(d, Decision::Allow);
+    }
+
+    #[test]
+    fn tr_no_file_access() {
+        let d = check("tr 'a-z' 'A-Z'", &["Bash(tr *)"], &[]);
+        assert_eq!(d, Decision::Allow);
+    }
+
+    #[test]
+    fn sed_script_not_treated_as_file() {
+        let d = check(
+            "sed 's/foo/bar/' /tmp/f.txt",
+            &["Bash(sed *)", "Read(/tmp/**)"],
+            &[],
+        );
+        assert_eq!(d, Decision::Allow);
+    }
 }
