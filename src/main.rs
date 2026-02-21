@@ -2,15 +2,7 @@ use std::io::{self, Read};
 use std::process;
 
 use clap::{Parser, Subcommand};
-
-mod checker;
-mod cli;
-mod file_access;
-mod hook;
-mod logging;
-mod permission;
-mod settings;
-mod word_util;
+use claude_scriptcheck::{checker, cli, hook, logging, permission, settings};
 
 #[derive(Parser)]
 #[command(name = "claude-scriptcheck", about = "AST-aware Bash permission checker for Claude Code hooks")]
