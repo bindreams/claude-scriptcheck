@@ -27,7 +27,7 @@ impl CommandFileAccesses {
         }
     }
 
-    fn filter_sentinel(mut self, sentinel: &str) -> Self {
+    pub(crate) fn filter_sentinel(mut self, sentinel: &str) -> Self {
         self.reads.retain(|p| !p.contains(sentinel));
         self.writes.retain(|p| !p.contains(sentinel));
         self // inline_script_start is preserved as-is
@@ -50,7 +50,7 @@ pub enum CmdParseResult {
     ParseFailed { cmd_name: String, message: String },
 }
 
-const SENTINEL: &str = "__CLAUDE_DYNAMIC__";
+pub(crate) const SENTINEL: &str = "__CLAUDE_DYNAMIC__";
 
 /// Main entry point: parse a known command's arguments into file accesses.
 ///
@@ -212,75 +212,6 @@ pub(crate) fn resolve(path: &str, cwd: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unknown_command_returns_empty() {
-        let result = parse_file_accesses("my-custom-tool", &[Some("arg1".into())], "/tmp");
-        match result {
-            CmdParseResult::Parsed(cfa) => {
-                assert!(cfa.reads.is_empty());
-                assert!(cfa.writes.is_empty());
-            }
-            _ => panic!("expected Parsed"),
-        }
-    }
-
-    #[test]
-    fn no_file_access_command_returns_empty() {
-        let result = parse_file_accesses("echo", &[Some("hello".into())], "/tmp");
-        match result {
-            CmdParseResult::Parsed(cfa) => {
-                assert!(cfa.reads.is_empty());
-                assert!(cfa.writes.is_empty());
-            }
-            _ => panic!("expected Parsed"),
-        }
-    }
-
-    #[test]
-    fn sentinel_filtered_from_reads() {
-        let cfa = CommandFileAccesses {
-            reads: vec![
-                "/tmp/real.txt".into(),
-                format!("/tmp/{SENTINEL}"),
-            ],
-            writes: vec![],
-            inline_script_start: None,
-        };
-        let filtered = cfa.filter_sentinel(SENTINEL);
-        assert_eq!(filtered.reads, vec!["/tmp/real.txt"]);
-    }
-
-    #[test]
-    fn sentinel_filtered_from_writes() {
-        let cfa = CommandFileAccesses {
-            reads: vec![],
-            writes: vec![
-                "/tmp/real.txt".into(),
-                format!("/tmp/{SENTINEL}"),
-            ],
-            inline_script_start: None,
-        };
-        let filtered = cfa.filter_sentinel(SENTINEL);
-        assert_eq!(filtered.writes, vec!["/tmp/real.txt"]);
-    }
-
-    #[test]
-    fn dynamic_arg_filtered_via_sentinel() {
-        // cp $SRC dest.txt → only dest.txt should appear as Write
-        let result = parse_file_accesses(
-            "cp",
-            &[None, Some("dest.txt".into())],
-            "/tmp",
-        );
-        match result {
-            CmdParseResult::Parsed(cfa) => {
-                assert!(cfa.reads.is_empty(), "sentinel read should be filtered");
-                assert_eq!(cfa.writes, vec!["/tmp/dest.txt"]);
-            }
-            _ => panic!("expected Parsed"),
-        }
-    }
-}
+mod clap_parsers_tests;
+#[cfg(test)]
+mod manual_parsers_tests;

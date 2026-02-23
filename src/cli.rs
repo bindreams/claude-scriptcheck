@@ -199,7 +199,7 @@ const DEFAULT_GIT_URL: &str = "https://github.com/bindreams/claude-scriptcheck.g
 
 /// Installation source detected from cargo metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum InstallSource {
+pub(crate) enum InstallSource {
     Git(String),
     Registry,
     Path(String),
@@ -250,7 +250,7 @@ fn detect_install_source() -> Option<InstallSource> {
     parse_install_source(&json, CRATE_NAME)
 }
 
-fn parse_install_source(
+pub(crate) fn parse_install_source(
     crates_json: &serde_json::Value,
     crate_name: &str,
 ) -> Option<InstallSource> {
@@ -354,99 +354,4 @@ fn entry_matches(entry: &serde_json::Value, binary_path: &str) -> bool {
         }
     }
     false
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn detect_git_source() {
-        let json = serde_json::json!({
-            "installs": {
-                "claude-scriptcheck 0.1.0 (git+https://github.com/bindreams/claude-scriptcheck.git#abc123def)": {
-                    "bins": ["claude-scriptcheck"]
-                }
-            }
-        });
-        assert_eq!(
-            parse_install_source(&json, "claude-scriptcheck"),
-            Some(InstallSource::Git("https://github.com/bindreams/claude-scriptcheck.git".into()))
-        );
-    }
-
-    #[test]
-    fn detect_registry_source() {
-        let json = serde_json::json!({
-            "installs": {
-                "claude-scriptcheck 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)": {
-                    "bins": ["claude-scriptcheck"]
-                }
-            }
-        });
-        assert_eq!(
-            parse_install_source(&json, "claude-scriptcheck"),
-            Some(InstallSource::Registry)
-        );
-    }
-
-    #[test]
-    fn detect_path_source() {
-        let json = serde_json::json!({
-            "installs": {
-                "claude-scriptcheck 0.1.0 (path+file:///home/user/src/claude-scriptcheck)": {
-                    "bins": ["claude-scriptcheck"]
-                }
-            }
-        });
-        assert_eq!(
-            parse_install_source(&json, "claude-scriptcheck"),
-            Some(InstallSource::Path("/home/user/src/claude-scriptcheck".into()))
-        );
-    }
-
-    #[test]
-    fn detect_missing_crate() {
-        let json = serde_json::json!({
-            "installs": {
-                "some-other-crate 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)": {
-                    "bins": ["other"]
-                }
-            }
-        });
-        assert_eq!(parse_install_source(&json, "claude-scriptcheck"), None);
-    }
-
-    #[test]
-    fn detect_empty_installs() {
-        let json = serde_json::json!({ "installs": {} });
-        assert_eq!(parse_install_source(&json, "claude-scriptcheck"), None);
-    }
-
-    #[test]
-    fn detect_malformed_key() {
-        let json = serde_json::json!({
-            "installs": {
-                "claude-scriptcheck 0.1.0": {
-                    "bins": ["claude-scriptcheck"]
-                }
-            }
-        });
-        assert_eq!(parse_install_source(&json, "claude-scriptcheck"), None);
-    }
-
-    #[test]
-    fn git_source_without_commit_hash() {
-        let json = serde_json::json!({
-            "installs": {
-                "claude-scriptcheck 0.1.0 (git+https://github.com/bindreams/claude-scriptcheck.git)": {
-                    "bins": ["claude-scriptcheck"]
-                }
-            }
-        });
-        assert_eq!(
-            parse_install_source(&json, "claude-scriptcheck"),
-            Some(InstallSource::Git("https://github.com/bindreams/claude-scriptcheck.git".into()))
-        );
-    }
 }
