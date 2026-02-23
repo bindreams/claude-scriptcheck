@@ -165,8 +165,9 @@ impl PermissionChecker<'_> {
         // Extract file accesses from well-known command semantics (clap-based parsers)
         let cmd_parse_result =
             cmd_parser::parse_file_accesses(&cmd_name, &arg_literals[1..], self.cwd);
-        let (cmd_accesses, parse_failed) = match cmd_parse_result {
+        let (cmd_accesses, parse_failed, inline_script_start) = match cmd_parse_result {
             CmdParseResult::Parsed(cfa) => {
+                let script_start = cfa.inline_script_start;
                 let accesses = cfa
                     .reads
                     .into_iter()
@@ -179,7 +180,7 @@ impl PermissionChecker<'_> {
                         kind: AccessKind::Write,
                     }))
                     .collect::<Vec<_>>();
-                (accesses, false)
+                (accesses, false, script_start)
             }
             CmdParseResult::ParseFailed {
                 cmd_name: cn,
@@ -190,7 +191,7 @@ impl PermissionChecker<'_> {
                 self.unmatched.push(format!(
                     "Bash({cmd_str}) -- failed to parse arguments for `{cn}`: {message}"
                 ));
-                (vec![], true)
+                (vec![], true, None)
             }
         };
 
@@ -215,8 +216,16 @@ impl PermissionChecker<'_> {
                 && !has_dynamic_args;
 
             if !can_skip {
-                self.unmatched
-                    .push(format!("Bash({})", cmd_tokens.join(" ")));
+                let rule = if let Some(idx) = inline_script_start {
+                    // Truncate before the inline script text, append wildcard.
+                    // idx is 0-based into args (without cmd name), so in
+                    // cmd_tokens (which has cmd name at [0]) it maps to idx+1.
+                    let end = (idx + 1).min(cmd_tokens.len());
+                    format!("Bash({} *)", cmd_tokens[..end].join(" "))
+                } else {
+                    format!("Bash({})", cmd_tokens.join(" "))
+                };
+                self.unmatched.push(rule);
             }
         }
     }
@@ -736,6 +745,138 @@ mod tests {
             &["Bash(mkdir *)", "Write(/tmp/claude/**)"],
             &[],
         );
+        assert_eq!(d, Decision::Allow);
+    }
+
+    // ── Script-runner inline-script sanitization ──
+
+    #[test]
+    fn bash_c_logs_wildcard_rule() {
+        let d = check("bash -c 'echo hello'", &[], &[]);
+        if let Decision::Ask(ref rules) = d {
+            assert!(
+                rules.iter().any(|r| r == "Bash(bash -c *)"),
+                "expected 'Bash(bash -c *)', got {rules:?}",
+            );
+        } else {
+            panic!("expected Ask, got {d:?}");
+        }
+    }
+
+    #[test]
+    fn bash_xc_logs_wildcard_rule() {
+        let d = check("bash -xc 'echo hello'", &[], &[]);
+        if let Decision::Ask(ref rules) = d {
+            assert!(
+                rules.iter().any(|r| r == "Bash(bash -xc *)"),
+                "expected 'Bash(bash -xc *)', got {rules:?}",
+            );
+        } else {
+            panic!("expected Ask, got {d:?}");
+        }
+    }
+
+    #[test]
+    fn python_c_logs_wildcard_rule() {
+        let d = check("python3 -c 'print(1)'", &[], &[]);
+        if let Decision::Ask(ref rules) = d {
+            assert!(
+                rules.iter().any(|r| r == "Bash(python3 -c *)"),
+                "expected 'Bash(python3 -c *)', got {rules:?}",
+            );
+        } else {
+            panic!("expected Ask, got {d:?}");
+        }
+    }
+
+    #[test]
+    fn python_script_file_logs_normal_rule() {
+        let d = check("python3 script.py", &[], &[]);
+        if let Decision::Ask(ref rules) = d {
+            assert!(
+                rules.iter().any(|r| r == "Bash(python3 script.py)" || r == "Read(/tmp/script.py)"),
+                "expected normal rule tokens, got {rules:?}",
+            );
+        } else {
+            panic!("expected Ask, got {d:?}");
+        }
+    }
+
+    #[test]
+    fn bash_c_allowed_by_wildcard() {
+        let d = check("bash -c 'echo hello'", &["Bash(bash *)"], &[]);
+        assert_eq!(d, Decision::Allow);
+    }
+
+    #[test]
+    fn ruby_e_logs_wildcard_rule() {
+        let d = check("ruby -e 'puts 1'", &[], &[]);
+        if let Decision::Ask(ref rules) = d {
+            assert!(
+                rules.iter().any(|r| r == "Bash(ruby -e *)"),
+                "expected 'Bash(ruby -e *)', got {rules:?}",
+            );
+        } else {
+            panic!("expected Ask, got {d:?}");
+        }
+    }
+
+    #[test]
+    fn node_e_logs_wildcard_rule() {
+        let d = check("node -e 'console.log(1)'", &[], &[]);
+        if let Decision::Ask(ref rules) = d {
+            assert!(
+                rules.iter().any(|r| r == "Bash(node -e *)"),
+                "expected 'Bash(node -e *)', got {rules:?}",
+            );
+        } else {
+            panic!("expected Ask, got {d:?}");
+        }
+    }
+
+    #[test]
+    fn perl_e_logs_wildcard_rule() {
+        let d = check("perl -e 'print 1'", &[], &[]);
+        if let Decision::Ask(ref rules) = d {
+            assert!(
+                rules.iter().any(|r| r == "Bash(perl -e *)"),
+                "expected 'Bash(perl -e *)', got {rules:?}",
+            );
+        } else {
+            panic!("expected Ask, got {d:?}");
+        }
+    }
+
+    #[test]
+    fn sh_c_logs_wildcard_rule() {
+        let d = check("sh -c 'ls -la'", &[], &[]);
+        if let Decision::Ask(ref rules) = d {
+            assert!(
+                rules.iter().any(|r| r == "Bash(sh -c *)"),
+                "expected 'Bash(sh -c *)', got {rules:?}",
+            );
+        } else {
+            panic!("expected Ask, got {d:?}");
+        }
+    }
+
+    #[test]
+    fn bash_script_file_reads() {
+        let d = check("bash script.sh", &["Bash(bash *)"], &[]);
+        // bash script.sh → Read(script.sh) needed
+        if let Decision::Ask(ref rules) = d {
+            assert!(
+                rules.iter().any(|r| r.starts_with("Read(")),
+                "expected Read rule, got {rules:?}",
+            );
+        } else {
+            panic!("expected Ask for Read rule, got {d:?}");
+        }
+    }
+
+    #[test]
+    fn bash_script_file_with_read_rule() {
+        let d = check("bash script.sh", &["Bash(bash *)", "Read(/tmp/**)"], &[]);
         assert_eq!(d, Decision::Allow);
     }
 }

@@ -10,6 +10,12 @@ pub struct CommandFileAccesses {
     pub reads: Vec<String>,
     /// Absolute paths the command writes to.
     pub writes: Vec<String>,
+    /// If the command takes an inline script (e.g. `-c '...'` or `-e '...'`),
+    /// the 0-based index into the parser's args slice (excluding the command
+    /// name) where the script text begins.  Used by the checker to truncate
+    /// the logged rule to `Bash(cmd -c *)` instead of including the literal
+    /// script text.
+    pub inline_script_start: Option<usize>,
 }
 
 impl CommandFileAccesses {
@@ -17,13 +23,14 @@ impl CommandFileAccesses {
         Self {
             reads: Vec::new(),
             writes: Vec::new(),
+            inline_script_start: None,
         }
     }
 
     fn filter_sentinel(mut self, sentinel: &str) -> Self {
         self.reads.retain(|p| !p.contains(sentinel));
         self.writes.retain(|p| !p.contains(sentinel));
-        self
+        self // inline_script_start is preserved as-is
     }
 }
 
@@ -172,6 +179,13 @@ pub fn get_parser(cmd_name: &str) -> Option<&'static dyn CommandParser> {
         "tar" => Some(&TarParser),
         "dd" => Some(&DdParser),
 
+        // Script runners — detect inline scripts and script-file reads
+        "bash" | "sh" | "zsh" | "dash" => Some(&ShellParser),
+        "python" | "python3" => Some(&PythonParser),
+        "ruby" => Some(&RubyParser),
+        "node" | "nodejs" => Some(&NodeParser),
+        "perl" => Some(&PerlParser),
+
         // Commands that don't touch files — return None (no parser needed).
         "tr" | "echo" | "printf" | "pwd" | "whoami" | "hostname" | "uname" | "date"
         | "uptime" | "env" | "printenv" | "id" | "groups" | "true" | "false" | "test"
@@ -233,6 +247,7 @@ mod tests {
                 format!("/tmp/{SENTINEL}"),
             ],
             writes: vec![],
+            inline_script_start: None,
         };
         let filtered = cfa.filter_sentinel(SENTINEL);
         assert_eq!(filtered.reads, vec!["/tmp/real.txt"]);
@@ -246,6 +261,7 @@ mod tests {
                 "/tmp/real.txt".into(),
                 format!("/tmp/{SENTINEL}"),
             ],
+            inline_script_start: None,
         };
         let filtered = cfa.filter_sentinel(SENTINEL);
         assert_eq!(filtered.writes, vec!["/tmp/real.txt"]);

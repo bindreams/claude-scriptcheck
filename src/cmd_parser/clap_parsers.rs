@@ -79,6 +79,7 @@ fn extract_positional_reads(matches: &ArgMatches, cwd: &str) -> CommandFileAcces
     CommandFileAccesses {
         reads,
         writes: Vec::new(),
+        inline_script_start: None,
     }
 }
 
@@ -91,6 +92,7 @@ fn extract_positional_writes(matches: &ArgMatches, cwd: &str) -> CommandFileAcce
     CommandFileAccesses {
         reads: Vec::new(),
         writes,
+        inline_script_start: None,
     }
 }
 
@@ -838,6 +840,7 @@ fn parse_grep_like(matches: &ArgMatches, cwd: &str) -> Result<CommandFileAccesse
     Ok(CommandFileAccesses {
         reads,
         writes: Vec::new(),
+        inline_script_start: None,
     })
 }
 
@@ -887,6 +890,7 @@ impl CommandParser for AwkParser {
         Ok(CommandFileAccesses {
             reads,
             writes: Vec::new(),
+            inline_script_start: None,
         })
     }
 }
@@ -1010,7 +1014,7 @@ fn parse_copy_like(matches: &ArgMatches, cwd: &str) -> Result<CommandFileAccesse
         writes.push(resolve(last, cwd));
     }
 
-    Ok(CommandFileAccesses { reads, writes })
+    Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
 }
 
 pub(super) struct InstallParser;
@@ -1066,7 +1070,7 @@ impl CommandParser for InstallParser {
             writes.push(resolve(last, cwd));
         }
 
-        Ok(CommandFileAccesses { reads, writes })
+        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
     }
 }
 
@@ -1222,7 +1226,7 @@ impl CommandParser for SortParser {
             writes.push(resolve(output, cwd));
         }
 
-        Ok(CommandFileAccesses { reads, writes })
+        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
     }
 }
 
@@ -1262,7 +1266,7 @@ impl CommandParser for UniqParser {
             writes.push(resolve(output, cwd));
         }
 
-        Ok(CommandFileAccesses { reads, writes })
+        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
     }
 }
 
@@ -1350,6 +1354,7 @@ fn parse_permission_change(matches: &ArgMatches, cwd: &str) -> Result<CommandFil
     Ok(CommandFileAccesses {
         reads: Vec::new(),
         writes,
+        inline_script_start: None,
     })
 }
 
@@ -1366,6 +1371,7 @@ impl CommandParser for SourceParser {
         Ok(CommandFileAccesses {
             reads,
             writes: Vec::new(),
+            inline_script_start: None,
         })
     }
 }
@@ -1728,6 +1734,7 @@ impl CommandParser for JqParser {
         Ok(CommandFileAccesses {
             reads,
             writes: Vec::new(),
+            inline_script_start: None,
         })
     }
 }
@@ -1746,9 +1753,9 @@ fn parse_compression(matches: &ArgMatches, cwd: &str) -> CommandFileAccesses {
         .unwrap_or_default();
 
     if to_stdout {
-        CommandFileAccesses { reads: paths, writes: Vec::new() }
+        CommandFileAccesses { reads: paths, writes: Vec::new(), inline_script_start: None }
     } else {
-        CommandFileAccesses { reads: Vec::new(), writes: paths }
+        CommandFileAccesses { reads: Vec::new(), writes: paths, inline_script_start: None }
     }
 }
 
@@ -1982,7 +1989,7 @@ impl CommandParser for CurlParser {
         }
 
         // Positionals are URLs — ignore them
-        Ok(CommandFileAccesses { reads, writes })
+        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
     }
 }
 
@@ -2099,7 +2106,7 @@ impl CommandParser for WgetParser {
         }
 
         // Positionals are URLs — ignore
-        Ok(CommandFileAccesses { reads, writes })
+        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
     }
 }
 
@@ -2152,7 +2159,7 @@ impl CommandParser for ZipParser {
             }
         }
 
-        Ok(CommandFileAccesses { reads, writes })
+        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
     }
 }
 
@@ -2197,7 +2204,7 @@ impl CommandParser for UnzipParser {
             writes.push(resolve(dir, cwd));
         }
 
-        Ok(CommandFileAccesses { reads, writes })
+        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
     }
 }
 
@@ -2262,7 +2269,7 @@ impl CommandParser for PatchParser {
             reads.push(resolve(patchfile, cwd));
         }
 
-        Ok(CommandFileAccesses { reads, writes })
+        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
     }
 }
 
@@ -2301,6 +2308,7 @@ impl CommandParser for SplitParser {
         Ok(CommandFileAccesses {
             reads,
             writes: Vec::new(),
+            inline_script_start: None,
         })
     }
 }
@@ -2334,6 +2342,7 @@ impl CommandParser for CsplitParser {
         Ok(CommandFileAccesses {
             reads,
             writes: Vec::new(),
+            inline_script_start: None,
         })
     }
 }
