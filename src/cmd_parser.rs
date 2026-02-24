@@ -1,5 +1,16 @@
-mod clap_parsers;
-mod manual_parsers;
+mod helpers;
+mod readers;
+mod writers;
+mod grep;
+mod filesystem;
+mod compression;
+mod network;
+mod archive;
+mod find;
+mod sed;
+mod tar;
+mod dd;
+mod script_runners;
 
 use crate::file_access;
 
@@ -86,8 +97,18 @@ pub fn parse_file_accesses(
 /// Look up the parser for a known command.
 /// Returns `None` for unknown commands and commands with no file access.
 pub fn get_parser(cmd_name: &str) -> Option<&'static dyn CommandParser> {
-    use clap_parsers::*;
-    use manual_parsers::*;
+    use readers::*;
+    use writers::*;
+    use grep::*;
+    use filesystem::*;
+    use compression::*;
+    use network::*;
+    use archive::*;
+    use find::*;
+    use sed::*;
+    use tar::*;
+    use dd::*;
+    use script_runners::*;
 
     match cmd_name {
         // Simple readers
@@ -212,6 +233,28 @@ pub(crate) fn resolve(path: &str, cwd: &str) -> String {
 }
 
 #[cfg(test)]
-mod clap_parsers_tests;
+mod helpers_tests;
 #[cfg(test)]
-mod manual_parsers_tests;
+mod readers_tests;
+#[cfg(test)]
+mod writers_tests;
+#[cfg(test)]
+mod grep_tests;
+#[cfg(test)]
+mod filesystem_tests;
+#[cfg(test)]
+mod compression_tests;
+#[cfg(test)]
+mod network_tests;
+#[cfg(test)]
+mod archive_tests;
+#[cfg(test)]
+mod find_tests;
+#[cfg(test)]
+mod sed_tests;
+#[cfg(test)]
+mod tar_tests;
+#[cfg(test)]
+mod dd_tests;
+#[cfg(test)]
+mod script_runners_tests;
