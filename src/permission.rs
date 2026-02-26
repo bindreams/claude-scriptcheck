@@ -104,6 +104,19 @@ pub(crate) fn parse_single_rule(rule: &str, home: &str) -> Option<ParsedRule> {
     }
 }
 
+impl BashRule {
+    /// Reconstruct a human-readable rule string, e.g. `Bash(git status *)`.
+    pub fn to_rule_string(&self) -> String {
+        if self.prefix_tokens.is_empty() && self.wildcard {
+            "Bash(*)".to_string()
+        } else if self.wildcard {
+            format!("Bash({} *)", self.prefix_tokens.join(" "))
+        } else {
+            format!("Bash({})", self.prefix_tokens.join(" "))
+        }
+    }
+}
+
 /// Check if a command (as tokens) matches a Bash rule.
 pub fn bash_rule_matches(rule: &BashRule, cmd_tokens: &[String]) -> bool {
     if cmd_tokens.len() < rule.prefix_tokens.len() {

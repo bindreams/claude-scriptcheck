@@ -14,7 +14,7 @@ fn make_perms(allow: &[&str], deny: &[&str]) -> ParsedPermissions {
 fn check(cmd: &str, allow: &[&str], deny: &[&str]) -> Decision {
     let perms = make_perms(allow, deny);
     let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
-    check_program(&program, &perms, "/tmp")
+    check_program(&program, &perms, "/tmp").decision
 }
 
 #[test]

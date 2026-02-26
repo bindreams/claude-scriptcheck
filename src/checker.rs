@@ -3,7 +3,6 @@ use thaum::visit::Visit;
 
 use crate::cmd_parser::{self, CmdParseResult};
 use crate::file_access::{self, AccessKind, FileAccess};
-use crate::logging;
 use crate::permission::{self, ParsedPermissions};
 
 /// Final decision for a command.
@@ -14,17 +13,28 @@ pub enum Decision {
     Ask(Vec<String>),
 }
 
+/// Full result of checking a program, including which rules matched.
+pub struct CheckResult {
+    pub decision: Decision,
+    /// Allow rules that matched (Bash, Read, Write, Edit).
+    pub matched_allow: Vec<String>,
+    /// Deny rules that matched (at most one in practice).
+    pub matched_deny: Vec<String>,
+}
+
 /// Top-level entry point: check a parsed program against permission rules.
-pub fn check_program(program: &Program, perms: &ParsedPermissions, cwd: &str) -> Decision {
+pub fn check_program(program: &Program, perms: &ParsedPermissions, cwd: &str) -> CheckResult {
     let mut checker = PermissionChecker {
         perms,
         cwd,
         unmatched: Vec::new(),
         denied: None,
+        matched_allow: Vec::new(),
+        matched_deny: Vec::new(),
     };
     checker.visit_program(program);
 
-    if let Some(reason) = checker.denied {
+    let decision = if let Some(reason) = checker.denied {
         Decision::Deny(reason)
     } else if checker.unmatched.is_empty() {
         Decision::Allow
@@ -32,6 +42,17 @@ pub fn check_program(program: &Program, perms: &ParsedPermissions, cwd: &str) ->
         checker.unmatched.sort();
         checker.unmatched.dedup();
         Decision::Ask(checker.unmatched)
+    };
+
+    checker.matched_allow.sort();
+    checker.matched_allow.dedup();
+    checker.matched_deny.sort();
+    checker.matched_deny.dedup();
+
+    CheckResult {
+        decision,
+        matched_allow: checker.matched_allow,
+        matched_deny: checker.matched_deny,
     }
 }
 
@@ -40,6 +61,8 @@ struct PermissionChecker<'a> {
     cwd: &'a str,
     unmatched: Vec<String>,
     denied: Option<String>,
+    matched_allow: Vec<String>,
+    matched_deny: Vec<String>,
 }
 
 // ─── Visit trait implementation ──────────────────────────────────────────────
@@ -144,6 +167,7 @@ impl PermissionChecker<'_> {
         // Check against Bash() deny rules first
         for rule in &self.perms.deny_bash {
             if permission::bash_rule_matches(rule, &cmd_tokens) {
+                self.matched_deny.push(rule.to_rule_string());
                 self.deny(format!(
                     "Command '{}' matched deny rule",
                     cmd_tokens.join(" ")
@@ -157,7 +181,13 @@ impl PermissionChecker<'_> {
             .perms
             .allow_bash
             .iter()
-            .any(|rule| permission::bash_rule_matches(rule, &cmd_tokens));
+            .any(|rule| {
+                let matched = permission::bash_rule_matches(rule, &cmd_tokens);
+                if matched {
+                    self.matched_allow.push(rule.to_rule_string());
+                }
+                matched
+            });
 
         // Extract file accesses from redirects
         let redirect_accesses = extract_redirect_accesses(&cmd.redirects, self.cwd);
@@ -187,7 +217,6 @@ impl PermissionChecker<'_> {
                 message,
             } => {
                 let cmd_str = cmd_tokens.join(" ");
-                logging::log_parse_error(&cmd_str, &cn, &message);
                 self.unmatched.push(format!(
                     "Bash({cmd_str}) -- failed to parse arguments for `{cn}`: {message}"
                 ));
@@ -237,25 +266,22 @@ impl PermissionChecker<'_> {
         }
 
         // Check deny first
-        let denied = match access.kind {
-            AccessKind::Read => self
-                .perms
-                .deny_read
-                .iter()
-                .any(|pat| permission::file_rule_matches(pat, &access.path)),
+        let deny_matched = match access.kind {
+            AccessKind::Read => {
+                self.perms.deny_read.iter().find(|pat| permission::file_rule_matches(pat, &access.path))
+                    .map(|pat| format!("Read({pat})"))
+            }
             AccessKind::Write => {
-                self.perms
-                    .deny_write
-                    .iter()
-                    .any(|pat| permission::file_rule_matches(pat, &access.path))
-                    || self
-                        .perms
-                        .deny_edit
-                        .iter()
-                        .any(|pat| permission::file_rule_matches(pat, &access.path))
+                self.perms.deny_write.iter().find(|pat| permission::file_rule_matches(pat, &access.path))
+                    .map(|pat| format!("Write({pat})"))
+                    .or_else(|| {
+                        self.perms.deny_edit.iter().find(|pat| permission::file_rule_matches(pat, &access.path))
+                            .map(|pat| format!("Edit({pat})"))
+                    })
             }
         };
-        if denied {
+        if let Some(rule_str) = deny_matched {
+            self.matched_deny.push(rule_str);
             self.deny(format!(
                 "File access '{}' ({:?}) matched deny rule",
                 access.path, access.kind
@@ -264,25 +290,23 @@ impl PermissionChecker<'_> {
         }
 
         // Check allow
-        let allowed = match access.kind {
-            AccessKind::Read => self
-                .perms
-                .allow_read
-                .iter()
-                .any(|pat| permission::file_rule_matches(pat, &access.path)),
+        let allow_matched = match access.kind {
+            AccessKind::Read => {
+                self.perms.allow_read.iter().find(|pat| permission::file_rule_matches(pat, &access.path))
+                    .map(|pat| format!("Read({pat})"))
+            }
             AccessKind::Write => {
-                self.perms
-                    .allow_write
-                    .iter()
-                    .any(|pat| permission::file_rule_matches(pat, &access.path))
-                    || self
-                        .perms
-                        .allow_edit
-                        .iter()
-                        .any(|pat| permission::file_rule_matches(pat, &access.path))
+                self.perms.allow_write.iter().find(|pat| permission::file_rule_matches(pat, &access.path))
+                    .map(|pat| format!("Write({pat})"))
+                    .or_else(|| {
+                        self.perms.allow_edit.iter().find(|pat| permission::file_rule_matches(pat, &access.path))
+                            .map(|pat| format!("Edit({pat})"))
+                    })
             }
         };
-        if !allowed {
+        if let Some(rule_str) = allow_matched {
+            self.matched_allow.push(rule_str);
+        } else {
             let rule_needed = match access.kind {
                 AccessKind::Read => format!("Read({})", access.path),
                 AccessKind::Write => format!("Write({})", access.path),

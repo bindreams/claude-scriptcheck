@@ -145,6 +145,28 @@ fn parse_irrelevant_rule_skipped() {
     assert!(parse_single_rule("mcp__Glean__*", home).is_none());
 }
 
+// ─── BashRule::to_rule_string ─────────────────────────────────────────────────
+
+#[test]
+fn to_rule_string_exact() {
+    assert_eq!(make_rule(&["git", "status"], false).to_rule_string(), "Bash(git status)");
+}
+
+#[test]
+fn to_rule_string_wildcard() {
+    assert_eq!(make_rule(&["git", "status"], true).to_rule_string(), "Bash(git status *)");
+}
+
+#[test]
+fn to_rule_string_catch_all() {
+    assert_eq!(make_rule(&[], true).to_rule_string(), "Bash(*)");
+}
+
+#[test]
+fn to_rule_string_single_command() {
+    assert_eq!(make_rule(&["ls"], false).to_rule_string(), "Bash(ls)");
+}
+
 // ─── Colon-wildcard format (Claude Code's native format) ─────────────────────
 
 #[test]

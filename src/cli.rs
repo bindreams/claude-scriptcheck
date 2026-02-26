@@ -109,9 +109,9 @@ pub fn check(command: &str, cwd: &str) {
         }
     };
 
-    let decision = checker::check_program(&program, &parsed_perms, &resolved_cwd);
+    let result = checker::check_program(&program, &parsed_perms, &resolved_cwd);
 
-    match decision {
+    match result.decision {
         checker::Decision::Allow => {
             println!("ALLOW: All commands and file accesses are permitted");
         }
@@ -128,7 +128,7 @@ pub fn check(command: &str, cwd: &str) {
     }
 }
 
-/// Print the missing-rules log.
+/// Print the decision log.
 pub fn log(clear: bool, watch: bool) {
     use std::io::{Read, Seek, SeekFrom};
     use std::thread;

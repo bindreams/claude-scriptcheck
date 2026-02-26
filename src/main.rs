@@ -33,7 +33,7 @@ enum Commands {
         #[arg(long, default_value = ".")]
         cwd: String,
     },
-    /// Print the missing-rules log
+    /// Print the decision log
     Log {
         /// Clear the log after printing
         #[arg(long)]
@@ -97,24 +97,63 @@ fn run_hook() {
     let program = match thaum::parse_with(&command, thaum::Dialect::Bash) {
         Ok(p) => p,
         Err(_) => {
+            logging::log_decision(
+                &hook_input.session_id,
+                &hook_input.cwd,
+                &command,
+                "ask",
+                None,
+                &[],
+                &[],
+                &["Bash(<parse error>)".to_string()],
+            );
             output_decision("ask", "Shell command could not be parsed");
             process::exit(0);
         }
     };
 
     // Check permissions
-    let decision = checker::check_program(&program, &parsed_perms, &hook_input.cwd);
+    let result = checker::check_program(&program, &parsed_perms, &hook_input.cwd);
 
-    match decision {
+    match &result.decision {
         checker::Decision::Allow => {
+            logging::log_decision(
+                &hook_input.session_id,
+                &hook_input.cwd,
+                &command,
+                "allow",
+                None,
+                &result.matched_allow,
+                &[],
+                &[],
+            );
             output_decision("allow", "All commands and file accesses are permitted");
         }
         checker::Decision::Deny(reason) => {
-            output_decision("deny", &reason);
+            logging::log_decision(
+                &hook_input.session_id,
+                &hook_input.cwd,
+                &command,
+                "deny",
+                Some(reason),
+                &result.matched_allow,
+                &result.matched_deny,
+                &[],
+            );
+            output_decision("deny", reason);
         }
         checker::Decision::Ask(missing) => {
             let reason = format!("Missing permission rules: {}", missing.join(", "));
-            logging::log_missing_rules(&missing, &command);
+            logging::log_decision(
+                &hook_input.session_id,
+                &hook_input.cwd,
+                &command,
+                "ask",
+                None,
+                &result.matched_allow,
+                &[],
+                missing,
+            );
             output_decision("ask", &reason);
         }
     }

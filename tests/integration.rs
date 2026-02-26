@@ -6,7 +6,7 @@ fn check_command(command: &str, cwd: &str) -> Decision {
     let permissions = settings::load_settings(cwd);
     let parsed_perms = permission::parse_rules(&permissions);
     let program = thaum::parse_with(command, thaum::Dialect::Bash).unwrap();
-    checker::check_program(&program, &parsed_perms, cwd)
+    checker::check_program(&program, &parsed_perms, cwd).decision
 }
 
 // ---- Logic tests (via library API) ----
