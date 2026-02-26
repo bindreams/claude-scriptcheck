@@ -273,17 +273,20 @@ impl PermissionChecker<'_> {
             return;
         }
 
+        // Canonicalize the query path before matching against rules
+        let path = crate::canonicalize::best_effort_canonicalize(&access.path);
+
         // Check deny first
         let deny_matched = match access.kind {
             AccessKind::Read => {
-                self.perms.deny_read.iter().find(|pat| permission::file_rule_matches(pat, &access.path))
+                self.perms.deny_read.iter().find(|pat| permission::file_rule_matches(pat, &path))
                     .map(|pat| format!("Read({pat})"))
             }
             AccessKind::Write => {
-                self.perms.deny_write.iter().find(|pat| permission::file_rule_matches(pat, &access.path))
+                self.perms.deny_write.iter().find(|pat| permission::file_rule_matches(pat, &path))
                     .map(|pat| format!("Write({pat})"))
                     .or_else(|| {
-                        self.perms.deny_edit.iter().find(|pat| permission::file_rule_matches(pat, &access.path))
+                        self.perms.deny_edit.iter().find(|pat| permission::file_rule_matches(pat, &path))
                             .map(|pat| format!("Edit({pat})"))
                     })
             }
@@ -292,7 +295,7 @@ impl PermissionChecker<'_> {
             self.matched_deny.push(rule_str);
             self.deny(format!(
                 "File access '{}' ({:?}) matched deny rule",
-                access.path, access.kind
+                path, access.kind
             ));
             return;
         }
@@ -300,17 +303,17 @@ impl PermissionChecker<'_> {
         // Check ask rules — force ask even if allowed
         let ask_matched = match access.kind {
             AccessKind::Read => {
-                self.perms.ask_read.iter().any(|pat| permission::file_rule_matches(pat, &access.path))
+                self.perms.ask_read.iter().any(|pat| permission::file_rule_matches(pat, &path))
             }
             AccessKind::Write => {
-                self.perms.ask_write.iter().any(|pat| permission::file_rule_matches(pat, &access.path))
-                    || self.perms.ask_edit.iter().any(|pat| permission::file_rule_matches(pat, &access.path))
+                self.perms.ask_write.iter().any(|pat| permission::file_rule_matches(pat, &path))
+                    || self.perms.ask_edit.iter().any(|pat| permission::file_rule_matches(pat, &path))
             }
         };
         if ask_matched {
             let rule_needed = match access.kind {
-                AccessKind::Read => format!("Read({})", access.path),
-                AccessKind::Write => format!("Write({})", access.path),
+                AccessKind::Read => format!("Read({path})"),
+                AccessKind::Write => format!("Write({path})"),
             };
             self.unmatched.push(rule_needed);
             return;
@@ -319,14 +322,14 @@ impl PermissionChecker<'_> {
         // Check allow
         let allow_matched = match access.kind {
             AccessKind::Read => {
-                self.perms.allow_read.iter().find(|pat| permission::file_rule_matches(pat, &access.path))
+                self.perms.allow_read.iter().find(|pat| permission::file_rule_matches(pat, &path))
                     .map(|pat| format!("Read({pat})"))
             }
             AccessKind::Write => {
-                self.perms.allow_write.iter().find(|pat| permission::file_rule_matches(pat, &access.path))
+                self.perms.allow_write.iter().find(|pat| permission::file_rule_matches(pat, &path))
                     .map(|pat| format!("Write({pat})"))
                     .or_else(|| {
-                        self.perms.allow_edit.iter().find(|pat| permission::file_rule_matches(pat, &access.path))
+                        self.perms.allow_edit.iter().find(|pat| permission::file_rule_matches(pat, &path))
                             .map(|pat| format!("Edit({pat})"))
                     })
             }
@@ -335,8 +338,8 @@ impl PermissionChecker<'_> {
             self.matched_allow.push(rule_str);
         } else {
             let rule_needed = match access.kind {
-                AccessKind::Read => format!("Read({})", access.path),
-                AccessKind::Write => format!("Write({})", access.path),
+                AccessKind::Read => format!("Read({path})"),
+                AccessKind::Write => format!("Write({path})"),
             };
             self.unmatched.push(rule_needed);
         }

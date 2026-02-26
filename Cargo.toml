@@ -8,6 +8,7 @@ thaum = { git = "https://github.com/bindreams/thaum.git" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 glob-match = "0.2"
+path-clean = "1"
 dirs = "6"
 clap = { version = "4", features = ["derive", "string"] }
 serde_yml = "0.0.12"

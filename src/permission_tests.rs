@@ -85,6 +85,33 @@ fn file_pattern_no_match() {
     assert!(!file_rule_matches("/tmp/claude/**", "/home/user/file.txt"));
 }
 
+// ─── Glob matching: ** and * behavior ─────────────────────────────────────────
+
+#[test]
+fn globstar_does_not_match_base_dir() {
+    assert!(!file_rule_matches("/tmp/**", "/tmp"));
+}
+
+#[test]
+fn globstar_matches_single_level() {
+    assert!(file_rule_matches("/tmp/**", "/tmp/a"));
+}
+
+#[test]
+fn globstar_matches_nested() {
+    assert!(file_rule_matches("/tmp/**", "/tmp/a/b"));
+}
+
+#[test]
+fn star_matches_single_level() {
+    assert!(file_rule_matches("/tmp/*", "/tmp/a"));
+}
+
+#[test]
+fn star_does_not_match_nested() {
+    assert!(!file_rule_matches("/tmp/*", "/tmp/a/b"));
+}
+
 #[test]
 fn parse_bash_rule_exact() {
     let home = "/home/test";

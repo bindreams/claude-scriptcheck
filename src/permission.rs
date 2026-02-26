@@ -108,11 +108,11 @@ pub(crate) fn parse_single_rule(rule: &str, home: &str) -> Option<ParsedRule> {
             wildcard,
         }))
     } else if let Some(inner) = rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')')) {
-        Some(ParsedRule::Read(inner.replace('~', home)))
+        Some(ParsedRule::Read(crate::canonicalize::best_effort_canonicalize(&inner.replace('~', home))))
     } else if let Some(inner) = rule.strip_prefix("Write(").and_then(|s| s.strip_suffix(')')) {
-        Some(ParsedRule::Write(inner.replace('~', home)))
+        Some(ParsedRule::Write(crate::canonicalize::best_effort_canonicalize(&inner.replace('~', home))))
     } else if let Some(inner) = rule.strip_prefix("Edit(").and_then(|s| s.strip_suffix(')')) {
-        Some(ParsedRule::Edit(inner.replace('~', home)))
+        Some(ParsedRule::Edit(crate::canonicalize::best_effort_canonicalize(&inner.replace('~', home))))
     } else {
         None
     }

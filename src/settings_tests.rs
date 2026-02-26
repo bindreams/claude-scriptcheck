@@ -123,3 +123,87 @@ fn managed_none_still_loads_user_rules() {
     );
     assert_eq!(perms.allow, vec!["Bash(ls *)"]);
 }
+
+// ─── resolve_rule_relative_paths ──────────────────────────────────────────────
+
+#[test]
+fn relative_read_resolved_against_base() {
+    let mut rules = vec!["Read(src/**)".to_string()];
+    resolve_rule_relative_paths(&mut rules, "/home/user/project");
+    assert_eq!(rules, vec!["Read(/home/user/project/src/**)"]);
+}
+
+#[test]
+fn relative_write_resolved_against_base() {
+    let mut rules = vec!["Write(out/file.txt)".to_string()];
+    resolve_rule_relative_paths(&mut rules, "/home/user/project");
+    assert_eq!(rules, vec!["Write(/home/user/project/out/file.txt)"]);
+}
+
+#[test]
+fn relative_edit_resolved_against_base() {
+    let mut rules = vec!["Edit(src/**)".to_string()];
+    resolve_rule_relative_paths(&mut rules, "/home/user/project");
+    assert_eq!(rules, vec!["Edit(/home/user/project/src/**)"]);
+}
+
+#[test]
+fn absolute_rule_not_modified() {
+    let mut rules = vec!["Read(/etc/**)".to_string()];
+    resolve_rule_relative_paths(&mut rules, "/home/user/project");
+    assert_eq!(rules, vec!["Read(/etc/**)"]);
+}
+
+#[test]
+fn tilde_rule_not_modified() {
+    let mut rules = vec!["Read(~/src/**)".to_string()];
+    resolve_rule_relative_paths(&mut rules, "/home/user/project");
+    assert_eq!(rules, vec!["Read(~/src/**)"]);
+}
+
+#[test]
+fn bash_rule_not_modified() {
+    let mut rules = vec!["Bash(ls *)".to_string()];
+    resolve_rule_relative_paths(&mut rules, "/home/user/project");
+    assert_eq!(rules, vec!["Bash(ls *)"]);
+}
+
+#[test]
+fn non_file_rule_not_modified() {
+    let mut rules = vec!["WebSearch".to_string()];
+    resolve_rule_relative_paths(&mut rules, "/home/user/project");
+    assert_eq!(rules, vec!["WebSearch"]);
+}
+
+#[test]
+fn dot_relative_path_resolved() {
+    let mut rules = vec!["Read(./src/**)".to_string()];
+    resolve_rule_relative_paths(&mut rules, "/home/user/project");
+    assert_eq!(rules, vec!["Read(/home/user/project/./src/**)"]);
+}
+
+#[test]
+fn dotdot_relative_path_resolved() {
+    let mut rules = vec!["Read(../other/**)".to_string()];
+    resolve_rule_relative_paths(&mut rules, "/home/user/project");
+    assert_eq!(rules, vec!["Read(/home/user/project/../other/**)"]);
+}
+
+#[test]
+fn mixed_rules_resolved() {
+    let mut rules = vec![
+        "Bash(git *)".to_string(),
+        "Read(src/**)".to_string(),
+        "Write(/tmp/**)".to_string(),
+        "Edit(~/config/**)".to_string(),
+        "Read(tests/**)".to_string(),
+    ];
+    resolve_rule_relative_paths(&mut rules, "/project");
+    assert_eq!(rules, vec![
+        "Bash(git *)",
+        "Read(/project/src/**)",
+        "Write(/tmp/**)",
+        "Edit(~/config/**)",
+        "Read(/project/tests/**)",
+    ]);
+}

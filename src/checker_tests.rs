@@ -586,3 +586,57 @@ fn empty_ask_rules_unchanged_behavior() {
     let d = check_with_ask("ls -la", &["Bash(ls *)"], &[], &[]);
     assert_eq!(d, Decision::Allow);
 }
+
+// ── Path canonicalization ────────────────────────────────────────────────────
+
+/// Helper: returns the canonical form of a path (best-effort).
+fn c(path: &str) -> String {
+    crate::canonicalize::best_effort_canonicalize(path)
+}
+
+#[test]
+fn dotdot_query_path_matches_clean_rule() {
+    // Command uses ../file.txt → resolves to /tmp/../file.txt → canonicalized to /file.txt
+    // (because cwd is /tmp, so /tmp/../file.txt normalizes to /file.txt)
+    // Rule covers Read(/**)
+    let d = check(
+        "cat ../file.txt",
+        &["Read(/**)", "Bash(cat *)"],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[test]
+fn rule_with_dotdot_matches_normalized_query() {
+    // Rule uses .. in its pattern — canonicalization normalizes it
+    // Read(/tmp/nonexistent/../**) → normalizes to Read(/tmp/**)
+    let d = check(
+        "cat /tmp/file.txt",
+        &[&format!("Read({}/nonexistent/../**)", c("/tmp")), "Bash(cat *)"],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[test]
+fn dot_in_query_path_resolved() {
+    // cat ./file.txt with cwd=/tmp → /tmp/./file.txt → /tmp/file.txt
+    let d = check(
+        "cat ./file.txt",
+        &[&format!("Read({}/**)", c("/tmp")), "Bash(cat *)"],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[test]
+fn relative_path_in_query_canonicalized() {
+    // mkdir subdir/foo with cwd=/tmp → /tmp/subdir/foo
+    let d = check(
+        "mkdir subdir/foo",
+        &[&format!("Write({}/**)", c("/tmp"))],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}

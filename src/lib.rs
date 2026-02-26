@@ -1,3 +1,4 @@
+pub mod canonicalize;
 pub mod checker;
 pub mod cli;
 pub mod cmd_parser;
@@ -7,6 +8,8 @@ pub mod logging;
 pub mod permission;
 pub mod settings;
 
+#[cfg(test)]
+mod canonicalize_tests;
 #[cfg(test)]
 mod checker_tests;
 #[cfg(test)]

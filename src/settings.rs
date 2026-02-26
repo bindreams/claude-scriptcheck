@@ -38,19 +38,20 @@ pub fn load_settings(cwd: &str) -> Permissions {
         return merged;
     }
 
-    // 2. Global settings
+    // 2. Global settings — resolve relative file rules against ~
     if let Some(home) = dirs::home_dir() {
+        let home_str = home.to_string_lossy().to_string();
         let global = home.join(".claude/settings.json");
-        merge_from(&global, &mut merged);
+        merge_from_with_base(&global, &home_str, &mut merged);
     }
 
-    // 3. Project-level settings
+    // 3. Project-level settings — resolve relative file rules against cwd
     let project = Path::new(cwd).join(".claude/settings.json");
-    merge_from(&project, &mut merged);
+    merge_from_with_base(&project, cwd, &mut merged);
 
-    // 4. Project-level local settings
+    // 4. Project-level local settings — resolve relative file rules against cwd
     let local = Path::new(cwd).join(".claude/settings.local.json");
-    merge_from(&local, &mut merged);
+    merge_from_with_base(&local, cwd, &mut merged);
 
     merged
 }
@@ -115,14 +116,17 @@ fn managed_settings_path() -> &'static str {
     }
 }
 
-fn merge_from(path: &Path, merged: &mut Permissions) {
+fn merge_from_with_base(path: &Path, base: &str, merged: &mut Permissions) {
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
     };
     let Ok(settings) = serde_json::from_str::<Settings>(&content) else {
         return;
     };
-    if let Some(perms) = settings.permissions {
+    if let Some(mut perms) = settings.permissions {
+        resolve_rule_relative_paths(&mut perms.allow, base);
+        resolve_rule_relative_paths(&mut perms.deny, base);
+        resolve_rule_relative_paths(&mut perms.ask, base);
         merge_permissions(merged, perms);
     }
 }
@@ -131,4 +135,27 @@ fn merge_permissions(merged: &mut Permissions, perms: PermissionsJson) {
     merged.allow.extend(perms.allow);
     merged.deny.extend(perms.deny);
     merged.ask.extend(perms.ask);
+}
+
+/// Resolve relative paths in file rules (Read/Write/Edit) against a base directory.
+///
+/// A relative path is one that doesn't start with `/` or `~`.
+/// Only Read(...), Write(...), and Edit(...) rules are affected.
+pub(crate) fn resolve_rule_relative_paths(rules: &mut [String], base: &str) {
+    for rule in rules.iter_mut() {
+        *rule = resolve_one_rule(rule, base);
+    }
+}
+
+fn resolve_one_rule(rule: &str, base: &str) -> String {
+    for prefix in ["Read(", "Write(", "Edit("] {
+        if let Some(inner) = rule.strip_prefix(prefix).and_then(|s| s.strip_suffix(')')) {
+            if !inner.starts_with('/') && !inner.starts_with('~') {
+                let suffix = &prefix[..prefix.len() - 1]; // "Read", "Write", or "Edit"
+                return format!("{suffix}({base}/{inner})");
+            }
+            return rule.to_string();
+        }
+    }
+    rule.to_string()
 }
