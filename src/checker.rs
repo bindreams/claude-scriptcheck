@@ -176,18 +176,26 @@ impl PermissionChecker<'_> {
             }
         }
 
-        // Check against Bash() allow rules
-        let bash_allowed = self
+        // Check against Bash() ask rules — force ask even if allowed
+        let bash_asked = self
             .perms
-            .allow_bash
+            .ask_bash
             .iter()
-            .any(|rule| {
-                let matched = permission::bash_rule_matches(rule, &cmd_tokens);
-                if matched {
-                    self.matched_allow.push(rule.to_rule_string());
-                }
-                matched
-            });
+            .any(|rule| permission::bash_rule_matches(rule, &cmd_tokens));
+
+        // Check against Bash() allow rules (skip if ask matched)
+        let bash_allowed = !bash_asked
+            && self
+                .perms
+                .allow_bash
+                .iter()
+                .any(|rule| {
+                    let matched = permission::bash_rule_matches(rule, &cmd_tokens);
+                    if matched {
+                        self.matched_allow.push(rule.to_rule_string());
+                    }
+                    matched
+                });
 
         // Extract file accesses from redirects
         let redirect_accesses = extract_redirect_accesses(&cmd.redirects, self.cwd);
@@ -286,6 +294,25 @@ impl PermissionChecker<'_> {
                 "File access '{}' ({:?}) matched deny rule",
                 access.path, access.kind
             ));
+            return;
+        }
+
+        // Check ask rules — force ask even if allowed
+        let ask_matched = match access.kind {
+            AccessKind::Read => {
+                self.perms.ask_read.iter().any(|pat| permission::file_rule_matches(pat, &access.path))
+            }
+            AccessKind::Write => {
+                self.perms.ask_write.iter().any(|pat| permission::file_rule_matches(pat, &access.path))
+                    || self.perms.ask_edit.iter().any(|pat| permission::file_rule_matches(pat, &access.path))
+            }
+        };
+        if ask_matched {
+            let rule_needed = match access.kind {
+                AccessKind::Read => format!("Read({})", access.path),
+                AccessKind::Write => format!("Write({})", access.path),
+            };
+            self.unmatched.push(rule_needed);
             return;
         }
 

@@ -4,15 +4,26 @@ use crate::settings::Permissions;
 use pretty_assertions::assert_eq;
 
 
-fn make_perms(allow: &[&str], deny: &[&str]) -> ParsedPermissions {
+fn make_perms_full(allow: &[&str], deny: &[&str], ask: &[&str]) -> ParsedPermissions {
     permission::parse_rules(&Permissions {
         allow: allow.iter().map(|s| s.to_string()).collect(),
         deny: deny.iter().map(|s| s.to_string()).collect(),
+        ask: ask.iter().map(|s| s.to_string()).collect(),
     })
+}
+
+fn make_perms(allow: &[&str], deny: &[&str]) -> ParsedPermissions {
+    make_perms_full(allow, deny, &[])
 }
 
 fn check(cmd: &str, allow: &[&str], deny: &[&str]) -> Decision {
     let perms = make_perms(allow, deny);
+    let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
+    check_program(&program, &perms, "/tmp").decision
+}
+
+fn check_with_ask(cmd: &str, allow: &[&str], deny: &[&str], ask: &[&str]) -> Decision {
+    let perms = make_perms_full(allow, deny, ask);
     let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
     check_program(&program, &perms, "/tmp").decision
 }
@@ -524,5 +535,54 @@ fn bash_script_file_reads() {
 #[test]
 fn bash_script_file_with_read_rule() {
     let d = check("bash script.sh", &["Bash(bash *)", "Read(/tmp/**)"], &[]);
+    assert_eq!(d, Decision::Allow);
+}
+
+// ── Ask rule semantics ──────────────────────────────────────────────────────
+
+#[test]
+fn ask_rule_overrides_allow_bash() {
+    // ls -la has no file accesses, so only the Bash rule matters
+    let d = check_with_ask("ls -la", &["Bash(ls *)"], &[], &["Bash(ls *)"]);
+    assert!(matches!(d, Decision::Ask(_)));
+}
+
+#[test]
+fn ask_rule_does_not_override_deny() {
+    let d = check_with_ask("rm -rf /tmp/foo", &[], &["Bash(rm *)"], &["Bash(rm *)"]);
+    assert!(matches!(d, Decision::Deny(_)));
+}
+
+#[test]
+fn ask_rule_overrides_allow_file_read() {
+    let d = check_with_ask(
+        "cat /tmp/secret.txt",
+        &["Bash(cat *)", "Read(/tmp/**)"],
+        &[],
+        &["Read(/tmp/secret.txt)"],
+    );
+    assert!(matches!(d, Decision::Ask(_)));
+}
+
+#[test]
+fn ask_rule_overrides_allow_file_write() {
+    let d = check_with_ask(
+        "echo hello > /tmp/out.txt",
+        &["Bash(echo *)", "Write(/tmp/**)"],
+        &[],
+        &["Write(/tmp/out.txt)"],
+    );
+    assert!(matches!(d, Decision::Ask(_)));
+}
+
+#[test]
+fn ask_rule_no_match_allows_through() {
+    let d = check_with_ask("ls -la", &["Bash(ls *)"], &[], &["Bash(rm *)"]);
+    assert_eq!(d, Decision::Allow);
+}
+
+#[test]
+fn empty_ask_rules_unchanged_behavior() {
+    let d = check_with_ask("ls -la", &["Bash(ls *)"], &[], &[]);
     assert_eq!(d, Decision::Allow);
 }

@@ -14,12 +14,16 @@ pub struct BashRule {
 pub struct ParsedPermissions {
     pub allow_bash: Vec<BashRule>,
     pub deny_bash: Vec<BashRule>,
+    pub ask_bash: Vec<BashRule>,
     pub allow_read: Vec<String>,
     pub deny_read: Vec<String>,
+    pub ask_read: Vec<String>,
     pub allow_write: Vec<String>,
     pub deny_write: Vec<String>,
+    pub ask_write: Vec<String>,
     pub allow_edit: Vec<String>,
     pub deny_edit: Vec<String>,
+    pub ask_edit: Vec<String>,
 }
 
 pub(crate) enum ParsedRule {
@@ -52,6 +56,16 @@ pub fn parse_rules(perms: &Permissions) -> ParsedPermissions {
             Some(ParsedRule::Read(pat)) => parsed.deny_read.push(pat),
             Some(ParsedRule::Write(pat)) => parsed.deny_write.push(pat),
             Some(ParsedRule::Edit(pat)) => parsed.deny_edit.push(pat),
+            None => {}
+        }
+    }
+
+    for rule_str in &perms.ask {
+        match parse_single_rule(rule_str, &home) {
+            Some(ParsedRule::Bash(br)) => parsed.ask_bash.push(br),
+            Some(ParsedRule::Read(pat)) => parsed.ask_read.push(pat),
+            Some(ParsedRule::Write(pat)) => parsed.ask_write.push(pat),
+            Some(ParsedRule::Edit(pat)) => parsed.ask_edit.push(pat),
             None => {}
         }
     }

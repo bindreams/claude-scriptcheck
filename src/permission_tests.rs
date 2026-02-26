@@ -167,6 +167,48 @@ fn to_rule_string_single_command() {
     assert_eq!(make_rule(&["ls"], false).to_rule_string(), "Bash(ls)");
 }
 
+// ─── parse_rules: ask rules ──────────────────────────────────────────────────
+
+#[test]
+fn parse_rules_with_ask_bash() {
+    use crate::settings::Permissions;
+    let perms = Permissions {
+        allow: vec![],
+        deny: vec![],
+        ask: vec!["Bash(rm *)".into()],
+    };
+    let parsed = parse_rules(&perms);
+    assert_eq!(parsed.ask_bash.len(), 1);
+    assert_eq!(parsed.ask_bash[0].prefix_tokens, vec!["rm"]);
+    assert!(parsed.ask_bash[0].wildcard);
+}
+
+#[test]
+fn parse_rules_with_ask_read() {
+    use crate::settings::Permissions;
+    let perms = Permissions {
+        allow: vec![],
+        deny: vec![],
+        ask: vec!["Read(/etc/**)".into()],
+    };
+    let parsed = parse_rules(&perms);
+    assert_eq!(parsed.ask_read, vec!["/etc/**"]);
+}
+
+#[test]
+fn parse_rules_with_ask_write_and_edit() {
+    use crate::settings::Permissions;
+    let perms = Permissions {
+        allow: vec![],
+        deny: vec![],
+        ask: vec!["Write(/tmp/**)".into(), "Edit(~/src/**)".into()],
+    };
+    let parsed = parse_rules(&perms);
+    assert_eq!(parsed.ask_write, vec!["/tmp/**"]);
+    assert_eq!(parsed.ask_edit.len(), 1);
+    assert!(parsed.ask_edit[0].contains("/src/**"));
+}
+
 // ─── Colon-wildcard format (Claude Code's native format) ─────────────────────
 
 #[test]
