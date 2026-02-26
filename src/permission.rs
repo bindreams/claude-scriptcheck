@@ -61,7 +61,19 @@ pub fn parse_rules(perms: &Permissions) -> ParsedPermissions {
 
 pub(crate) fn parse_single_rule(rule: &str, home: &str) -> Option<ParsedRule> {
     if let Some(inner) = rule.strip_prefix("Bash(").and_then(|s| s.strip_suffix(')')) {
-        let tokens: Vec<String> = inner.split_whitespace().map(String::from).collect();
+        let mut tokens: Vec<String> = inner.split_whitespace().map(String::from).collect();
+        // Normalize Claude Code's colon-wildcard format: "cmd:*" → "cmd" "*"
+        if let Some(last) = tokens.last() {
+            if let Some(stem) = last.strip_suffix(":*") {
+                let i = tokens.len() - 1;
+                if stem.is_empty() {
+                    tokens[i] = "*".to_string();
+                } else {
+                    tokens[i] = stem.to_string();
+                    tokens.push("*".to_string());
+                }
+            }
+        }
         if tokens.is_empty() {
             return None;
         }

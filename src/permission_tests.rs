@@ -144,3 +144,58 @@ fn parse_irrelevant_rule_skipped() {
     assert!(parse_single_rule("WebSearch", home).is_none());
     assert!(parse_single_rule("mcp__Glean__*", home).is_none());
 }
+
+// ─── Colon-wildcard format (Claude Code's native format) ─────────────────────
+
+#[test]
+fn parse_colon_wildcard_single_command() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Bash(grep:*)", home).unwrap();
+    match parsed {
+        ParsedRule::Bash(rule) => {
+            assert_eq!(rule.prefix_tokens, vec!["grep"]);
+            assert!(rule.wildcard);
+        }
+        _ => panic!("expected Bash rule"),
+    }
+}
+
+#[test]
+fn parse_colon_wildcard_multi_token() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Bash(git status:*)", home).unwrap();
+    match parsed {
+        ParsedRule::Bash(rule) => {
+            assert_eq!(rule.prefix_tokens, vec!["git", "status"]);
+            assert!(rule.wildcard);
+        }
+        _ => panic!("expected Bash rule"),
+    }
+}
+
+#[test]
+fn parse_colon_wildcard_relative_path() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Bash(./bazel.cmd build:*)", home).unwrap();
+    match parsed {
+        ParsedRule::Bash(rule) => {
+            assert_eq!(rule.prefix_tokens, vec!["./bazel.cmd", "build"]);
+            assert!(rule.wildcard);
+        }
+        _ => panic!("expected Bash rule"),
+    }
+}
+
+#[test]
+fn parse_colon_wildcard_preserves_glob_in_prefix() {
+    let home = "/home/test";
+    // "gcc -print-file-name=*:*" — the :* is the wildcard, the =* in the prefix is a glob
+    let parsed = parse_single_rule("Bash(gcc -print-file-name=*:*)", home).unwrap();
+    match parsed {
+        ParsedRule::Bash(rule) => {
+            assert_eq!(rule.prefix_tokens, vec!["gcc", "-print-file-name=*"]);
+            assert!(rule.wildcard);
+        }
+        _ => panic!("expected Bash rule"),
+    }
+}
