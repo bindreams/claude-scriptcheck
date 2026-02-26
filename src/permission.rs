@@ -133,19 +133,30 @@ impl BashRule {
 
 /// Check if a command (as tokens) matches a Bash rule.
 pub fn bash_rule_matches(rule: &BashRule, cmd_tokens: &[String]) -> bool {
-    if cmd_tokens.len() < rule.prefix_tokens.len() {
+    match_tokens(&rule.prefix_tokens, cmd_tokens, rule.wildcard)
+}
+
+/// Recursive token matcher that supports `**` (matches zero or more tokens).
+fn match_tokens(rule_tokens: &[String], cmd_tokens: &[String], wildcard: bool) -> bool {
+    if rule_tokens.is_empty() {
+        return if wildcard { true } else { cmd_tokens.is_empty() };
+    }
+    if rule_tokens[0] == "**" {
+        // ** matches 0 or more command tokens
+        for skip in 0..=cmd_tokens.len() {
+            if match_tokens(&rule_tokens[1..], &cmd_tokens[skip..], wildcard) {
+                return true;
+            }
+        }
         return false;
     }
-    for (rule_tok, cmd_tok) in rule.prefix_tokens.iter().zip(cmd_tokens.iter()) {
-        if !token_matches(rule_tok, cmd_tok) {
-            return false;
-        }
+    if cmd_tokens.is_empty() {
+        return false;
     }
-    if rule.wildcard {
-        true
-    } else {
-        cmd_tokens.len() == rule.prefix_tokens.len()
+    if !token_matches(&rule_tokens[0], &cmd_tokens[0]) {
+        return false;
     }
+    match_tokens(&rule_tokens[1..], &cmd_tokens[1..], wildcard)
 }
 
 fn token_matches(pattern: &str, actual: &str) -> bool {

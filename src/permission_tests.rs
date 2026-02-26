@@ -236,6 +236,97 @@ fn parse_rules_with_ask_write_and_edit() {
     assert!(parsed.ask_edit[0].contains("/src/**"));
 }
 
+// ─── Double-star (**) multi-token wildcard ────────────────────────────────────
+
+#[test]
+fn doublestar_matches_zero_tokens() {
+    let rule = make_rule(&["curl", "**", "-X", "POST"], true);
+    assert!(bash_rule_matches(
+        &rule,
+        &tokens(&["curl", "-X", "POST", "https://example.com"])
+    ));
+}
+
+#[test]
+fn doublestar_matches_one_token() {
+    let rule = make_rule(&["curl", "**", "-X", "POST"], true);
+    assert!(bash_rule_matches(
+        &rule,
+        &tokens(&["curl", "-s", "-X", "POST", "https://example.com"])
+    ));
+}
+
+#[test]
+fn doublestar_matches_multiple_tokens() {
+    let rule = make_rule(&["curl", "**", "-X", "POST"], true);
+    assert!(bash_rule_matches(
+        &rule,
+        &tokens(&["curl", "-s", "-S", "-H", "Content-Type: application/json", "-X", "POST", "https://example.com"])
+    ));
+}
+
+#[test]
+fn doublestar_at_start() {
+    let rule = make_rule(&["**", "-X", "POST"], true);
+    assert!(bash_rule_matches(
+        &rule,
+        &tokens(&["curl", "-X", "POST", "https://example.com"])
+    ));
+}
+
+#[test]
+fn doublestar_no_match_when_suffix_differs() {
+    let rule = make_rule(&["curl", "**", "-X", "POST"], true);
+    assert!(!bash_rule_matches(
+        &rule,
+        &tokens(&["curl", "-s", "-X", "GET", "https://example.com"])
+    ));
+}
+
+#[test]
+fn doublestar_alone_matches_any_command() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Bash(**)", home).unwrap();
+    match parsed {
+        ParsedRule::Bash(rule) => {
+            assert!(bash_rule_matches(&rule, &tokens(&["ls"])));
+            assert!(bash_rule_matches(&rule, &tokens(&["git", "status", "-s"])));
+        }
+        _ => panic!("expected Bash rule"),
+    }
+}
+
+#[test]
+fn trailing_doublestar_without_wildcard() {
+    // Bash(curl **) — no trailing *, so wildcard=false, prefix=["curl", "**"]
+    let home = "/home/test";
+    let parsed = parse_single_rule("Bash(curl **)", home).unwrap();
+    match parsed {
+        ParsedRule::Bash(rule) => {
+            assert!(!rule.wildcard);
+            assert_eq!(rule.prefix_tokens, vec!["curl", "**"]);
+            assert!(bash_rule_matches(&rule, &tokens(&["curl"])));
+            assert!(bash_rule_matches(&rule, &tokens(&["curl", "foo"])));
+            assert!(bash_rule_matches(&rule, &tokens(&["curl", "foo", "bar"])));
+        }
+        _ => panic!("expected Bash rule"),
+    }
+}
+
+#[test]
+fn doublestar_parse_roundtrip() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Bash(curl ** -X POST *)", home).unwrap();
+    match parsed {
+        ParsedRule::Bash(rule) => {
+            assert_eq!(rule.prefix_tokens, vec!["curl", "**", "-X", "POST"]);
+            assert!(rule.wildcard);
+            assert_eq!(rule.to_rule_string(), "Bash(curl ** -X POST *)");
+        }
+        _ => panic!("expected Bash rule"),
+    }
+}
+
 // ─── Colon-wildcard format (Claude Code's native format) ─────────────────────
 
 #[test]
