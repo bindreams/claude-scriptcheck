@@ -14,19 +14,19 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git  # insta
 
 ## Source map
 
-| File | Role |
-|------|------|
-| `src/lib.rs` | Library crate root. Re-exports all modules so they are usable without spawning the binary. |
-| `src/main.rs` | Thin binary wrapper: CLI routing (clap) and hook-mode I/O (stdin JSON → decision JSON). |
-| `src/cli.rs` | Subcommand implementations: `install`, `uninstall`, `check`, `log`, `log-path`, `upgrade`. |
-| `src/checker.rs` | Core logic. `check_program()` walks AST, checks each command against rules, returns `Decision`. ~60 unit tests. |
-| `src/permission.rs` | Parses rule strings (`Bash(cmd *)`, `Read(glob)`, etc.) into `ParsedPermissions`. Matching logic. ~20 unit tests. |
-| `src/file_access.rs` | Maps well-known commands to file-access semantics (read/write args, redirects). ~25 unit tests. |
-| `src/hook.rs` | `HookInput` / `HookOutput` serde structs for JSON protocol with Claude Code. |
-| `src/settings.rs` | Loads and merges permission rules from global + project settings files. |
-| `src/logging.rs` | Appends missing rules to platform-specific log file. |
-| `src/word_util.rs` | Extracts static string literals from bash `Word` nodes; detects dynamic content. |
-| `tests/integration.rs` | Integration tests: logic tests call the library API directly; binary I/O tests invoke the compiled binary. |
+| File                   | Role                                                                                                              |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `src/lib.rs`           | Library crate root. Re-exports all modules so they are usable without spawning the binary.                        |
+| `src/main.rs`          | Thin binary wrapper: CLI routing (clap) and hook-mode I/O (stdin JSON → decision JSON).                           |
+| `src/cli.rs`           | Subcommand implementations: `install`, `uninstall`, `check`, `log`, `log-path`, `upgrade`.                        |
+| `src/checker.rs`       | Core logic. `check_program()` walks AST, checks each command against rules, returns `Decision`. ~60 unit tests.   |
+| `src/permission.rs`    | Parses rule strings (`Bash(cmd *)`, `Read(glob)`, etc.) into `ParsedPermissions`. Matching logic. ~20 unit tests. |
+| `src/file_access.rs`   | Maps well-known commands to file-access semantics (read/write args, redirects). ~25 unit tests.                   |
+| `src/hook.rs`          | `HookInput` / `HookOutput` serde structs for JSON protocol with Claude Code.                                      |
+| `src/settings.rs`      | Loads and merges permission rules from global + project settings files.                                           |
+| `src/logging.rs`       | Appends missing rules to platform-specific log file.                                                              |
+| `src/word_util.rs`     | Extracts static string literals from bash `Word` nodes; detects dynamic content.                                  |
+| `tests/integration.rs` | Integration tests: logic tests call the library API directly; binary I/O tests invoke the compiled binary.        |
 
 ## Key types
 
