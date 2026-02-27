@@ -147,6 +147,16 @@ pub fn get_parser(cmd_name: &str) -> Option<&'static dyn CommandParser> {
         "readlink" => Some(&ReadlinkParser),
         "du" => Some(&DuParser),
         "lsof" => Some(&LsofParser),
+        "base64" => Some(&Base64Parser),
+        "sha1sum" => Some(&Sha1sumParser),
+        "sha512sum" => Some(&Sha512sumParser),
+        "sha224sum" => Some(&Sha224sumParser),
+        "sha384sum" => Some(&Sha384sumParser),
+        "b2sum" => Some(&B2sumParser),
+        "cksum" => Some(&CksumParser),
+        "sum" => Some(&SumParser),
+        "md5" => Some(&Md5Parser),
+        "otool" => Some(&OtoolParser),
 
         // Simple writers
         "rm" => Some(&RmParser),
@@ -221,7 +231,7 @@ pub fn get_parser(cmd_name: &str) -> Option<&'static dyn CommandParser> {
         // Process/network/terminal/system commands with no file access
         | "yes" | "tput" | "stty" | "ping" | "nc" | "dig" | "host" | "nslookup"
         | "ps" | "pgrep" | "pkill" | "df" | "free" | "mktemp"
-        | "pbcopy" | "pbpaste" => None,
+        | "pbcopy" | "pbpaste" | "uuidgen" => None,
 
         _ => None,
     }

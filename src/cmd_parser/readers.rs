@@ -1,5 +1,5 @@
 use super::helpers::*;
-use super::{CommandFileAccesses, CommandParser};
+use super::{resolve, CommandFileAccesses, CommandParser};
 
 // ─── Simple readers ──────────────────────────────────────────────────────────
 // All positional args → reads.
@@ -692,6 +692,187 @@ impl CommandParser for DuParser {
                 .arg(val('I', "ignore"))
                 .arg(files_arg()),
             args, cwd, extract_positional_reads,
+        )
+    }
+}
+
+// ── base64 (macOS: -i/-o; GNU: positional file) ──
+
+pub(super) struct Base64Parser;
+impl CommandParser for Base64Parser {
+    fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
+        let cmd = base_cmd("base64")
+            .arg(flag('d', "decode"))
+            .arg(bool_s('D')) // macOS decode alias
+            .arg(val('b', "break"))
+            .arg(val('i', "input"))
+            .arg(val('o', "output"))
+            .arg(val('w', "wrap")) // GNU --wrap=COLS
+            .arg(flag_l("ignore-garbage"))
+            .arg(files_arg());
+        let matches = cmd.try_get_matches_from(args).map_err(|e| e.to_string())?;
+
+        let mut reads: Vec<String> = matches
+            .get_many::<String>("files")
+            .into_iter()
+            .flatten()
+            .map(|f| resolve(f, cwd))
+            .collect();
+        if let Some(vals) = matches.get_many::<String>("input") {
+            reads.extend(vals.map(|f| resolve(f, cwd)));
+        }
+        let writes: Vec<String> = matches
+            .get_many::<String>("output")
+            .into_iter()
+            .flatten()
+            .map(|f| resolve(f, cwd))
+            .collect();
+
+        Ok(CommandFileAccesses {
+            reads,
+            writes,
+            inline_script_start: None,
+        })
+    }
+}
+
+// ── sha*sum family (all identical flag sets, read-only) ──
+
+macro_rules! shasum_parser {
+    ($name:ident, $cmd:expr) => {
+        pub(super) struct $name;
+        impl CommandParser for $name {
+            fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
+                parse_with(
+                    base_cmd($cmd)
+                        .arg(flag('b', "binary"))
+                        .arg(flag('c', "check"))
+                        .arg(flag('t', "text"))
+                        .arg(flag_l("tag"))
+                        .arg(flag_l("quiet"))
+                        .arg(flag_l("status"))
+                        .arg(flag_l("strict"))
+                        .arg(flag('w', "warn"))
+                        .arg(flag_l("ignore-missing"))
+                        .arg(flag('z', "zero"))
+                        .arg(files_arg()),
+                    args,
+                    cwd,
+                    extract_positional_reads,
+                )
+            }
+        }
+    };
+}
+
+shasum_parser!(Sha1sumParser, "sha1sum");
+shasum_parser!(Sha512sumParser, "sha512sum");
+shasum_parser!(Sha224sumParser, "sha224sum");
+shasum_parser!(Sha384sumParser, "sha384sum");
+
+// ── b2sum (BLAKE2) ──
+
+pub(super) struct B2sumParser;
+impl CommandParser for B2sumParser {
+    fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
+        parse_with(
+            base_cmd("b2sum")
+                .arg(flag('c', "check"))
+                .arg(flag_l("tag"))
+                .arg(flag_l("quiet"))
+                .arg(flag_l("status"))
+                .arg(flag_l("strict"))
+                .arg(flag('w', "warn"))
+                .arg(flag_l("ignore-missing"))
+                .arg(val('l', "length"))
+                .arg(files_arg()),
+            args,
+            cwd,
+            extract_positional_reads,
+        )
+    }
+}
+
+// ── cksum / sum ──
+
+pub(super) struct CksumParser;
+impl CommandParser for CksumParser {
+    fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
+        parse_with(
+            base_cmd("cksum")
+                .arg(val_l("algorithm"))
+                .arg(flag_l("untagged"))
+                .arg(flag_l("raw"))
+                .arg(flag_l("base64"))
+                .arg(val('l', "length"))
+                .arg(files_arg()),
+            args,
+            cwd,
+            extract_positional_reads,
+        )
+    }
+}
+
+pub(super) struct SumParser;
+impl CommandParser for SumParser {
+    fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
+        parse_with(
+            base_cmd("sum")
+                .arg(bool_s('r'))
+                .arg(bool_s('s'))
+                .arg(files_arg()),
+            args,
+            cwd,
+            extract_positional_reads,
+        )
+    }
+}
+
+// ── md5 (macOS — distinct from GNU md5sum) ──
+
+pub(super) struct Md5Parser;
+impl CommandParser for Md5Parser {
+    fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
+        parse_with(
+            base_cmd("md5")
+                .arg(bool_s('r'))         // reverse output format
+                .arg(bool_s('p'))         // passthrough (echo stdin)
+                .arg(bool_s('q'))         // quiet
+                .arg(val('s', "string"))  // hash a string, NOT a file
+                .arg(files_arg()),
+            args,
+            cwd,
+            extract_positional_reads,
+        )
+    }
+}
+
+// ── otool (macOS binary inspection) ──
+
+pub(super) struct OtoolParser;
+impl CommandParser for OtoolParser {
+    fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
+        parse_with(
+            base_cmd("otool")
+                .arg(bool_s('L'))  // shared libraries
+                .arg(bool_s('l'))  // load commands
+                .arg(bool_s('h'))  // Mach header
+                .arg(bool_s('t'))  // text section
+                .arg(bool_s('d'))  // data section
+                .arg(bool_s('o'))  // Objective-C segment
+                .arg(bool_s('r'))  // relocation entries
+                .arg(bool_s('I'))  // indirect symbol table
+                .arg(bool_s('S'))  // stab symbols
+                .arg(bool_s('v'))  // verbose
+                .arg(bool_s('V'))  // very verbose
+                .arg(bool_s('X'))  // omit leading addresses
+                .arg(bool_s('f'))  // fat headers
+                .arg(val_s('p'))   // start at symbol name
+                .arg(val_l("arch"))
+                .arg(files_arg()),
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }

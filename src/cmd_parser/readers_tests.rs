@@ -350,3 +350,182 @@ fn tar_gnu_bzip2_flag() {
 }
 
 // ── sed BSD vs GNU ──
+
+// ── base64 ──
+
+#[test]
+fn base64_stdin() {
+    let r = Base64Parser.parse(&[], "/tmp").unwrap();
+    assert!(r.reads.is_empty());
+    assert!(r.writes.is_empty());
+}
+
+#[test]
+fn base64_positional_file() {
+    let r = Base64Parser.parse(&["file.bin"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/file.bin"]));
+    assert!(r.writes.is_empty());
+}
+
+#[test]
+fn base64_decode_positional() {
+    let r = Base64Parser.parse(&["-d", "encoded.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/encoded.txt"]));
+    assert!(r.writes.is_empty());
+}
+
+#[test]
+fn base64_input_flag() {
+    let r = Base64Parser.parse(&["-i", "file.bin"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/file.bin"]));
+    assert!(r.writes.is_empty());
+}
+
+#[test]
+fn base64_output_flag() {
+    let r = Base64Parser.parse(&["-o", "out.txt"], "/tmp").unwrap();
+    assert!(r.reads.is_empty());
+    assert_eq!(r.writes, writes(&["/tmp/out.txt"]));
+}
+
+#[test]
+fn base64_both_flags() {
+    let r = Base64Parser.parse(&["-i", "in.bin", "-o", "out.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/in.bin"]));
+    assert_eq!(r.writes, writes(&["/tmp/out.txt"]));
+}
+
+#[test]
+fn base64_long_flags() {
+    let r = Base64Parser.parse(&["--input", "in.bin", "--output", "out.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/in.bin"]));
+    assert_eq!(r.writes, writes(&["/tmp/out.txt"]));
+}
+
+// ── sha1sum ──
+
+#[test]
+fn sha1sum_basic() {
+    let r = Sha1sumParser.parse(&["file.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
+    assert!(r.writes.is_empty());
+}
+
+#[test]
+fn sha1sum_check() {
+    let r = Sha1sumParser.parse(&["-c", "sums.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/sums.txt"]));
+}
+
+#[test]
+fn sha1sum_multiple() {
+    let r = Sha1sumParser.parse(&["a.txt", "b.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/a.txt", "/tmp/b.txt"]));
+}
+
+// ── sha512sum ──
+
+#[test]
+fn sha512sum_basic() {
+    let r = Sha512sumParser.parse(&["file.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
+}
+
+// ── sha224sum ──
+
+#[test]
+fn sha224sum_basic() {
+    let r = Sha224sumParser.parse(&["file.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
+}
+
+// ── sha384sum ──
+
+#[test]
+fn sha384sum_basic() {
+    let r = Sha384sumParser.parse(&["file.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
+}
+
+// ── b2sum ──
+
+#[test]
+fn b2sum_basic() {
+    let r = B2sumParser.parse(&["file.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
+}
+
+#[test]
+fn b2sum_with_length() {
+    let r = B2sumParser.parse(&["--length", "256", "file.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
+}
+
+// ── cksum ──
+
+#[test]
+fn cksum_basic() {
+    let r = CksumParser.parse(&["file.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
+}
+
+#[test]
+fn cksum_multiple() {
+    let r = CksumParser.parse(&["a.txt", "b.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/a.txt", "/tmp/b.txt"]));
+}
+
+// ── sum ──
+
+#[test]
+fn sum_basic() {
+    let r = SumParser.parse(&["file.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
+}
+
+#[test]
+fn sum_with_flag() {
+    let r = SumParser.parse(&["-r", "file.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
+}
+
+// ── md5 (macOS) ──
+
+#[test]
+fn md5_basic() {
+    let r = Md5Parser.parse(&["file.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
+}
+
+#[test]
+fn md5_string_flag() {
+    // md5 -s "hello" hashes the string, not a file
+    let r = Md5Parser.parse(&["-s", "hello"], "/tmp").unwrap();
+    assert!(r.reads.is_empty());
+}
+
+#[test]
+fn md5_quiet_with_file() {
+    let r = Md5Parser.parse(&["-q", "file.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
+}
+
+// ── otool (macOS) ──
+
+#[test]
+fn otool_shared_libs() {
+    let r = OtoolParser.parse(&["-L", "/usr/bin/true"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/usr/bin/true"]));
+}
+
+#[test]
+fn otool_load_commands() {
+    let r = OtoolParser.parse(&["-l", "binary"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/binary"]));
+}
+
+#[test]
+fn otool_multiple_flags() {
+    let r = OtoolParser.parse(&["-l", "-v", "binary"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/binary"]));
+}
