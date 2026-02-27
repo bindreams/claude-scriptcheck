@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo run -- check *)",
+      "Bash(cargo run -- log)",
+      "Bash(cargo run -- log *)",
+      "Bash(cargo run -- log-path)"
+    ]
+  }
+}
