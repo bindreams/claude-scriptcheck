@@ -160,7 +160,11 @@ fn match_tokens(rule_tokens: &[String], cmd_tokens: &[String], wildcard: bool) -
 }
 
 fn token_matches(pattern: &str, actual: &str) -> bool {
-    if pattern.contains('*') {
+    if pattern == "*" {
+        // Bare `*` matches any single token, including paths with `/`.
+        // (glob_match's `*` excludes `/`, which breaks rules like `git -C * status`.)
+        true
+    } else if pattern.contains('*') {
         glob_match::glob_match(pattern, actual)
     } else {
         pattern == actual

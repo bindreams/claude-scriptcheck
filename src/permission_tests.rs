@@ -70,6 +70,25 @@ fn token_with_glob() {
 }
 
 #[test]
+fn bare_star_matches_path_with_slashes() {
+    // `git -C * status` — the bare `*` must match a path token like "/tmp/repo"
+    let rule = make_rule(&["git", "-C", "*", "status"], true);
+    assert!(bash_rule_matches(
+        &rule,
+        &tokens(&["git", "-C", "/tmp/repo", "status"])
+    ));
+    assert!(bash_rule_matches(
+        &rule,
+        &tokens(&["git", "-C", "/tmp/repo", "status", "-s"])
+    ));
+    // Must not match a different subcommand
+    assert!(!bash_rule_matches(
+        &rule,
+        &tokens(&["git", "-C", "/tmp/repo", "push"])
+    ));
+}
+
+#[test]
 fn too_short_command() {
     let rule = make_rule(&["git", "status"], false);
     assert!(!bash_rule_matches(&rule, &tokens(&["git"])));
