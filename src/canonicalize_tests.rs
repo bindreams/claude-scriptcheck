@@ -61,13 +61,14 @@ fn existing_path_no_wildcards() {
 
 #[test]
 fn dotdot_resolved() {
-    // /tmp/.. should resolve to the parent of /tmp
-    let result = best_effort_canonicalize("/tmp/..");
-    let expected = std::fs::canonicalize("/tmp/..")
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
-    assert_eq!(result, expected);
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let child = base.join("child");
+    std::fs::create_dir(&child).unwrap();
+
+    let input = format!("{}/child/..", base.display());
+    let result = best_effort_canonicalize(&input);
+    assert_eq!(result, base.to_str().unwrap());
 }
 
 #[test]

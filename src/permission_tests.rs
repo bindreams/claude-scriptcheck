@@ -159,20 +159,29 @@ fn parse_bash_rule_wildcard() {
 
 #[test]
 fn parse_read_rule() {
-    let home = "/home/test";
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::create_dir(base.join("src")).unwrap();
+    let home = base.to_str().unwrap();
+
     let parsed = parse_single_rule("Read(~/src/**)", home).unwrap();
     match parsed {
-        ParsedRule::Read(pat) => assert_eq!(pat, "/home/test/src/**"),
+        ParsedRule::Read(pat) => assert_eq!(pat, format!("{home}/src/**")),
         _ => panic!("expected Read rule"),
     }
 }
 
 #[test]
 fn parse_write_rule() {
-    let home = "/home/test";
-    let parsed = parse_single_rule("Write(/tmp/claude/**)", home).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::create_dir(base.join("claude")).unwrap();
+    let base = base.to_str().unwrap();
+
+    let rule = format!("Write({base}/claude/**)");
+    let parsed = parse_single_rule(&rule, "/unused").unwrap();
     match parsed {
-        ParsedRule::Write(pat) => assert_eq!(pat, "/tmp/claude/**"),
+        ParsedRule::Write(pat) => assert_eq!(pat, format!("{base}/claude/**")),
         _ => panic!("expected Write rule"),
     }
 }
@@ -232,27 +241,35 @@ fn parse_rules_with_ask_bash() {
 #[test]
 fn parse_rules_with_ask_read() {
     use crate::settings::Permissions;
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let base = base.to_str().unwrap();
+
     let perms = Permissions {
         allow: vec![],
         deny: vec![],
-        ask: vec!["Read(/etc/**)".into()],
+        ask: vec![format!("Read({base}/**)")],
     };
     let parsed = parse_rules(&perms);
-    assert_eq!(parsed.ask_read, vec!["/etc/**"]);
+    assert_eq!(parsed.ask_read, vec![format!("{base}/**")]);
 }
 
 #[test]
 fn parse_rules_with_ask_write_and_edit() {
     use crate::settings::Permissions;
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::create_dir(base.join("src")).unwrap();
+    let base = base.to_str().unwrap();
+
     let perms = Permissions {
         allow: vec![],
         deny: vec![],
-        ask: vec!["Write(/tmp/**)".into(), "Edit(~/src/**)".into()],
+        ask: vec![format!("Write({base}/**)"), format!("Edit({base}/src/**)")],
     };
     let parsed = parse_rules(&perms);
-    assert_eq!(parsed.ask_write, vec!["/tmp/**"]);
-    assert_eq!(parsed.ask_edit.len(), 1);
-    assert!(parsed.ask_edit[0].contains("/src/**"));
+    assert_eq!(parsed.ask_write, vec![format!("{base}/**")]);
+    assert_eq!(parsed.ask_edit, vec![format!("{base}/src/**")]);
 }
 
 // ─── Double-star (**) multi-token wildcard ────────────────────────────────────
