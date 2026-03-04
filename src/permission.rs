@@ -74,6 +74,15 @@ pub fn parse_rules(perms: &Permissions) -> ParsedPermissions {
 }
 
 pub fn parse_single_rule(rule: &str, home: &str) -> Option<ParsedRule> {
+    // Bare tool-level wildcards (no parentheses)
+    match rule {
+        "Bash" => return Some(ParsedRule::Bash(BashRule { prefix_tokens: vec![], wildcard: true })),
+        "Read" => return Some(ParsedRule::Read("/**".to_string())),
+        "Write" => return Some(ParsedRule::Write("/**".to_string())),
+        "Edit" => return Some(ParsedRule::Edit("/**".to_string())),
+        _ => {}
+    }
+
     if let Some(inner) = rule.strip_prefix("Bash(").and_then(|s| s.strip_suffix(')')) {
         let mut tokens: Vec<String> = inner.split_whitespace().map(String::from).collect();
         // Normalize Claude Code's colon-wildcard format: "cmd:*" → "cmd" "*"

@@ -415,6 +415,20 @@ fn file_only_with_bash_ask_still_asks() {
     assert!(matches!(d, Decision::Ask(_)));
 }
 
+// ── Bare rules (tool-level wildcards) ──
+
+#[skuld::test]
+fn bare_read_allows_file_access() {
+    let d = check("cat /tmp/file.txt", &["Bash(cat *)", "Read"], &[]);
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn bare_write_allows_file_access() {
+    let d = check("echo hi > /tmp/out.txt", &["Bash(echo *)", "Write"], &[]);
+    assert_eq!(d, Decision::Allow);
+}
+
 // ── Script-runner inline-script sanitization ──
 
 #[skuld::test]

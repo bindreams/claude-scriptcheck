@@ -198,6 +198,60 @@ fn parse_irrelevant_rule_skipped() {
     assert!(parse_single_rule("mcp__Glean__*", home).is_none());
 }
 
+// ─── Bare rules (tool-level wildcards) ────────────────────────────────────────
+
+#[skuld::test]
+fn bare_bash_matches_any_command() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Bash", home).unwrap();
+    match parsed {
+        ParsedRule::Bash(rule) => {
+            assert!(rule.prefix_tokens.is_empty());
+            assert!(rule.wildcard);
+            assert!(bash_rule_matches(&rule, &tokens(&["ls"])));
+            assert!(bash_rule_matches(&rule, &tokens(&["git", "push"])));
+        }
+        _ => panic!("expected Bash rule"),
+    }
+}
+
+#[skuld::test]
+fn bare_read_matches_any_path() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Read", home).unwrap();
+    match parsed {
+        ParsedRule::Read(pat) => {
+            assert!(file_rule_matches(&pat, "/any/path/at/all"));
+            assert!(file_rule_matches(&pat, "/tmp/file.txt"));
+        }
+        _ => panic!("expected Read rule"),
+    }
+}
+
+#[skuld::test]
+fn bare_write_matches_any_path() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Write", home).unwrap();
+    match parsed {
+        ParsedRule::Write(pat) => {
+            assert!(file_rule_matches(&pat, "/any/path"));
+        }
+        _ => panic!("expected Write rule"),
+    }
+}
+
+#[skuld::test]
+fn bare_edit_matches_any_path() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Edit", home).unwrap();
+    match parsed {
+        ParsedRule::Edit(pat) => {
+            assert!(file_rule_matches(&pat, "/any/path"));
+        }
+        _ => panic!("expected Edit rule"),
+    }
+}
+
 // ─── BashRule::to_rule_string ─────────────────────────────────────────────────
 
 #[skuld::test]
