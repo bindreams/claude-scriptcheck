@@ -98,7 +98,9 @@ pub fn check(command: &str, cwd: &str) {
         cwd.to_string()
     };
 
-    let permissions = settings::load_settings(&resolved_cwd);
+    let project_root = std::env::var("CLAUDE_PROJECT_DIR")
+        .unwrap_or_else(|_| resolved_cwd.clone());
+    let permissions = settings::load_settings(&resolved_cwd, &project_root);
     let parsed_perms = permission::parse_rules(&permissions);
 
     let program = match thaum::parse_with(command, thaum::Dialect::Bash) {

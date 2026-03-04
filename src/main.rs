@@ -90,7 +90,9 @@ fn run_hook() {
     };
 
     // Load and merge settings
-    let permissions = settings::load_settings(&hook_input.cwd);
+    let project_root = std::env::var("CLAUDE_PROJECT_DIR")
+        .unwrap_or_else(|_| hook_input.cwd.clone());
+    let permissions = settings::load_settings(&hook_input.cwd, &project_root);
     let parsed_perms = permission::parse_rules(&permissions);
 
     // Parse the bash command with thaum

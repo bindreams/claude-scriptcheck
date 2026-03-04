@@ -30,7 +30,12 @@ pub struct Permissions {
     pub ask: Vec<String>,
 }
 
-pub fn load_settings(cwd: &str) -> Permissions {
+/// Load and merge permission rules from all settings files.
+///
+/// `cwd` is the current working directory (used for bare/`./` relative paths).
+/// `project_root` is the project root directory, typically `$CLAUDE_PROJECT_DIR`
+/// (used for `/path` project-root-relative patterns and locating settings files).
+pub fn load_settings(cwd: &str, project_root: &str) -> Permissions {
     // 1. Managed settings (highest authority)
     let (mut merged, managed_only) = load_managed();
 
@@ -38,20 +43,19 @@ pub fn load_settings(cwd: &str) -> Permissions {
         return merged;
     }
 
-    // 2. Global settings — resolve relative file rules against ~
+    // 2. Global settings
     if let Some(home) = dirs::home_dir() {
-        let home_str = home.to_string_lossy().to_string();
         let global = home.join(".claude/settings.json");
-        merge_from_with_base(&global, &home_str, &mut merged);
+        merge_from_with_base(&global, cwd, project_root, &mut merged);
     }
 
-    // 3. Project-level settings — resolve relative file rules against cwd
-    let project = Path::new(cwd).join(".claude/settings.json");
-    merge_from_with_base(&project, cwd, &mut merged);
+    // 3. Project-level settings (located at project root)
+    let project = Path::new(project_root).join(".claude/settings.json");
+    merge_from_with_base(&project, cwd, project_root, &mut merged);
 
-    // 4. Project-level local settings — resolve relative file rules against cwd
-    let local = Path::new(cwd).join(".claude/settings.local.json");
-    merge_from_with_base(&local, cwd, &mut merged);
+    // 4. Project-level local settings (located at project root)
+    let local = Path::new(project_root).join(".claude/settings.local.json");
+    merge_from_with_base(&local, cwd, project_root, &mut merged);
 
     merged
 }
@@ -116,7 +120,7 @@ fn managed_settings_path() -> &'static str {
     }
 }
 
-fn merge_from_with_base(path: &Path, base: &str, merged: &mut Permissions) {
+fn merge_from_with_base(path: &Path, cwd: &str, project_root: &str, merged: &mut Permissions) {
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
     };
@@ -124,9 +128,9 @@ fn merge_from_with_base(path: &Path, base: &str, merged: &mut Permissions) {
         return;
     };
     if let Some(mut perms) = settings.permissions {
-        resolve_rule_relative_paths(&mut perms.allow, base);
-        resolve_rule_relative_paths(&mut perms.deny, base);
-        resolve_rule_relative_paths(&mut perms.ask, base);
+        resolve_rule_relative_paths(&mut perms.allow, cwd, project_root);
+        resolve_rule_relative_paths(&mut perms.deny, cwd, project_root);
+        resolve_rule_relative_paths(&mut perms.ask, cwd, project_root);
         merge_permissions(merged, perms);
     }
 }
@@ -137,24 +141,38 @@ fn merge_permissions(merged: &mut Permissions, perms: PermissionsJson) {
     merged.ask.extend(perms.ask);
 }
 
-/// Resolve relative paths in file rules (Read/Write/Edit) against a base directory.
+/// Resolve paths in file rules (Read/Write/Edit) following Claude Code's 4-tier scheme:
 ///
-/// A relative path is one that doesn't start with `/` or `~`.
+/// - `//path` → absolute filesystem path (strip one `/`)
+/// - `~/path` → home-relative (left as-is, expanded later in `parse_single_rule`)
+/// - `/path`  → project-root-relative (prepend `project_root`)
+/// - `path` or `./path` → CWD-relative (prepend `cwd`)
+///
 /// Only Read(...), Write(...), and Edit(...) rules are affected.
-pub(crate) fn resolve_rule_relative_paths(rules: &mut [String], base: &str) {
+pub(crate) fn resolve_rule_relative_paths(rules: &mut [String], cwd: &str, project_root: &str) {
     for rule in rules.iter_mut() {
-        *rule = resolve_one_rule(rule, base);
+        *rule = resolve_one_rule(rule, cwd, project_root);
     }
 }
 
-fn resolve_one_rule(rule: &str, base: &str) -> String {
+fn resolve_one_rule(rule: &str, cwd: &str, project_root: &str) -> String {
     for prefix in ["Read(", "Write(", "Edit("] {
         if let Some(inner) = rule.strip_prefix(prefix).and_then(|s| s.strip_suffix(')')) {
-            if !inner.starts_with('/') && !inner.starts_with('~') {
-                let suffix = &prefix[..prefix.len() - 1]; // "Read", "Write", or "Edit"
-                return format!("{suffix}({base}/{inner})");
+            let kind = &prefix[..prefix.len() - 1]; // "Read", "Write", or "Edit"
+            if let Some(abs) = inner.strip_prefix("//") {
+                // //path → absolute filesystem path
+                return format!("{kind}(/{abs})");
             }
-            return rule.to_string();
+            if inner.starts_with('~') {
+                // ~/path → home-relative, expanded later in parse_single_rule
+                return rule.to_string();
+            }
+            if inner.starts_with('/') {
+                // /path → project-root-relative (inner already has leading /)
+                return format!("{kind}({project_root}{inner})");
+            }
+            // bare path or ./path → CWD-relative
+            return format!("{kind}({cwd}/{inner})");
         }
     }
     rule.to_string()
