@@ -201,7 +201,7 @@ const DEFAULT_GIT_URL: &str = "https://github.com/bindreams/claude-scriptcheck.g
 
 /// Installation source detected from cargo metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum InstallSource {
+pub enum InstallSource {
     Git(String),
     Registry,
     Path(String),
@@ -252,7 +252,7 @@ fn detect_install_source() -> Option<InstallSource> {
     parse_install_source(&json, CRATE_NAME)
 }
 
-pub(crate) fn parse_install_source(
+pub fn parse_install_source(
     crates_json: &serde_json::Value,
     crate_name: &str,
 ) -> Option<InstallSource> {

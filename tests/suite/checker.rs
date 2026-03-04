@@ -1,8 +1,7 @@
-use crate::checker::{check_program, Decision};
-use crate::permission::{self, ParsedPermissions};
-use crate::settings::Permissions;
+use claude_scriptcheck::checker::{check_program, Decision};
+use claude_scriptcheck::permission::{self, ParsedPermissions};
+use claude_scriptcheck::settings::Permissions;
 use pretty_assertions::assert_eq;
-
 
 fn make_perms_full(allow: &[&str], deny: &[&str], ask: &[&str]) -> ParsedPermissions {
     permission::parse_rules(&Permissions {
@@ -28,36 +27,35 @@ fn check_with_ask(cmd: &str, allow: &[&str], deny: &[&str], ask: &[&str]) -> Dec
     check_program(&program, &perms, "/tmp").decision
 }
 
-#[test]
+#[skuld::test]
 fn simple_allowed_command() {
     let d = check("ls -la", &["Bash(ls *)", "Bash(ls)"], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn simple_unmatched_command() {
     let d = check("rm -rf /", &["Bash(ls *)"], &[]);
     assert!(matches!(d, Decision::Ask(_)));
 }
 
-#[test]
+#[skuld::test]
 fn denied_command() {
     let d = check("rm -rf /", &[], &["Bash(rm *)"]);
     assert!(matches!(d, Decision::Deny(_)));
 }
 
-#[test]
+#[skuld::test]
 fn pipeline_both_allowed() {
     let d = check(
         "cat file.txt | grep foo",
         &["Bash(cat *)", "Bash(grep *)"],
         &[],
     );
-    // cat reads file.txt -> needs Read rule too
     assert!(matches!(d, Decision::Ask(_)));
 }
 
-#[test]
+#[skuld::test]
 fn pipeline_both_allowed_with_read_rule() {
     let d = check(
         "cat file.txt | grep foo",
@@ -67,7 +65,7 @@ fn pipeline_both_allowed_with_read_rule() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn redirect_write_allowed() {
     let d = check(
         "echo hello > /tmp/claude/out.txt",
@@ -77,7 +75,7 @@ fn redirect_write_allowed() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn redirect_write_no_rule() {
     let d = check("echo hello > /etc/passwd", &["Bash(echo *)"], &[]);
     assert!(matches!(d, Decision::Ask(_)));
@@ -86,19 +84,19 @@ fn redirect_write_no_rule() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn eval_always_asks() {
     let d = check("eval echo hello", &["Bash(eval *)", "Bash(echo *)"], &[]);
     assert!(matches!(d, Decision::Ask(_)));
 }
 
-#[test]
+#[skuld::test]
 fn empty_command_allows() {
     let d = check("FOO=bar", &[], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn and_chain() {
     let d = check(
         "echo a && echo b",
@@ -108,19 +106,19 @@ fn and_chain() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn and_chain_partial_deny() {
     let d = check("echo a && rm foo", &["Bash(echo *)"], &["Bash(rm *)"]);
     assert!(matches!(d, Decision::Deny(_)));
 }
 
-#[test]
+#[skuld::test]
 fn redirect_to_dev_null_ignored() {
     let d = check("echo hello 2>/dev/null", &["Bash(echo *)"], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn compound_if() {
     let d = check(
         "if true; then echo ok; fi",
@@ -130,7 +128,7 @@ fn compound_if() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn compound_for() {
     let d = check(
         "for f in a b; do echo $f; done",
@@ -140,7 +138,7 @@ fn compound_for() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn source_reads_file() {
     let d = check("source /tmp/script.sh", &["Bash(source *)"], &[]);
     assert!(matches!(d, Decision::Ask(_)));
@@ -149,7 +147,7 @@ fn source_reads_file() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn source_reads_file_with_read_rule() {
     let d = check(
         "source /tmp/script.sh",
@@ -159,7 +157,7 @@ fn source_reads_file_with_read_rule() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn append_redirect() {
     let d = check(
         "echo hello >> /tmp/claude/log.txt",
@@ -169,7 +167,7 @@ fn append_redirect() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn input_redirect() {
     let d = check(
         "wc -l < /tmp/data.txt",
@@ -179,7 +177,7 @@ fn input_redirect() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn heredoc_no_file_access() {
     let d = check(
         "cat <<EOF\nhello\nEOF\n",
@@ -189,7 +187,7 @@ fn heredoc_no_file_access() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn cp_read_and_write() {
     let d = check(
         "cp /tmp/a.txt /tmp/b.txt",
@@ -199,7 +197,7 @@ fn cp_read_and_write() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn cp_missing_write_rule() {
     let d = check(
         "cp /tmp/a.txt /home/user/b.txt",
@@ -212,7 +210,7 @@ fn cp_missing_write_rule() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn deny_takes_precedence_for_file() {
     let d = check(
         "cat /etc/shadow",
@@ -222,7 +220,7 @@ fn deny_takes_precedence_for_file() {
     assert!(matches!(d, Decision::Deny(_)));
 }
 
-#[test]
+#[skuld::test]
 fn or_chain() {
     let d = check(
         "true || echo fallback",
@@ -232,31 +230,31 @@ fn or_chain() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn negation() {
     let d = check("! true", &["Bash(true)"], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn dynamic_command_name() {
     let d = check("$CMD arg", &[], &[]);
     assert!(matches!(d, Decision::Ask(_)));
 }
 
-#[test]
+#[skuld::test]
 fn awk_pattern_not_treated_as_file() {
     let d = check("awk '/pattern/{ print }'", &["Bash(awk *)"], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn awk_double_quoted_pattern_not_treated_as_file() {
     let d = check(r#"awk "/pattern/{ print }""#, &["Bash(awk *)"], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn awk_with_file_reads_file_not_pattern() {
     let d = check(
         "awk '/p/' /tmp/data.txt",
@@ -266,19 +264,19 @@ fn awk_with_file_reads_file_not_pattern() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn grep_pattern_not_treated_as_file() {
     let d = check("grep 'pattern'", &["Bash(grep *)"], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn tr_no_file_access() {
     let d = check("tr 'a-z' 'A-Z'", &["Bash(tr *)"], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn sed_script_not_treated_as_file() {
     let d = check(
         "sed 's/foo/bar/' /tmp/f.txt",
@@ -288,15 +286,15 @@ fn sed_script_not_treated_as_file() {
     assert_eq!(d, Decision::Allow);
 }
 
-// ---- File-only command tests ----
+// ── File-only command tests ─────────────────────────────────────────────────
 
-#[test]
+#[skuld::test]
 fn mkdir_allowed_by_write_rule() {
     let d = check("mkdir /tmp/claude/foo", &["Write(/tmp/claude/**)"], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn mkdir_p_allowed_by_write_rule() {
     let d = check(
         "mkdir -p /tmp/claude/foo/bar",
@@ -306,7 +304,7 @@ fn mkdir_p_allowed_by_write_rule() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn mkdir_missing_write_rule_asks_for_write_not_bash() {
     let d = check("mkdir /home/user/foo", &[], &[]);
     if let Decision::Ask(ref rules) = d {
@@ -317,43 +315,43 @@ fn mkdir_missing_write_rule_asks_for_write_not_bash() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn mkdir_dynamic_arg_needs_bash_rule() {
     let d = check("mkdir $VAR", &["Write(/tmp/**)"], &[]);
     assert!(matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))));
 }
 
-#[test]
+#[skuld::test]
 fn mkdir_no_args_needs_bash_rule() {
     let d = check("mkdir", &["Write(/tmp/**)"], &[]);
     assert!(matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))));
 }
 
-#[test]
+#[skuld::test]
 fn touch_allowed_by_write_rule() {
     let d = check("touch /tmp/claude/foo", &["Write(/tmp/claude/**)"], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn cat_allowed_by_read_rule() {
     let d = check("cat /tmp/file.txt", &["Read(/tmp/**)"], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn rm_allowed_by_write_rule() {
     let d = check("rm /tmp/claude/foo.txt", &["Write(/tmp/claude/**)"], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn source_still_needs_bash_rule() {
     let d = check("source /tmp/script.sh", &["Read(/tmp/**)"], &[]);
     assert!(matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))));
 }
 
-#[test]
+#[skuld::test]
 fn cp_allowed_by_file_rules() {
     let d = check(
         "cp /tmp/a.txt /tmp/b.txt",
@@ -363,7 +361,7 @@ fn cp_allowed_by_file_rules() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn cp_missing_write_asks_for_write_not_bash() {
     let d = check("cp /tmp/a.txt /home/user/b.txt", &["Read(/tmp/**)"], &[]);
     if let Decision::Ask(ref rules) = d {
@@ -374,19 +372,19 @@ fn cp_missing_write_asks_for_write_not_bash() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn grep_with_file_allowed_by_read_rule() {
     let d = check("grep pattern /tmp/data.txt", &["Read(/tmp/**)"], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn grep_stdin_only_needs_bash_rule() {
     let d = check("grep pattern", &["Read(/tmp/**)"], &[]);
     assert!(matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))));
 }
 
-#[test]
+#[skuld::test]
 fn file_only_with_bash_deny_still_denied() {
     let d = check(
         "mkdir /tmp/claude/foo",
@@ -396,7 +394,7 @@ fn file_only_with_bash_deny_still_denied() {
     assert!(matches!(d, Decision::Deny(_)));
 }
 
-#[test]
+#[skuld::test]
 fn file_only_with_explicit_bash_rule_still_works() {
     let d = check(
         "mkdir /tmp/claude/foo",
@@ -406,7 +404,7 @@ fn file_only_with_explicit_bash_rule_still_works() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn file_only_with_bash_ask_still_asks() {
     let d = check_with_ask(
         "mkdir /tmp/claude/foo",
@@ -419,7 +417,7 @@ fn file_only_with_bash_ask_still_asks() {
 
 // ── Script-runner inline-script sanitization ──
 
-#[test]
+#[skuld::test]
 fn bash_c_logs_wildcard_rule() {
     let d = check("bash -c 'echo hello'", &[], &[]);
     if let Decision::Ask(ref rules) = d {
@@ -432,7 +430,7 @@ fn bash_c_logs_wildcard_rule() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn bash_xc_logs_wildcard_rule() {
     let d = check("bash -xc 'echo hello'", &[], &[]);
     if let Decision::Ask(ref rules) = d {
@@ -445,7 +443,7 @@ fn bash_xc_logs_wildcard_rule() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn python_c_logs_wildcard_rule() {
     let d = check("python3 -c 'print(1)'", &[], &[]);
     if let Decision::Ask(ref rules) = d {
@@ -458,7 +456,7 @@ fn python_c_logs_wildcard_rule() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn python_script_file_logs_normal_rule() {
     let d = check("python3 script.py", &[], &[]);
     if let Decision::Ask(ref rules) = d {
@@ -471,13 +469,13 @@ fn python_script_file_logs_normal_rule() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn bash_c_allowed_by_wildcard() {
     let d = check("bash -c 'echo hello'", &["Bash(bash *)"], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn ruby_e_logs_wildcard_rule() {
     let d = check("ruby -e 'puts 1'", &[], &[]);
     if let Decision::Ask(ref rules) = d {
@@ -490,7 +488,7 @@ fn ruby_e_logs_wildcard_rule() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn node_e_logs_wildcard_rule() {
     let d = check("node -e 'console.log(1)'", &[], &[]);
     if let Decision::Ask(ref rules) = d {
@@ -503,7 +501,7 @@ fn node_e_logs_wildcard_rule() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn perl_e_logs_wildcard_rule() {
     let d = check("perl -e 'print 1'", &[], &[]);
     if let Decision::Ask(ref rules) = d {
@@ -516,7 +514,7 @@ fn perl_e_logs_wildcard_rule() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn sh_c_logs_wildcard_rule() {
     let d = check("sh -c 'ls -la'", &[], &[]);
     if let Decision::Ask(ref rules) = d {
@@ -529,10 +527,9 @@ fn sh_c_logs_wildcard_rule() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn bash_script_file_reads() {
     let d = check("bash script.sh", &["Bash(bash *)"], &[]);
-    // bash script.sh → Read(script.sh) needed
     if let Decision::Ask(ref rules) = d {
         assert!(
             rules.iter().any(|r| r.starts_with("Read(")),
@@ -543,7 +540,7 @@ fn bash_script_file_reads() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn bash_script_file_with_read_rule() {
     let d = check("bash script.sh", &["Bash(bash *)", "Read(/tmp/**)"], &[]);
     assert_eq!(d, Decision::Allow);
@@ -551,20 +548,19 @@ fn bash_script_file_with_read_rule() {
 
 // ── Ask rule semantics ──────────────────────────────────────────────────────
 
-#[test]
+#[skuld::test]
 fn ask_rule_overrides_allow_bash() {
-    // ls -la has no file accesses, so only the Bash rule matters
     let d = check_with_ask("ls -la", &["Bash(ls *)"], &[], &["Bash(ls *)"]);
     assert!(matches!(d, Decision::Ask(_)));
 }
 
-#[test]
+#[skuld::test]
 fn ask_rule_does_not_override_deny() {
     let d = check_with_ask("rm -rf /tmp/foo", &[], &["Bash(rm *)"], &["Bash(rm *)"]);
     assert!(matches!(d, Decision::Deny(_)));
 }
 
-#[test]
+#[skuld::test]
 fn ask_rule_overrides_allow_file_read() {
     let d = check_with_ask(
         "cat /tmp/secret.txt",
@@ -575,7 +571,7 @@ fn ask_rule_overrides_allow_file_read() {
     assert!(matches!(d, Decision::Ask(_)));
 }
 
-#[test]
+#[skuld::test]
 fn ask_rule_overrides_allow_file_write() {
     let d = check_with_ask(
         "echo hello > /tmp/out.txt",
@@ -586,13 +582,13 @@ fn ask_rule_overrides_allow_file_write() {
     assert!(matches!(d, Decision::Ask(_)));
 }
 
-#[test]
+#[skuld::test]
 fn ask_rule_no_match_allows_through() {
     let d = check_with_ask("ls -la", &["Bash(ls *)"], &[], &["Bash(rm *)"]);
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn empty_ask_rules_unchanged_behavior() {
     let d = check_with_ask("ls -la", &["Bash(ls *)"], &[], &[]);
     assert_eq!(d, Decision::Allow);
@@ -602,14 +598,11 @@ fn empty_ask_rules_unchanged_behavior() {
 
 /// Helper: returns the canonical form of a path (best-effort).
 fn c(path: &str) -> String {
-    crate::canonicalize::best_effort_canonicalize(path)
+    claude_scriptcheck::canonicalize::best_effort_canonicalize(path)
 }
 
-#[test]
+#[skuld::test]
 fn dotdot_query_path_matches_clean_rule() {
-    // Command uses ../file.txt → resolves to /tmp/../file.txt → canonicalized to /file.txt
-    // (because cwd is /tmp, so /tmp/../file.txt normalizes to /file.txt)
-    // Rule covers Read(/**)
     let d = check(
         "cat ../file.txt",
         &["Read(/**)", "Bash(cat *)"],
@@ -618,10 +611,8 @@ fn dotdot_query_path_matches_clean_rule() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn rule_with_dotdot_matches_normalized_query() {
-    // Rule uses .. in its pattern — canonicalization normalizes it
-    // Read(/tmp/nonexistent/../**) → normalizes to Read(/tmp/**)
     let d = check(
         "cat /tmp/file.txt",
         &[&format!("Read({}/nonexistent/../**)", c("/tmp")), "Bash(cat *)"],
@@ -630,9 +621,8 @@ fn rule_with_dotdot_matches_normalized_query() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn dot_in_query_path_resolved() {
-    // cat ./file.txt with cwd=/tmp → /tmp/./file.txt → /tmp/file.txt
     let d = check(
         "cat ./file.txt",
         &[&format!("Read({}/**)", c("/tmp")), "Bash(cat *)"],
@@ -641,9 +631,8 @@ fn dot_in_query_path_resolved() {
     assert_eq!(d, Decision::Allow);
 }
 
-#[test]
+#[skuld::test]
 fn relative_path_in_query_canonicalized() {
-    // mkdir subdir/foo with cwd=/tmp → /tmp/subdir/foo
     let d = check(
         "mkdir subdir/foo",
         &[&format!("Write({}/**)", c("/tmp"))],

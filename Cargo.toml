@@ -12,10 +12,14 @@ path-clean = "1"
 dirs = "6"
 clap = { version = "4", features = ["derive", "string"] }
 serde_yml = "0.0.12"
+skuld = { git = "https://github.com/bindreams/skuld.git" }
+pretty_assertions = "1"
 
 [dev-dependencies]
-pretty_assertions = "1"
-tempfile = "3"
+
+[[test]]
+name = "suite"
+harness = false
 
 [profile.release]
 opt-level = 2

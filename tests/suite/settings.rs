@@ -1,6 +1,6 @@
-use crate::settings::*;
+use claude_scriptcheck::settings::*;
 
-#[test]
+#[skuld::test]
 fn parse_settings_json() {
     let json = r#"{"permissions": {"allow": ["Bash(ls)", "Read(~/src/**)"], "deny": ["Bash(rm *)"]}}"#;
     let settings: Settings = serde_json::from_str(json).unwrap();
@@ -9,14 +9,14 @@ fn parse_settings_json() {
     assert_eq!(perms.deny, vec!["Bash(rm *)"]);
 }
 
-#[test]
+#[skuld::test]
 fn parse_settings_no_permissions() {
     let json = r#"{"model": "opus"}"#;
     let settings: Settings = serde_json::from_str(json).unwrap();
     assert!(settings.permissions.is_none());
 }
 
-#[test]
+#[skuld::test]
 fn parse_settings_empty_lists() {
     let json = r#"{"permissions": {"allow": [], "deny": []}}"#;
     let settings: Settings = serde_json::from_str(json).unwrap();
@@ -27,7 +27,7 @@ fn parse_settings_empty_lists() {
 
 // ─── ask rules ──────────────────────────────────────────────────────────────
 
-#[test]
+#[skuld::test]
 fn parse_settings_with_ask() {
     let json = r#"{"permissions": {"allow": ["Bash(ls)"], "deny": [], "ask": ["Bash(rm *)"]}}"#;
     let settings: Settings = serde_json::from_str(json).unwrap();
@@ -35,7 +35,7 @@ fn parse_settings_with_ask() {
     assert_eq!(perms.ask, vec!["Bash(rm *)"]);
 }
 
-#[test]
+#[skuld::test]
 fn parse_settings_ask_defaults_empty() {
     let json = r#"{"permissions": {"allow": ["Bash(ls)"], "deny": []}}"#;
     let settings: Settings = serde_json::from_str(json).unwrap();
@@ -45,7 +45,7 @@ fn parse_settings_ask_defaults_empty() {
 
 // ─── managed settings ───────────────────────────────────────────────────────
 
-#[test]
+#[skuld::test]
 fn parse_managed_settings() {
     let json = r#"{
         "permissions": {"allow": ["Bash(npm *)"], "deny": ["Bash(curl *)"], "ask": ["Bash(rm *)"]},
@@ -59,14 +59,14 @@ fn parse_managed_settings() {
     assert_eq!(perms.ask, vec!["Bash(rm *)"]);
 }
 
-#[test]
+#[skuld::test]
 fn parse_managed_settings_flag_defaults_false() {
     let json = r#"{"permissions": {"allow": [], "deny": []}}"#;
     let ms: ManagedSettings = serde_json::from_str(json).unwrap();
     assert!(!ms.allow_managed_permission_rules_only);
 }
 
-#[test]
+#[skuld::test]
 fn parse_managed_settings_no_permissions() {
     let json = r#"{"allowManagedPermissionRulesOnly": true}"#;
     let ms: ManagedSettings = serde_json::from_str(json).unwrap();
@@ -76,7 +76,7 @@ fn parse_managed_settings_no_permissions() {
 
 // ─── load_settings_from_contents ────────────────────────────────────────────
 
-#[test]
+#[skuld::test]
 fn merge_ask_from_multiple_files() {
     let perms = load_settings_from_contents(
         None,
@@ -88,7 +88,7 @@ fn merge_ask_from_multiple_files() {
     assert_eq!(perms.ask, vec!["Bash(rm *)", "Bash(curl *)"]);
 }
 
-#[test]
+#[skuld::test]
 fn managed_only_discards_user_rules() {
     let perms = load_settings_from_contents(
         Some(r#"{"permissions": {"allow": ["Bash(npm *)"], "deny": ["Bash(curl *)"], "ask": []}, "allowManagedPermissionRulesOnly": true}"#),
@@ -102,7 +102,7 @@ fn managed_only_discards_user_rules() {
     assert!(perms.ask.is_empty());
 }
 
-#[test]
+#[skuld::test]
 fn managed_merged_when_flag_false() {
     let perms = load_settings_from_contents(
         Some(r#"{"permissions": {"allow": ["Bash(npm *)"], "deny": [], "ask": []}}"#),
@@ -113,7 +113,7 @@ fn managed_merged_when_flag_false() {
     assert_eq!(perms.allow, vec!["Bash(npm *)", "Bash(ls *)"]);
 }
 
-#[test]
+#[skuld::test]
 fn managed_none_still_loads_user_rules() {
     let perms = load_settings_from_contents(
         None,
@@ -126,70 +126,70 @@ fn managed_none_still_loads_user_rules() {
 
 // ─── resolve_rule_relative_paths (cwd == project_root) ──────────────────────
 
-#[test]
+#[skuld::test]
 fn relative_read_resolved_against_cwd() {
     let mut rules = vec!["Read(src/**)".to_string()];
     resolve_rule_relative_paths(&mut rules, "/home/user/project", "/home/user/project");
     assert_eq!(rules, vec!["Read(/home/user/project/src/**)"]);
 }
 
-#[test]
+#[skuld::test]
 fn relative_write_resolved_against_cwd() {
     let mut rules = vec!["Write(out/file.txt)".to_string()];
     resolve_rule_relative_paths(&mut rules, "/home/user/project", "/home/user/project");
     assert_eq!(rules, vec!["Write(/home/user/project/out/file.txt)"]);
 }
 
-#[test]
+#[skuld::test]
 fn relative_edit_resolved_against_cwd() {
     let mut rules = vec!["Edit(src/**)".to_string()];
     resolve_rule_relative_paths(&mut rules, "/home/user/project", "/home/user/project");
     assert_eq!(rules, vec!["Edit(/home/user/project/src/**)"]);
 }
 
-#[test]
+#[skuld::test]
 fn single_slash_resolved_against_project_root() {
     let mut rules = vec!["Read(/etc/**)".to_string()];
     resolve_rule_relative_paths(&mut rules, "/home/user/project", "/home/user/project");
     assert_eq!(rules, vec!["Read(/home/user/project/etc/**)"]);
 }
 
-#[test]
+#[skuld::test]
 fn tilde_rule_not_modified() {
     let mut rules = vec!["Read(~/src/**)".to_string()];
     resolve_rule_relative_paths(&mut rules, "/home/user/project", "/home/user/project");
     assert_eq!(rules, vec!["Read(~/src/**)"]);
 }
 
-#[test]
+#[skuld::test]
 fn bash_rule_not_modified() {
     let mut rules = vec!["Bash(ls *)".to_string()];
     resolve_rule_relative_paths(&mut rules, "/home/user/project", "/home/user/project");
     assert_eq!(rules, vec!["Bash(ls *)"]);
 }
 
-#[test]
+#[skuld::test]
 fn non_file_rule_not_modified() {
     let mut rules = vec!["WebSearch".to_string()];
     resolve_rule_relative_paths(&mut rules, "/home/user/project", "/home/user/project");
     assert_eq!(rules, vec!["WebSearch"]);
 }
 
-#[test]
+#[skuld::test]
 fn dot_relative_path_resolved() {
     let mut rules = vec!["Read(./src/**)".to_string()];
     resolve_rule_relative_paths(&mut rules, "/home/user/project", "/home/user/project");
     assert_eq!(rules, vec!["Read(/home/user/project/./src/**)"]);
 }
 
-#[test]
+#[skuld::test]
 fn dotdot_relative_path_resolved() {
     let mut rules = vec!["Read(../other/**)".to_string()];
     resolve_rule_relative_paths(&mut rules, "/home/user/project", "/home/user/project");
     assert_eq!(rules, vec!["Read(/home/user/project/../other/**)"]);
 }
 
-#[test]
+#[skuld::test]
 fn mixed_rules_resolved() {
     let mut rules = vec![
         "Bash(git *)".to_string(),
@@ -210,21 +210,21 @@ fn mixed_rules_resolved() {
 
 // ─── double-slash (absolute filesystem) paths ────────────────────────────────
 
-#[test]
+#[skuld::test]
 fn double_slash_absolute_path() {
     let mut rules = vec!["Read(//etc/**)".to_string()];
     resolve_rule_relative_paths(&mut rules, "/home/user/project", "/home/user/project");
     assert_eq!(rules, vec!["Read(/etc/**)"]);
 }
 
-#[test]
+#[skuld::test]
 fn double_slash_root() {
     let mut rules = vec!["Read(//)".to_string()];
     resolve_rule_relative_paths(&mut rules, "/project", "/project");
     assert_eq!(rules, vec!["Read(/)"]);
 }
 
-#[test]
+#[skuld::test]
 fn double_slash_with_nested_path() {
     let mut rules = vec!["Write(//var/log/**)".to_string()];
     resolve_rule_relative_paths(&mut rules, "/project", "/project");
@@ -233,21 +233,21 @@ fn double_slash_with_nested_path() {
 
 // ─── single-slash (project-root-relative) paths ─────────────────────────────
 
-#[test]
+#[skuld::test]
 fn single_slash_read_project_root_relative() {
     let mut rules = vec!["Read(/src/**)".to_string()];
     resolve_rule_relative_paths(&mut rules, "/home/user/project", "/home/user/project");
     assert_eq!(rules, vec!["Read(/home/user/project/src/**)"]);
 }
 
-#[test]
+#[skuld::test]
 fn single_slash_write_project_root_relative() {
     let mut rules = vec!["Write(/out/**)".to_string()];
     resolve_rule_relative_paths(&mut rules, "/project", "/project");
     assert_eq!(rules, vec!["Write(/project/out/**)"]);
 }
 
-#[test]
+#[skuld::test]
 fn single_slash_edit_project_root_relative() {
     let mut rules = vec!["Edit(/config/**)".to_string()];
     resolve_rule_relative_paths(&mut rules, "/project", "/project");
@@ -256,7 +256,7 @@ fn single_slash_edit_project_root_relative() {
 
 // ─── cwd != project_root ────────────────────────────────────────────────────
 
-#[test]
+#[skuld::test]
 fn cwd_differs_from_project_root() {
     let mut rules = vec![
         "Read(src/**)".to_string(),     // bare → cwd-relative
@@ -279,7 +279,7 @@ fn cwd_differs_from_project_root() {
 
 // ─── all four tiers in one test ──────────────────────────────────────────────
 
-#[test]
+#[skuld::test]
 fn mixed_rules_all_four_tiers() {
     let mut rules = vec![
         "Read(//etc/passwd)".to_string(),   // absolute

@@ -26,7 +26,7 @@ pub struct ParsedPermissions {
     pub ask_edit: Vec<String>,
 }
 
-pub(crate) enum ParsedRule {
+pub enum ParsedRule {
     Bash(BashRule),
     Read(String),
     Write(String),
@@ -73,7 +73,7 @@ pub fn parse_rules(perms: &Permissions) -> ParsedPermissions {
     parsed
 }
 
-pub(crate) fn parse_single_rule(rule: &str, home: &str) -> Option<ParsedRule> {
+pub fn parse_single_rule(rule: &str, home: &str) -> Option<ParsedRule> {
     if let Some(inner) = rule.strip_prefix("Bash(").and_then(|s| s.strip_suffix(')')) {
         let mut tokens: Vec<String> = inner.split_whitespace().map(String::from).collect();
         // Normalize Claude Code's colon-wildcard format: "cmd:*" → "cmd" "*"

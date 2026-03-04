@@ -1,6 +1,8 @@
-use crate::permission::*;
-use pretty_assertions::assert_eq;
+use std::path::Path;
 
+use claude_scriptcheck::permission::*;
+use claude_scriptcheck::settings::Permissions;
+use pretty_assertions::assert_eq;
 
 fn make_rule(prefix: &[&str], wildcard: bool) -> BashRule {
     BashRule {
@@ -13,19 +15,19 @@ fn tokens(s: &[&str]) -> Vec<String> {
     s.iter().map(|s| s.to_string()).collect()
 }
 
-#[test]
+#[skuld::test]
 fn exact_match() {
     let rule = make_rule(&["git", "status"], false);
     assert!(bash_rule_matches(&rule, &tokens(&["git", "status"])));
 }
 
-#[test]
+#[skuld::test]
 fn exact_no_extra_args() {
     let rule = make_rule(&["git", "status"], false);
     assert!(!bash_rule_matches(&rule, &tokens(&["git", "status", "-s"])));
 }
 
-#[test]
+#[skuld::test]
 fn wildcard_with_extra_args() {
     let rule = make_rule(&["git", "status"], true);
     assert!(bash_rule_matches(
@@ -34,33 +36,33 @@ fn wildcard_with_extra_args() {
     ));
 }
 
-#[test]
+#[skuld::test]
 fn wildcard_exact_prefix() {
     let rule = make_rule(&["git", "status"], true);
     assert!(bash_rule_matches(&rule, &tokens(&["git", "status"])));
 }
 
-#[test]
+#[skuld::test]
 fn wrong_prefix() {
     let rule = make_rule(&["git", "status"], true);
     assert!(!bash_rule_matches(&rule, &tokens(&["git", "commit"])));
 }
 
-#[test]
+#[skuld::test]
 fn single_command_no_wildcard() {
     let rule = make_rule(&["ls"], false);
     assert!(bash_rule_matches(&rule, &tokens(&["ls"])));
     assert!(!bash_rule_matches(&rule, &tokens(&["ls", "-la"])));
 }
 
-#[test]
+#[skuld::test]
 fn single_command_with_wildcard() {
     let rule = make_rule(&["ls"], true);
     assert!(bash_rule_matches(&rule, &tokens(&["ls"])));
     assert!(bash_rule_matches(&rule, &tokens(&["ls", "-la", "/tmp"])));
 }
 
-#[test]
+#[skuld::test]
 fn token_with_glob() {
     let rule = make_rule(&["gcc", "-print-file-name=*"], false);
     assert!(bash_rule_matches(
@@ -69,9 +71,8 @@ fn token_with_glob() {
     ));
 }
 
-#[test]
+#[skuld::test]
 fn bare_star_matches_path_with_slashes() {
-    // `git -C * status` — the bare `*` must match a path token like "/tmp/repo"
     let rule = make_rule(&["git", "-C", "*", "status"], true);
     assert!(bash_rule_matches(
         &rule,
@@ -81,57 +82,56 @@ fn bare_star_matches_path_with_slashes() {
         &rule,
         &tokens(&["git", "-C", "/tmp/repo", "status", "-s"])
     ));
-    // Must not match a different subcommand
     assert!(!bash_rule_matches(
         &rule,
         &tokens(&["git", "-C", "/tmp/repo", "push"])
     ));
 }
 
-#[test]
+#[skuld::test]
 fn too_short_command() {
     let rule = make_rule(&["git", "status"], false);
     assert!(!bash_rule_matches(&rule, &tokens(&["git"])));
 }
 
-#[test]
+#[skuld::test]
 fn file_pattern_match() {
     assert!(file_rule_matches("/tmp/claude/**", "/tmp/claude/foo/bar.txt"));
 }
 
-#[test]
+#[skuld::test]
 fn file_pattern_no_match() {
     assert!(!file_rule_matches("/tmp/claude/**", "/home/user/file.txt"));
 }
 
 // ─── Glob matching: ** and * behavior ─────────────────────────────────────────
 
-#[test]
+#[skuld::test]
 fn globstar_does_not_match_base_dir() {
     assert!(!file_rule_matches("/tmp/**", "/tmp"));
 }
 
-#[test]
+#[skuld::test]
 fn globstar_matches_single_level() {
     assert!(file_rule_matches("/tmp/**", "/tmp/a"));
 }
 
-#[test]
+#[skuld::test]
 fn globstar_matches_nested() {
     assert!(file_rule_matches("/tmp/**", "/tmp/a/b"));
 }
 
-#[test]
+#[skuld::test]
 fn star_matches_single_level() {
     assert!(file_rule_matches("/tmp/*", "/tmp/a"));
 }
 
-#[test]
+#[skuld::test]
 fn star_does_not_match_nested() {
     assert!(!file_rule_matches("/tmp/*", "/tmp/a/b"));
 }
 
-#[test]
+#[skuld::test]
 fn parse_bash_rule_exact() {
     let home = "/home/test";
     let parsed = parse_single_rule("Bash(git status)", home).unwrap();
@@ -144,7 +144,7 @@ fn parse_bash_rule_exact() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn parse_bash_rule_wildcard() {
     let home = "/home/test";
     let parsed = parse_single_rule("Bash(git status *)", home).unwrap();
@@ -157,10 +157,9 @@ fn parse_bash_rule_wildcard() {
     }
 }
 
-#[test]
-fn parse_read_rule() {
-    let dir = tempfile::tempdir().unwrap();
-    let base = std::fs::canonicalize(dir.path()).unwrap();
+#[skuld::test]
+fn parse_read_rule(#[fixture(temp_dir)] dir: &Path) {
+    let base = std::fs::canonicalize(dir).unwrap();
     std::fs::create_dir(base.join("src")).unwrap();
     let home = base.to_str().unwrap();
 
@@ -171,10 +170,9 @@ fn parse_read_rule() {
     }
 }
 
-#[test]
-fn parse_write_rule() {
-    let dir = tempfile::tempdir().unwrap();
-    let base = std::fs::canonicalize(dir.path()).unwrap();
+#[skuld::test]
+fn parse_write_rule(#[fixture(temp_dir)] dir: &Path) {
+    let base = std::fs::canonicalize(dir).unwrap();
     std::fs::create_dir(base.join("claude")).unwrap();
     let base = base.to_str().unwrap();
 
@@ -186,14 +184,14 @@ fn parse_write_rule() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn parse_readonly_skipped() {
     let home = "/home/test";
     assert!(parse_single_rule("Bash(readonly)", home).is_none());
     assert!(parse_single_rule("Bash(readonly *)", home).is_none());
 }
 
-#[test]
+#[skuld::test]
 fn parse_irrelevant_rule_skipped() {
     let home = "/home/test";
     assert!(parse_single_rule("WebSearch", home).is_none());
@@ -202,31 +200,30 @@ fn parse_irrelevant_rule_skipped() {
 
 // ─── BashRule::to_rule_string ─────────────────────────────────────────────────
 
-#[test]
+#[skuld::test]
 fn to_rule_string_exact() {
     assert_eq!(make_rule(&["git", "status"], false).to_rule_string(), "Bash(git status)");
 }
 
-#[test]
+#[skuld::test]
 fn to_rule_string_wildcard() {
     assert_eq!(make_rule(&["git", "status"], true).to_rule_string(), "Bash(git status *)");
 }
 
-#[test]
+#[skuld::test]
 fn to_rule_string_catch_all() {
     assert_eq!(make_rule(&[], true).to_rule_string(), "Bash(*)");
 }
 
-#[test]
+#[skuld::test]
 fn to_rule_string_single_command() {
     assert_eq!(make_rule(&["ls"], false).to_rule_string(), "Bash(ls)");
 }
 
 // ─── parse_rules: ask rules ──────────────────────────────────────────────────
 
-#[test]
+#[skuld::test]
 fn parse_rules_with_ask_bash() {
-    use crate::settings::Permissions;
     let perms = Permissions {
         allow: vec![],
         deny: vec![],
@@ -238,11 +235,9 @@ fn parse_rules_with_ask_bash() {
     assert!(parsed.ask_bash[0].wildcard);
 }
 
-#[test]
-fn parse_rules_with_ask_read() {
-    use crate::settings::Permissions;
-    let dir = tempfile::tempdir().unwrap();
-    let base = std::fs::canonicalize(dir.path()).unwrap();
+#[skuld::test]
+fn parse_rules_with_ask_read(#[fixture(temp_dir)] dir: &Path) {
+    let base = std::fs::canonicalize(dir).unwrap();
     let base = base.to_str().unwrap();
 
     let perms = Permissions {
@@ -254,11 +249,9 @@ fn parse_rules_with_ask_read() {
     assert_eq!(parsed.ask_read, vec![format!("{base}/**")]);
 }
 
-#[test]
-fn parse_rules_with_ask_write_and_edit() {
-    use crate::settings::Permissions;
-    let dir = tempfile::tempdir().unwrap();
-    let base = std::fs::canonicalize(dir.path()).unwrap();
+#[skuld::test]
+fn parse_rules_with_ask_write_and_edit(#[fixture(temp_dir)] dir: &Path) {
+    let base = std::fs::canonicalize(dir).unwrap();
     std::fs::create_dir(base.join("src")).unwrap();
     let base = base.to_str().unwrap();
 
@@ -274,7 +267,7 @@ fn parse_rules_with_ask_write_and_edit() {
 
 // ─── Double-star (**) multi-token wildcard ────────────────────────────────────
 
-#[test]
+#[skuld::test]
 fn doublestar_matches_zero_tokens() {
     let rule = make_rule(&["curl", "**", "-X", "POST"], true);
     assert!(bash_rule_matches(
@@ -283,7 +276,7 @@ fn doublestar_matches_zero_tokens() {
     ));
 }
 
-#[test]
+#[skuld::test]
 fn doublestar_matches_one_token() {
     let rule = make_rule(&["curl", "**", "-X", "POST"], true);
     assert!(bash_rule_matches(
@@ -292,7 +285,7 @@ fn doublestar_matches_one_token() {
     ));
 }
 
-#[test]
+#[skuld::test]
 fn doublestar_matches_multiple_tokens() {
     let rule = make_rule(&["curl", "**", "-X", "POST"], true);
     assert!(bash_rule_matches(
@@ -301,7 +294,7 @@ fn doublestar_matches_multiple_tokens() {
     ));
 }
 
-#[test]
+#[skuld::test]
 fn doublestar_at_start() {
     let rule = make_rule(&["**", "-X", "POST"], true);
     assert!(bash_rule_matches(
@@ -310,7 +303,7 @@ fn doublestar_at_start() {
     ));
 }
 
-#[test]
+#[skuld::test]
 fn doublestar_no_match_when_suffix_differs() {
     let rule = make_rule(&["curl", "**", "-X", "POST"], true);
     assert!(!bash_rule_matches(
@@ -319,7 +312,7 @@ fn doublestar_no_match_when_suffix_differs() {
     ));
 }
 
-#[test]
+#[skuld::test]
 fn doublestar_alone_matches_any_command() {
     let home = "/home/test";
     let parsed = parse_single_rule("Bash(**)", home).unwrap();
@@ -332,9 +325,8 @@ fn doublestar_alone_matches_any_command() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn trailing_doublestar_without_wildcard() {
-    // Bash(curl **) — no trailing *, so wildcard=false, prefix=["curl", "**"]
     let home = "/home/test";
     let parsed = parse_single_rule("Bash(curl **)", home).unwrap();
     match parsed {
@@ -349,7 +341,7 @@ fn trailing_doublestar_without_wildcard() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn doublestar_parse_roundtrip() {
     let home = "/home/test";
     let parsed = parse_single_rule("Bash(curl ** -X POST *)", home).unwrap();
@@ -365,7 +357,7 @@ fn doublestar_parse_roundtrip() {
 
 // ─── Colon-wildcard format (Claude Code's native format) ─────────────────────
 
-#[test]
+#[skuld::test]
 fn parse_colon_wildcard_single_command() {
     let home = "/home/test";
     let parsed = parse_single_rule("Bash(grep:*)", home).unwrap();
@@ -378,7 +370,7 @@ fn parse_colon_wildcard_single_command() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn parse_colon_wildcard_multi_token() {
     let home = "/home/test";
     let parsed = parse_single_rule("Bash(git status:*)", home).unwrap();
@@ -391,7 +383,7 @@ fn parse_colon_wildcard_multi_token() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn parse_colon_wildcard_relative_path() {
     let home = "/home/test";
     let parsed = parse_single_rule("Bash(./bazel.cmd build:*)", home).unwrap();
@@ -404,10 +396,9 @@ fn parse_colon_wildcard_relative_path() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn parse_colon_wildcard_preserves_glob_in_prefix() {
     let home = "/home/test";
-    // "gcc -print-file-name=*:*" — the :* is the wildcard, the =* in the prefix is a glob
     let parsed = parse_single_rule("Bash(gcc -print-file-name=*:*)", home).unwrap();
     match parsed {
         ParsedRule::Bash(rule) => {

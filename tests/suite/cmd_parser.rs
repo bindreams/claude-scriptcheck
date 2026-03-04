@@ -1,8 +1,7 @@
-use crate::cmd_parser::*;
+use claude_scriptcheck::cmd_parser::*;
 use pretty_assertions::assert_eq;
 
-
-#[test]
+#[skuld::test]
 fn unknown_command_returns_empty() {
     let result = parse_file_accesses("my-custom-tool", &[Some("arg1".into())], "/tmp");
     match result {
@@ -14,7 +13,7 @@ fn unknown_command_returns_empty() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn no_file_access_command_returns_empty() {
     let result = parse_file_accesses("echo", &[Some("hello".into())], "/tmp");
     match result {
@@ -26,7 +25,7 @@ fn no_file_access_command_returns_empty() {
     }
 }
 
-#[test]
+#[skuld::test]
 fn sentinel_filtered_from_reads() {
     let cfa = CommandFileAccesses {
         reads: vec![
@@ -40,7 +39,7 @@ fn sentinel_filtered_from_reads() {
     assert_eq!(filtered.reads, vec!["/tmp/real.txt"]);
 }
 
-#[test]
+#[skuld::test]
 fn sentinel_filtered_from_writes() {
     let cfa = CommandFileAccesses {
         reads: vec![],
@@ -54,9 +53,8 @@ fn sentinel_filtered_from_writes() {
     assert_eq!(filtered.writes, vec!["/tmp/real.txt"]);
 }
 
-#[test]
+#[skuld::test]
 fn dynamic_arg_filtered_via_sentinel() {
-    // cp $SRC dest.txt → only dest.txt should appear as Write
     let result = parse_file_accesses(
         "cp",
         &[None, Some("dest.txt".into())],

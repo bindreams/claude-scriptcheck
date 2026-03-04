@@ -2,25 +2,25 @@ use serde::Deserialize;
 use std::path::Path;
 
 #[derive(Deserialize)]
-pub(crate) struct Settings {
-    pub(crate) permissions: Option<PermissionsJson>,
+pub struct Settings {
+    pub permissions: Option<PermissionsJson>,
 }
 
 #[derive(Deserialize)]
-pub(crate) struct PermissionsJson {
+pub struct PermissionsJson {
     #[serde(default)]
-    pub(crate) allow: Vec<String>,
+    pub allow: Vec<String>,
     #[serde(default)]
-    pub(crate) deny: Vec<String>,
+    pub deny: Vec<String>,
     #[serde(default)]
-    pub(crate) ask: Vec<String>,
+    pub ask: Vec<String>,
 }
 
 #[derive(Deserialize)]
-pub(crate) struct ManagedSettings {
-    pub(crate) permissions: Option<PermissionsJson>,
+pub struct ManagedSettings {
+    pub permissions: Option<PermissionsJson>,
     #[serde(default, rename = "allowManagedPermissionRulesOnly")]
-    pub(crate) allow_managed_permission_rules_only: bool,
+    pub allow_managed_permission_rules_only: bool,
 }
 
 #[derive(Default, Clone)]
@@ -61,8 +61,7 @@ pub fn load_settings(cwd: &str, project_root: &str) -> Permissions {
 }
 
 /// Testable merge logic that operates on string contents instead of file paths.
-#[cfg(test)]
-pub(crate) fn load_settings_from_contents(
+pub fn load_settings_from_contents(
     managed_content: Option<&str>,
     settings_contents: &[&str],
 ) -> Permissions {
@@ -149,7 +148,7 @@ fn merge_permissions(merged: &mut Permissions, perms: PermissionsJson) {
 /// - `path` or `./path` → CWD-relative (prepend `cwd`)
 ///
 /// Only Read(...), Write(...), and Edit(...) rules are affected.
-pub(crate) fn resolve_rule_relative_paths(rules: &mut [String], cwd: &str, project_root: &str) {
+pub fn resolve_rule_relative_paths(rules: &mut [String], cwd: &str, project_root: &str) {
     for rule in rules.iter_mut() {
         *rule = resolve_one_rule(rule, cwd, project_root);
     }

@@ -2,7 +2,7 @@ use path_clean::PathClean;
 use std::path::PathBuf;
 
 /// Returns true if the path segment contains glob wildcard characters.
-pub(crate) fn is_wildcard_segment(segment: &str) -> bool {
+pub fn is_wildcard_segment(segment: &str) -> bool {
     segment.contains('*') || segment.contains('?') || segment.contains('[') || segment.contains('{')
 }
 

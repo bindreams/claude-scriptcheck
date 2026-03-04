@@ -1,6 +1,6 @@
 use super::helpers::strip_legacy_numeric;
 
-#[test]
+#[skuld::test]
 fn strip_legacy_dash_number() {
     assert_eq!(
         strip_legacy_numeric(&["-30", "file.txt"], false),
@@ -8,7 +8,7 @@ fn strip_legacy_dash_number() {
     );
 }
 
-#[test]
+#[skuld::test]
 fn strip_legacy_dash_number_with_suffix() {
     assert_eq!(
         strip_legacy_numeric(&["-30b", "file.txt"], false),
@@ -16,7 +16,7 @@ fn strip_legacy_dash_number_with_suffix() {
     );
 }
 
-#[test]
+#[skuld::test]
 fn strip_legacy_plus_number_allowed() {
     assert_eq!(
         strip_legacy_numeric(&["+30", "file.txt"], true),
@@ -24,7 +24,7 @@ fn strip_legacy_plus_number_allowed() {
     );
 }
 
-#[test]
+#[skuld::test]
 fn strip_legacy_plus_number_disallowed() {
     assert_eq!(
         strip_legacy_numeric(&["+30", "file.txt"], false),
@@ -32,7 +32,7 @@ fn strip_legacy_plus_number_disallowed() {
     );
 }
 
-#[test]
+#[skuld::test]
 fn strip_legacy_normal_flags_unchanged() {
     assert_eq!(
         strip_legacy_numeric(&["-n", "5", "-v", "file.txt"], false),
@@ -40,7 +40,7 @@ fn strip_legacy_normal_flags_unchanged() {
     );
 }
 
-#[test]
+#[skuld::test]
 fn strip_legacy_bare_dash_unchanged() {
     assert_eq!(
         strip_legacy_numeric(&["-"], false),
@@ -48,7 +48,7 @@ fn strip_legacy_bare_dash_unchanged() {
     );
 }
 
-#[test]
+#[skuld::test]
 fn strip_legacy_after_separator_unchanged() {
     assert_eq!(
         strip_legacy_numeric(&["--", "-30"], false),

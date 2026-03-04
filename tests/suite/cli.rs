@@ -1,7 +1,6 @@
-use crate::cli::{parse_install_source, InstallSource};
+use claude_scriptcheck::cli::{parse_install_source, InstallSource};
 
-
-#[test]
+#[skuld::test]
 fn detect_git_source() {
     let json = serde_json::json!({
         "installs": {
@@ -16,7 +15,7 @@ fn detect_git_source() {
     );
 }
 
-#[test]
+#[skuld::test]
 fn detect_registry_source() {
     let json = serde_json::json!({
         "installs": {
@@ -31,7 +30,7 @@ fn detect_registry_source() {
     );
 }
 
-#[test]
+#[skuld::test]
 fn detect_path_source() {
     let json = serde_json::json!({
         "installs": {
@@ -46,7 +45,7 @@ fn detect_path_source() {
     );
 }
 
-#[test]
+#[skuld::test]
 fn detect_missing_crate() {
     let json = serde_json::json!({
         "installs": {
@@ -58,13 +57,13 @@ fn detect_missing_crate() {
     assert_eq!(parse_install_source(&json, "claude-scriptcheck"), None);
 }
 
-#[test]
+#[skuld::test]
 fn detect_empty_installs() {
     let json = serde_json::json!({ "installs": {} });
     assert_eq!(parse_install_source(&json, "claude-scriptcheck"), None);
 }
 
-#[test]
+#[skuld::test]
 fn detect_malformed_key() {
     let json = serde_json::json!({
         "installs": {
@@ -76,7 +75,7 @@ fn detect_malformed_key() {
     assert_eq!(parse_install_source(&json, "claude-scriptcheck"), None);
 }
 
-#[test]
+#[skuld::test]
 fn git_source_without_commit_hash() {
     let json = serde_json::json!({
         "installs": {

@@ -38,7 +38,7 @@ impl CommandFileAccesses {
         }
     }
 
-    pub(crate) fn filter_sentinel(mut self, sentinel: &str) -> Self {
+    pub fn filter_sentinel(mut self, sentinel: &str) -> Self {
         self.reads.retain(|p| !p.contains(sentinel));
         self.writes.retain(|p| !p.contains(sentinel));
         self // inline_script_start is preserved as-is
@@ -61,7 +61,7 @@ pub enum CmdParseResult {
     ParseFailed { cmd_name: String, message: String },
 }
 
-pub(crate) const SENTINEL: &str = "__CLAUDE_DYNAMIC__";
+pub const SENTINEL: &str = "__CLAUDE_DYNAMIC__";
 
 /// Main entry point: parse a known command's arguments into file accesses.
 ///
@@ -238,33 +238,20 @@ pub fn get_parser(cmd_name: &str) -> Option<&'static dyn CommandParser> {
 }
 
 /// Resolve a path relative to cwd. Re-exports from file_access for use by parsers.
-pub(crate) fn resolve(path: &str, cwd: &str) -> String {
+pub fn resolve(path: &str, cwd: &str) -> String {
     file_access::resolve_path(path, cwd)
 }
 
-#[cfg(test)]
 mod helpers_tests;
-#[cfg(test)]
 mod readers_tests;
-#[cfg(test)]
 mod writers_tests;
-#[cfg(test)]
 mod grep_tests;
-#[cfg(test)]
 mod filesystem_tests;
-#[cfg(test)]
 mod compression_tests;
-#[cfg(test)]
 mod network_tests;
-#[cfg(test)]
 mod archive_tests;
-#[cfg(test)]
 mod find_tests;
-#[cfg(test)]
 mod sed_tests;
-#[cfg(test)]
 mod tar_tests;
-#[cfg(test)]
 mod dd_tests;
-#[cfg(test)]
 mod script_runners_tests;
