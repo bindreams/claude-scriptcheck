@@ -250,7 +250,8 @@ impl PermissionChecker<'_> {
             let has_dynamic_args = arg_literals[1..].iter().any(|a| a.is_none());
             let can_skip = file_access::is_file_only_command(&cmd_name)
                 && has_file_accesses
-                && !has_dynamic_args;
+                && !has_dynamic_args
+                && !bash_asked;
 
             if !can_skip {
                 let rule = if let Some(idx) = inline_script_start {

@@ -406,6 +406,17 @@ fn file_only_with_explicit_bash_rule_still_works() {
     assert_eq!(d, Decision::Allow);
 }
 
+#[test]
+fn file_only_with_bash_ask_still_asks() {
+    let d = check_with_ask(
+        "mkdir /tmp/claude/foo",
+        &["Write(/tmp/claude/**)"],
+        &[],
+        &["Bash(mkdir *)"],
+    );
+    assert!(matches!(d, Decision::Ask(_)));
+}
+
 // ── Script-runner inline-script sanitization ──
 
 #[test]
