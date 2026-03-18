@@ -76,6 +76,21 @@ fn detect_malformed_key() {
 }
 
 #[skuld::test]
+fn detect_path_source_windows() {
+    let json = serde_json::json!({
+        "installs": {
+            "claude-scriptcheck 0.1.0 (path+file:///C:/Users/dev/claude-scriptcheck)": {
+                "bins": ["claude-scriptcheck"]
+            }
+        }
+    });
+    assert_eq!(
+        parse_install_source(&json, "claude-scriptcheck"),
+        Some(InstallSource::Path("C:/Users/dev/claude-scriptcheck".into()))
+    );
+}
+
+#[skuld::test]
 fn git_source_without_commit_hash() {
     let json = serde_json::json!({
         "installs": {

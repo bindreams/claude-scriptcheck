@@ -281,6 +281,14 @@ pub fn parse_install_source(
         } else if source_id.starts_with("registry+") {
             return Some(InstallSource::Registry);
         } else if let Some(path) = source_id.strip_prefix("path+file://") {
+            // file:/// URLs use 3 slashes, so after stripping "path+file://" the
+            // remainder starts with "/". Strip that slash and keep the result only
+            // if it is already an absolute path (e.g. "C:/..." on Windows);
+            // otherwise the slash is the Unix root and must stay.
+            let path = path
+                .strip_prefix('/')
+                .filter(|p| path_util::is_absolute(p))
+                .unwrap_or(path);
             return Some(InstallSource::Path(path.to_string()));
         }
 
