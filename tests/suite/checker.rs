@@ -1,4 +1,5 @@
 use claude_scriptcheck::checker::{check_program, Decision};
+use claude_scriptcheck::path_util;
 use claude_scriptcheck::permission::{self, ParsedPermissions};
 use claude_scriptcheck::settings::Permissions;
 use pretty_assertions::assert_eq;
@@ -25,6 +26,12 @@ fn check_with_ask(cmd: &str, allow: &[&str], deny: &[&str], ask: &[&str]) -> Dec
     let perms = make_perms_full(allow, deny, ask);
     let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
     check_program(&program, &perms, "/tmp").decision
+}
+
+fn check_cwd(cmd: &str, allow: &[&str], deny: &[&str], cwd: &str) -> Decision {
+    let perms = make_perms(allow, deny);
+    let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
+    check_program(&program, &perms, cwd).decision
 }
 
 #[skuld::test]
@@ -617,10 +624,19 @@ fn c(path: &str) -> String {
 
 #[skuld::test]
 fn dotdot_query_path_matches_clean_rule() {
-    let d = check(
+    // Use a real temp dir as CWD so relative paths resolve correctly on all platforms.
+    // Canonicalize to resolve 8.3 short names on Windows.
+    let tmp = path_util::normalize_separators(
+        &std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .to_string_lossy(),
+    );
+    let rule = format!("Read({tmp}/**)");
+    let d = check_cwd(
         "cat ../file.txt",
-        &["Read(/**)", "Bash(cat *)"],
+        &[&rule, "Bash(cat *)"],
         &[],
+        &format!("{tmp}/subdir"),
     );
     assert_eq!(d, Decision::Allow);
 }

@@ -160,6 +160,10 @@ fn resolve_one_rule(rule: &str, cwd: &str, project_root: &str) -> String {
             let kind = &prefix[..prefix.len() - 1]; // "Read", "Write", or "Edit"
             if let Some(abs) = inner.strip_prefix("//") {
                 // //path → absolute filesystem path
+                // On Windows, //C:/foo strips to C:/foo which is already absolute
+                if crate::path_util::is_absolute(abs) {
+                    return format!("{kind}({abs})");
+                }
                 return format!("{kind}(/{abs})");
             }
             if inner.starts_with('~') {
@@ -169,6 +173,11 @@ fn resolve_one_rule(rule: &str, cwd: &str, project_root: &str) -> String {
             if inner.starts_with('/') {
                 // /path → project-root-relative (inner already has leading /)
                 return format!("{kind}({project_root}{inner})");
+            }
+            // Check for Windows drive-letter or UNC paths (C:/..., \\server\...)
+            // These are already absolute and should not be treated as relative.
+            if crate::path_util::is_absolute(inner) {
+                return rule.to_string();
             }
             // bare path or ./path → CWD-relative
             return format!("{kind}({cwd}/{inner})");

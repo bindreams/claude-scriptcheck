@@ -297,3 +297,33 @@ fn mixed_rules_all_four_tiers() {
         "Write(/home/user/project/./out/**)",
     ]);
 }
+
+// Windows paths =====
+
+#[skuld::test]
+fn double_slash_windows_drive_letter() {
+    let mut rules = vec!["Read(//C:/Users/foo/**)".to_string()];
+    resolve_rule_relative_paths(&mut rules, "/project", "/project");
+    assert_eq!(rules, vec!["Read(C:/Users/foo/**)"]);
+}
+
+#[skuld::test]
+fn bare_windows_absolute_path_unchanged() {
+    let mut rules = vec!["Write(C:/Users/foo/**)".to_string()];
+    resolve_rule_relative_paths(&mut rules, "/project", "/project");
+    assert_eq!(rules, vec!["Write(C:/Users/foo/**)"]);
+}
+
+#[skuld::test]
+fn relative_path_with_windows_cwd() {
+    let mut rules = vec!["Read(src/**)".to_string()];
+    resolve_rule_relative_paths(&mut rules, "C:/Users/foo/project", "C:/Users/foo/project");
+    assert_eq!(rules, vec!["Read(C:/Users/foo/project/src/**)"]);
+}
+
+#[skuld::test]
+fn single_slash_with_windows_project_root() {
+    let mut rules = vec!["Read(/src/**)".to_string()];
+    resolve_rule_relative_paths(&mut rules, "C:/Users/foo/project", "C:/Users/foo/project");
+    assert_eq!(rules, vec!["Read(C:/Users/foo/project/src/**)"]);
+}

@@ -104,6 +104,17 @@ fn file_pattern_no_match() {
     assert!(!file_rule_matches("/tmp/claude/**", "/home/user/file.txt"));
 }
 
+#[skuld::test]
+fn file_pattern_backslash_in_rule_matches() {
+    // User-authored rules may contain backslashes on Windows
+    assert!(file_rule_matches("C:\\Users\\foo\\**", "C:/Users/foo/bar.txt"));
+}
+
+#[skuld::test]
+fn file_pattern_backslash_in_path_matches() {
+    assert!(file_rule_matches("C:/Users/foo/**", "C:\\Users\\foo\\bar.txt"));
+}
+
 // ─── Glob matching: ** and * behavior ─────────────────────────────────────────
 
 #[skuld::test]
@@ -159,22 +170,24 @@ fn parse_bash_rule_wildcard() {
 
 #[skuld::test]
 fn parse_read_rule(#[fixture(temp_dir)] dir: &Path) {
-    let base = std::fs::canonicalize(dir).unwrap();
-    std::fs::create_dir(base.join("src")).unwrap();
-    let home = base.to_str().unwrap();
+    let base = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
+    );
+    std::fs::create_dir(Path::new(dir).join("src")).unwrap();
 
-    let parsed = parse_single_rule("Read(~/src/**)", home).unwrap();
+    let parsed = parse_single_rule("Read(~/src/**)", &base).unwrap();
     match parsed {
-        ParsedRule::Read(pat) => assert_eq!(pat, format!("{home}/src/**")),
+        ParsedRule::Read(pat) => assert_eq!(pat, format!("{base}/src/**")),
         _ => panic!("expected Read rule"),
     }
 }
 
 #[skuld::test]
 fn parse_write_rule(#[fixture(temp_dir)] dir: &Path) {
-    let base = std::fs::canonicalize(dir).unwrap();
-    std::fs::create_dir(base.join("claude")).unwrap();
-    let base = base.to_str().unwrap();
+    let base = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
+    );
+    std::fs::create_dir(Path::new(dir).join("claude")).unwrap();
 
     let rule = format!("Write({base}/claude/**)");
     let parsed = parse_single_rule(&rule, "/unused").unwrap();
@@ -223,6 +236,7 @@ fn bare_read_matches_any_path() {
         ParsedRule::Read(pat) => {
             assert!(file_rule_matches(&pat, "/any/path/at/all"));
             assert!(file_rule_matches(&pat, "/tmp/file.txt"));
+            assert!(file_rule_matches(&pat, "C:/Users/foo/bar.txt"));
         }
         _ => panic!("expected Read rule"),
     }
@@ -291,8 +305,9 @@ fn parse_rules_with_ask_bash() {
 
 #[skuld::test]
 fn parse_rules_with_ask_read(#[fixture(temp_dir)] dir: &Path) {
-    let base = std::fs::canonicalize(dir).unwrap();
-    let base = base.to_str().unwrap();
+    let base = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
+    );
 
     let perms = Permissions {
         allow: vec![],
@@ -305,9 +320,10 @@ fn parse_rules_with_ask_read(#[fixture(temp_dir)] dir: &Path) {
 
 #[skuld::test]
 fn parse_rules_with_ask_write_and_edit(#[fixture(temp_dir)] dir: &Path) {
-    let base = std::fs::canonicalize(dir).unwrap();
-    std::fs::create_dir(base.join("src")).unwrap();
-    let base = base.to_str().unwrap();
+    let base = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
+    );
+    std::fs::create_dir(Path::new(dir).join("src")).unwrap();
 
     let perms = Permissions {
         allow: vec![],

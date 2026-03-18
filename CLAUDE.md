@@ -25,6 +25,7 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git  # insta
 | `src/hook.rs`          | `HookInput` / `HookOutput` serde structs for JSON protocol with Claude Code.                                      |
 | `src/settings.rs`      | Loads and merges permission rules from global + project settings files.                                           |
 | `src/logging.rs`       | Appends missing rules to platform-specific log file.                                                              |
+| `src/path_util.rs`     | Cross-platform path helpers: `is_absolute()`, `normalize_separators()`.                                           |
 | `src/word_util.rs`     | Extracts static string literals from bash `Word` nodes; detects dynamic content.                                  |
 | `tests/integration.rs` | Integration tests: logic tests call the library API directly; binary I/O tests invoke the compiled binary.        |
 

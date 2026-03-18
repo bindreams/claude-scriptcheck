@@ -5,5 +5,6 @@ pub mod cmd_parser;
 pub mod file_access;
 pub mod hook;
 pub mod logging;
+pub mod path_util;
 pub mod permission;
 pub mod settings;

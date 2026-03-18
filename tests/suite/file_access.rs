@@ -34,3 +34,29 @@ fn non_file_commands_not_file_only() {
     assert!(!is_file_only_command("git"));
     assert!(!is_file_only_command("curl"));
 }
+
+// Windows paths =====
+
+#[skuld::test]
+fn resolve_windows_drive_letter_absolute() {
+    assert_eq!(
+        resolve_path("c:/Users/foo/bar.txt", "C:/project"),
+        "c:/Users/foo/bar.txt"
+    );
+}
+
+#[skuld::test]
+fn resolve_windows_backslash_absolute() {
+    assert_eq!(
+        resolve_path("C:\\Users\\foo\\bar.txt", "C:/project"),
+        "C:\\Users\\foo\\bar.txt"
+    );
+}
+
+#[skuld::test]
+fn resolve_relative_with_windows_cwd() {
+    assert_eq!(
+        resolve_path("src/main.rs", "C:/Users/foo/project"),
+        "C:/Users/foo/project/src/main.rs"
+    );
+}

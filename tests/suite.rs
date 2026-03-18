@@ -10,6 +10,8 @@ mod cmd_parser;
 mod file_access;
 #[path = "suite/integration.rs"]
 mod integration;
+#[path = "suite/path_util.rs"]
+mod path_util;
 #[path = "suite/permission.rs"]
 mod permission;
 #[path = "suite/settings.rs"]

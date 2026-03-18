@@ -102,17 +102,18 @@ pub fn is_file_only_command(cmd_name: &str) -> bool {
 }
 
 pub fn resolve_path(path: &str, cwd: &str) -> String {
-    if path.starts_with('/') {
+    if crate::path_util::is_absolute(path) {
         path.to_string()
     } else if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
-            format!("{}/{rest}", home.display())
+            let home = crate::path_util::normalize_separators(&home.to_string_lossy());
+            format!("{home}/{rest}")
         } else {
             path.to_string()
         }
     } else if path == "~" {
         if let Some(home) = dirs::home_dir() {
-            home.to_string_lossy().to_string()
+            crate::path_util::normalize_separators(&home.to_string_lossy())
         } else {
             path.to_string()
         }

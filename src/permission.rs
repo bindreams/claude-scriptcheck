@@ -35,7 +35,7 @@ pub enum ParsedRule {
 
 pub fn parse_rules(perms: &Permissions) -> ParsedPermissions {
     let home = dirs::home_dir()
-        .map(|h| h.to_string_lossy().to_string())
+        .map(|h| crate::path_util::normalize_separators(&h.to_string_lossy()))
         .unwrap_or_default();
 
     let mut parsed = ParsedPermissions::default();
@@ -77,9 +77,9 @@ pub fn parse_single_rule(rule: &str, home: &str) -> Option<ParsedRule> {
     // Bare tool-level wildcards (no parentheses)
     match rule {
         "Bash" => return Some(ParsedRule::Bash(BashRule { prefix_tokens: vec![], wildcard: true })),
-        "Read" => return Some(ParsedRule::Read("/**".to_string())),
-        "Write" => return Some(ParsedRule::Write("/**".to_string())),
-        "Edit" => return Some(ParsedRule::Edit("/**".to_string())),
+        "Read" => return Some(ParsedRule::Read("**".to_string())),
+        "Write" => return Some(ParsedRule::Write("**".to_string())),
+        "Edit" => return Some(ParsedRule::Edit("**".to_string())),
         _ => {}
     }
 
@@ -181,6 +181,12 @@ fn token_matches(pattern: &str, actual: &str) -> bool {
 }
 
 /// Check if a file path matches a file permission pattern.
+///
+/// Normalizes separators defensively — both inputs should already use forward
+/// slashes after ingress normalization and canonicalization, but user-authored
+/// rules may still contain backslashes on Windows.
 pub fn file_rule_matches(pattern: &str, file_path: &str) -> bool {
-    glob_match::glob_match(pattern, file_path)
+    let pattern = crate::path_util::normalize_separators(pattern);
+    let file_path = crate::path_util::normalize_separators(file_path);
+    glob_match::glob_match(&pattern, &file_path)
 }

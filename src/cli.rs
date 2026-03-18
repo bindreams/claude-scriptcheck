@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process;
 
-use crate::{checker, logging, permission, settings};
+use crate::{checker, logging, path_util, permission, settings};
 
 const HOOK_ENTRY_MARKER: &str = "claude-scriptcheck";
 
@@ -97,8 +97,10 @@ pub fn check(command: &str, cwd: &str) {
     } else {
         cwd.to_string()
     };
+    let resolved_cwd = path_util::normalize_separators(&resolved_cwd);
 
     let project_root = std::env::var("CLAUDE_PROJECT_DIR")
+        .map(|s| path_util::normalize_separators(&s))
         .unwrap_or_else(|_| resolved_cwd.clone());
     let permissions = settings::load_settings(&resolved_cwd, &project_root);
     let parsed_perms = permission::parse_rules(&permissions);

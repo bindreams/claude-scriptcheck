@@ -2,7 +2,7 @@ use std::io::{self, Read};
 use std::process;
 
 use clap::{Parser, Subcommand};
-use claude_scriptcheck::{checker, cli, hook, logging, permission, settings};
+use claude_scriptcheck::{checker, cli, hook, logging, path_util, permission, settings};
 
 #[derive(Parser)]
 #[command(name = "claude-scriptcheck", about = "AST-aware Bash permission checker for Claude Code hooks")]
@@ -89,10 +89,14 @@ fn run_hook() {
         _ => process::exit(0),
     };
 
-    // Load and merge settings
+    // Normalize path separators (Windows backslashes → forward slashes)
+    let cwd = path_util::normalize_separators(&hook_input.cwd);
     let project_root = std::env::var("CLAUDE_PROJECT_DIR")
-        .unwrap_or_else(|_| hook_input.cwd.clone());
-    let permissions = settings::load_settings(&hook_input.cwd, &project_root);
+        .map(|s| path_util::normalize_separators(&s))
+        .unwrap_or_else(|_| cwd.clone());
+
+    // Load and merge settings
+    let permissions = settings::load_settings(&cwd, &project_root);
     let parsed_perms = permission::parse_rules(&permissions);
 
     // Parse the bash command with thaum
@@ -101,7 +105,7 @@ fn run_hook() {
         Err(_) => {
             logging::log_decision(
                 &hook_input.session_id,
-                &hook_input.cwd,
+                &cwd,
                 &command,
                 "ask",
                 None,
@@ -115,13 +119,13 @@ fn run_hook() {
     };
 
     // Check permissions
-    let result = checker::check_program(&program, &parsed_perms, &hook_input.cwd);
+    let result = checker::check_program(&program, &parsed_perms, &cwd);
 
     match &result.decision {
         checker::Decision::Allow => {
             logging::log_decision(
                 &hook_input.session_id,
-                &hook_input.cwd,
+                &cwd,
                 &command,
                 "allow",
                 None,
@@ -134,7 +138,7 @@ fn run_hook() {
         checker::Decision::Deny(reason) => {
             logging::log_decision(
                 &hook_input.session_id,
-                &hook_input.cwd,
+                &cwd,
                 &command,
                 "deny",
                 Some(reason),
@@ -148,7 +152,7 @@ fn run_hook() {
             let reason = format!("Missing permission rules: {}", missing.join(", "));
             logging::log_decision(
                 &hook_input.session_id,
-                &hook_input.cwd,
+                &cwd,
                 &command,
                 "ask",
                 None,

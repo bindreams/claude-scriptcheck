@@ -21,9 +21,10 @@ pub fn best_effort_canonicalize(path: &str) -> String {
         return String::new();
     }
 
-    // Step 1: Logical normalization
+    // Step 1: Logical normalization (normalize separators for consistent splitting)
     let normalized = PathBuf::from(path).clean();
-    let normalized_str = normalized.to_string_lossy().to_string();
+    let normalized_str =
+        crate::path_util::normalize_separators(&normalized.to_string_lossy());
 
     // Step 2: Split at first wildcard segment
     let segments: Vec<&str> = normalized_str.split('/').collect();
@@ -51,7 +52,8 @@ pub fn best_effort_canonicalize(path: &str) -> String {
     loop {
         match std::fs::canonicalize(&probe) {
             Ok(canonical) => {
-                let mut result = canonical.to_string_lossy().to_string();
+                let mut result =
+                    crate::path_util::normalize_separators(&canonical.to_string_lossy());
 
                 // Append unresolved prefix segments (collected in reverse order)
                 for part in tail_parts.iter().rev() {

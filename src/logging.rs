@@ -24,7 +24,7 @@ pub fn log_path() -> PathBuf {
     };
 
     base.or_else(dirs::data_local_dir)
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .unwrap_or_else(std::env::temp_dir)
         .join(APP_DIR)
         .join(LOG_FILENAME)
 }

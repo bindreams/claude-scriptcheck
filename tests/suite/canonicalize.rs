@@ -1,8 +1,23 @@
 use std::path::Path;
 
 use claude_scriptcheck::canonicalize::*;
+use claude_scriptcheck::path_util;
 
-// ─── is_wildcard_segment ──────────────────────────────────────────────────────
+/// Canonical temp directory path with normalized separators.
+fn canonical_temp() -> String {
+    path_util::normalize_separators(
+        &std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .to_string_lossy(),
+    )
+}
+
+/// Filesystem-canonical path with normalized separators.
+fn canonical(path: &str) -> String {
+    path_util::normalize_separators(&std::fs::canonicalize(path).unwrap().to_string_lossy())
+}
+
+// is_wildcard_segment =====
 
 #[skuld::test]
 fn wildcard_star() {
@@ -37,7 +52,7 @@ fn plain_segment_not_wildcard() {
     assert!(!is_wildcard_segment(".hidden"));
 }
 
-// ─── best_effort_canonicalize ─────────────────────────────────────────────────
+// best_effort_canonicalize =====
 
 #[skuld::test]
 fn empty_string() {
@@ -46,103 +61,89 @@ fn empty_string() {
 
 #[skuld::test]
 fn root_path() {
-    assert_eq!(best_effort_canonicalize("/"), "/");
+    // On Unix: "/" → "/". On Windows: "/" may resolve differently.
+    let result = best_effort_canonicalize("/");
+    #[cfg(unix)]
+    assert_eq!(result, "/");
+    #[cfg(windows)]
+    assert!(result == "/" || path_util::is_absolute(&result));
 }
 
 #[skuld::test]
-fn existing_path_no_wildcards() {
-    let result = best_effort_canonicalize("/tmp");
-    let expected = std::fs::canonicalize("/tmp")
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
+fn existing_path_no_wildcards(#[fixture(temp_dir)] dir: &Path) {
+    let expected = canonical(dir.to_str().unwrap());
+    let result = best_effort_canonicalize(dir.to_str().unwrap());
     assert_eq!(result, expected);
 }
 
 #[skuld::test]
 fn dotdot_resolved(#[fixture(temp_dir)] dir: &Path) {
-    let base = std::fs::canonicalize(dir).unwrap();
-    let child = base.join("child");
+    let base = canonical(dir.to_str().unwrap());
+    let child = Path::new(dir).join("child");
     std::fs::create_dir(&child).unwrap();
 
-    let input = format!("{}/child/..", base.display());
+    let input = format!("{base}/child/..");
     let result = best_effort_canonicalize(&input);
-    assert_eq!(result, base.to_str().unwrap());
+    assert_eq!(result, base);
 }
 
 #[skuld::test]
-fn dot_resolved() {
-    let result = best_effort_canonicalize("/tmp/./.");
-    let expected = std::fs::canonicalize("/tmp")
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
+fn dot_resolved(#[fixture(temp_dir)] dir: &Path) {
+    let expected = canonical(dir.to_str().unwrap());
+    let input = format!("{}/./.", dir.display());
+    let result = best_effort_canonicalize(&input);
     assert_eq!(result, expected);
 }
 
 #[skuld::test]
-fn wildcard_at_end() {
-    let result = best_effort_canonicalize("/tmp/**");
-    let canonical_tmp = std::fs::canonicalize("/tmp")
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
-    assert_eq!(result, format!("{canonical_tmp}/**"));
+fn wildcard_at_end(#[fixture(temp_dir)] dir: &Path) {
+    let base = canonical(dir.to_str().unwrap());
+    let input = format!("{}/**", dir.display());
+    let result = best_effort_canonicalize(&input);
+    assert_eq!(result, format!("{base}/**"));
 }
 
 #[skuld::test]
-fn wildcard_in_middle() {
-    let result = best_effort_canonicalize("/tmp/*/foo.txt");
-    let canonical_tmp = std::fs::canonicalize("/tmp")
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
-    assert_eq!(result, format!("{canonical_tmp}/*/foo.txt"));
+fn wildcard_in_middle(#[fixture(temp_dir)] dir: &Path) {
+    let base = canonical(dir.to_str().unwrap());
+    let input = format!("{}/*/foo.txt", dir.display());
+    let result = best_effort_canonicalize(&input);
+    assert_eq!(result, format!("{base}/*/foo.txt"));
 }
 
 #[skuld::test]
-fn nonexistent_path() {
-    let result =
-        best_effort_canonicalize("/tmp/nonexistent_dir_abc123_xyz789/subdir/file.txt");
-    let canonical_tmp = std::fs::canonicalize("/tmp")
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
+fn nonexistent_path(#[fixture(temp_dir)] dir: &Path) {
+    let base = canonical(dir.to_str().unwrap());
+    let input = format!("{}/nonexistent_dir_abc123/subdir/file.txt", dir.display());
+    let result = best_effort_canonicalize(&input);
     assert_eq!(
         result,
-        format!("{canonical_tmp}/nonexistent_dir_abc123_xyz789/subdir/file.txt")
+        format!("{base}/nonexistent_dir_abc123/subdir/file.txt")
     );
 }
 
 #[skuld::test]
-fn nonexistent_with_wildcard_suffix() {
-    let result =
-        best_effort_canonicalize("/tmp/nonexistent_abc123/**");
-    let canonical_tmp = std::fs::canonicalize("/tmp")
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
-    assert_eq!(result, format!("{canonical_tmp}/nonexistent_abc123/**"));
+fn nonexistent_with_wildcard_suffix(#[fixture(temp_dir)] dir: &Path) {
+    let base = canonical(dir.to_str().unwrap());
+    let input = format!("{}/nonexistent_abc123/**", dir.display());
+    let result = best_effort_canonicalize(&input);
+    assert_eq!(result, format!("{base}/nonexistent_abc123/**"));
 }
 
 #[skuld::test]
-fn dotdot_before_wildcard() {
-    let result = best_effort_canonicalize("/tmp/nonexistent/../**");
-    let canonical_tmp = std::fs::canonicalize("/tmp")
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
-    assert_eq!(result, format!("{canonical_tmp}/**"));
+fn dotdot_before_wildcard(#[fixture(temp_dir)] dir: &Path) {
+    let base = canonical(dir.to_str().unwrap());
+    let input = format!("{}/nonexistent/../**", dir.display());
+    let result = best_effort_canonicalize(&input);
+    assert_eq!(result, format!("{base}/**"));
 }
 
 #[skuld::test]
 fn dotdot_in_existing_path() {
-    let result = best_effort_canonicalize("/tmp/../tmp");
-    let expected = std::fs::canonicalize("/tmp")
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
-    assert_eq!(result, expected);
+    let tmp = canonical_temp();
+    let input = format!("{tmp}/../{}", Path::new(&tmp).file_name().unwrap().to_str().unwrap());
+    let result = best_effort_canonicalize(&input);
+    assert_eq!(result, tmp);
 }
 
 #[skuld::test]
@@ -152,50 +153,41 @@ fn all_wildcard_path() {
 
 #[skuld::test]
 fn wildcard_first_segment_absolute() {
+    // When the first real segment is a wildcard, canonicalize can't resolve anything
+    // beyond the root — the result keeps the logical normalized form.
     let result = best_effort_canonicalize("/**/foo");
-    let canonical_root = std::fs::canonicalize("/")
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
-    assert_eq!(result, format!("{}/**/foo", canonical_root.trim_end_matches('/')));
+    assert_eq!(result, "/**/foo");
 }
 
 #[skuld::test]
-fn duplicate_slashes_normalized() {
-    let result = best_effort_canonicalize("/tmp//foo");
-    let canonical_tmp = std::fs::canonicalize("/tmp")
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
-    assert_eq!(result, format!("{canonical_tmp}/foo"));
+fn duplicate_slashes_normalized(#[fixture(temp_dir)] dir: &Path) {
+    let base = canonical(dir.to_str().unwrap());
+    std::fs::create_dir(Path::new(dir).join("foo")).ok();
+    let input = format!("{}//foo", dir.display());
+    let result = best_effort_canonicalize(&input);
+    assert_eq!(result, format!("{base}/foo"));
 }
 
 #[skuld::test]
-fn question_mark_wildcard_in_path() {
-    let result = best_effort_canonicalize("/tmp/?/file");
-    let canonical_tmp = std::fs::canonicalize("/tmp")
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
-    assert_eq!(result, format!("{canonical_tmp}/?/file"));
+fn question_mark_wildcard_in_path(#[fixture(temp_dir)] dir: &Path) {
+    let base = canonical(dir.to_str().unwrap());
+    let input = format!("{}/?/file", dir.display());
+    let result = best_effort_canonicalize(&input);
+    assert_eq!(result, format!("{base}/?/file"));
 }
 
 #[skuld::test]
-fn bracket_wildcard_in_path() {
-    let result = best_effort_canonicalize("/tmp/[abc]/file");
-    let canonical_tmp = std::fs::canonicalize("/tmp")
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
-    assert_eq!(result, format!("{canonical_tmp}/[abc]/file"));
+fn bracket_wildcard_in_path(#[fixture(temp_dir)] dir: &Path) {
+    let base = canonical(dir.to_str().unwrap());
+    let input = format!("{}/[abc]/file", dir.display());
+    let result = best_effort_canonicalize(&input);
+    assert_eq!(result, format!("{base}/[abc]/file"));
 }
 
 #[skuld::test]
-fn brace_wildcard_in_path() {
-    let result = best_effort_canonicalize("/tmp/{a,b}/file");
-    let canonical_tmp = std::fs::canonicalize("/tmp")
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
-    assert_eq!(result, format!("{canonical_tmp}/{{a,b}}/file"));
+fn brace_wildcard_in_path(#[fixture(temp_dir)] dir: &Path) {
+    let base = canonical(dir.to_str().unwrap());
+    let input = format!("{}/{{a,b}}/file", dir.display());
+    let result = best_effort_canonicalize(&input);
+    assert_eq!(result, format!("{base}/{{a,b}}/file"));
 }
