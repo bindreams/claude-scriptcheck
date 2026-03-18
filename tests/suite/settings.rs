@@ -2,7 +2,8 @@ use claude_scriptcheck::settings::*;
 
 #[skuld::test]
 fn parse_settings_json() {
-    let json = r#"{"permissions": {"allow": ["Bash(ls)", "Read(~/src/**)"], "deny": ["Bash(rm *)"]}}"#;
+    let json =
+        r#"{"permissions": {"allow": ["Bash(ls)", "Read(~/src/**)"], "deny": ["Bash(rm *)"]}}"#;
     let settings: Settings = serde_json::from_str(json).unwrap();
     let perms = settings.permissions.unwrap();
     assert_eq!(perms.allow, vec!["Bash(ls)", "Read(~/src/**)"]);
@@ -91,7 +92,9 @@ fn merge_ask_from_multiple_files() {
 #[skuld::test]
 fn managed_only_discards_user_rules() {
     let perms = load_settings_from_contents(
-        Some(r#"{"permissions": {"allow": ["Bash(npm *)"], "deny": ["Bash(curl *)"], "ask": []}, "allowManagedPermissionRulesOnly": true}"#),
+        Some(
+            r#"{"permissions": {"allow": ["Bash(npm *)"], "deny": ["Bash(curl *)"], "ask": []}, "allowManagedPermissionRulesOnly": true}"#,
+        ),
         &[
             r#"{"permissions": {"allow": ["Bash(ls *)"], "deny": ["Bash(rm *)"], "ask": ["Bash(git *)"]}}"#,
         ],
@@ -106,9 +109,7 @@ fn managed_only_discards_user_rules() {
 fn managed_merged_when_flag_false() {
     let perms = load_settings_from_contents(
         Some(r#"{"permissions": {"allow": ["Bash(npm *)"], "deny": [], "ask": []}}"#),
-        &[
-            r#"{"permissions": {"allow": ["Bash(ls *)"], "deny": [], "ask": []}}"#,
-        ],
+        &[r#"{"permissions": {"allow": ["Bash(ls *)"], "deny": [], "ask": []}}"#],
     );
     assert_eq!(perms.allow, vec!["Bash(npm *)", "Bash(ls *)"]);
 }
@@ -117,9 +118,7 @@ fn managed_merged_when_flag_false() {
 fn managed_none_still_loads_user_rules() {
     let perms = load_settings_from_contents(
         None,
-        &[
-            r#"{"permissions": {"allow": ["Bash(ls *)"], "deny": [], "ask": []}}"#,
-        ],
+        &[r#"{"permissions": {"allow": ["Bash(ls *)"], "deny": [], "ask": []}}"#],
     );
     assert_eq!(perms.allow, vec!["Bash(ls *)"]);
 }
@@ -199,13 +198,16 @@ fn mixed_rules_resolved() {
         "Read(tests/**)".to_string(),
     ];
     resolve_rule_relative_paths(&mut rules, "/project", "/project");
-    assert_eq!(rules, vec![
-        "Bash(git *)",
-        "Read(/project/src/**)",
-        "Write(/project/tmp/**)",
-        "Edit(~/config/**)",
-        "Read(/project/tests/**)",
-    ]);
+    assert_eq!(
+        rules,
+        vec![
+            "Bash(git *)",
+            "Read(/project/src/**)",
+            "Write(/project/tmp/**)",
+            "Edit(~/config/**)",
+            "Read(/project/tests/**)",
+        ]
+    );
 }
 
 // ─── double-slash (absolute filesystem) paths ────────────────────────────────
@@ -259,22 +261,25 @@ fn single_slash_edit_project_root_relative() {
 #[skuld::test]
 fn cwd_differs_from_project_root() {
     let mut rules = vec![
-        "Read(src/**)".to_string(),     // bare → cwd-relative
-        "Read(/src/**)".to_string(),    // /path → project-root-relative
-        "Read(//etc/**)".to_string(),   // //path → absolute
-        "Read(~/docs/**)".to_string(),  // ~/path → home-relative
+        "Read(src/**)".to_string(),    // bare → cwd-relative
+        "Read(/src/**)".to_string(),   // /path → project-root-relative
+        "Read(//etc/**)".to_string(),  // //path → absolute
+        "Read(~/docs/**)".to_string(), // ~/path → home-relative
     ];
     resolve_rule_relative_paths(
         &mut rules,
-        "/home/user/project/subdir",  // cwd (cd'd into subdir)
-        "/home/user/project",         // project root
+        "/home/user/project/subdir", // cwd (cd'd into subdir)
+        "/home/user/project",        // project root
     );
-    assert_eq!(rules, vec![
-        "Read(/home/user/project/subdir/src/**)",  // resolved against cwd
-        "Read(/home/user/project/src/**)",          // resolved against project root
-        "Read(/etc/**)",                            // absolute
-        "Read(~/docs/**)",                          // tilde, untouched
-    ]);
+    assert_eq!(
+        rules,
+        vec![
+            "Read(/home/user/project/subdir/src/**)", // resolved against cwd
+            "Read(/home/user/project/src/**)",        // resolved against project root
+            "Read(/etc/**)",                          // absolute
+            "Read(~/docs/**)",                        // tilde, untouched
+        ]
+    );
 }
 
 // ─── all four tiers in one test ──────────────────────────────────────────────
@@ -282,23 +287,26 @@ fn cwd_differs_from_project_root() {
 #[skuld::test]
 fn mixed_rules_all_four_tiers() {
     let mut rules = vec![
-        "Read(//etc/passwd)".to_string(),   // absolute
-        "Read(~/src/**)".to_string(),        // home-relative
-        "Read(/src/**)".to_string(),         // project-root-relative
-        "Read(src/**)".to_string(),          // CWD-relative
-        "Write(./out/**)".to_string(),       // CWD-relative (dot form)
+        "Read(//etc/passwd)".to_string(), // absolute
+        "Read(~/src/**)".to_string(),     // home-relative
+        "Read(/src/**)".to_string(),      // project-root-relative
+        "Read(src/**)".to_string(),       // CWD-relative
+        "Write(./out/**)".to_string(),    // CWD-relative (dot form)
     ];
     resolve_rule_relative_paths(&mut rules, "/home/user/project", "/home/user/project");
-    assert_eq!(rules, vec![
-        "Read(/etc/passwd)",
-        "Read(~/src/**)",
-        "Read(/home/user/project/src/**)",
-        "Read(/home/user/project/src/**)",
-        "Write(/home/user/project/./out/**)",
-    ]);
+    assert_eq!(
+        rules,
+        vec![
+            "Read(/etc/passwd)",
+            "Read(~/src/**)",
+            "Read(/home/user/project/src/**)",
+            "Read(/home/user/project/src/**)",
+            "Write(/home/user/project/./out/**)",
+        ]
+    );
 }
 
-// Windows paths =====
+// Windows paths =======================================================================================================
 
 #[skuld::test]
 fn double_slash_windows_drive_letter() {

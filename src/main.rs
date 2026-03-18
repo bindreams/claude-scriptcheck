@@ -5,7 +5,10 @@ use clap::{Parser, Subcommand};
 use claude_scriptcheck::{checker, cli, hook, logging, path_util, permission, settings};
 
 #[derive(Parser)]
-#[command(name = "claude-scriptcheck", about = "AST-aware Bash permission checker for Claude Code hooks")]
+#[command(
+    name = "claude-scriptcheck",
+    about = "AST-aware Bash permission checker for Claude Code hooks"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,

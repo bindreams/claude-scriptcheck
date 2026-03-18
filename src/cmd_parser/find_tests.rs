@@ -8,20 +8,26 @@ fn r(paths: &[&str]) -> Vec<String> {
 
 #[skuld::test]
 fn find_single_path() {
-    let result = FindParser.parse(&["/tmp", "-name", "*.txt"], "/cwd").unwrap();
+    let result = FindParser
+        .parse(&["/tmp", "-name", "*.txt"], "/cwd")
+        .unwrap();
     assert_eq!(result.reads, r(&["/tmp"]));
     assert!(result.writes.is_empty());
 }
 
 #[skuld::test]
 fn find_multiple_paths() {
-    let result = FindParser.parse(&["/tmp", "/var", "-type", "f"], "/cwd").unwrap();
+    let result = FindParser
+        .parse(&["/tmp", "/var", "-type", "f"], "/cwd")
+        .unwrap();
     assert_eq!(result.reads, r(&["/tmp", "/var"]));
 }
 
 #[skuld::test]
 fn find_relative_path() {
-    let result = FindParser.parse(&[".", "-name", "*.rs"], "/home/user").unwrap();
+    let result = FindParser
+        .parse(&[".", "-name", "*.rs"], "/home/user")
+        .unwrap();
     assert_eq!(result.reads, r(&["/home/user/."]));
 }
 
@@ -33,22 +39,28 @@ fn find_no_path_expression_first() {
 
 #[skuld::test]
 fn find_with_negation() {
-    let result = FindParser.parse(&["/tmp", "!", "-name", "*.log"], "/cwd").unwrap();
+    let result = FindParser
+        .parse(&["/tmp", "!", "-name", "*.log"], "/cwd")
+        .unwrap();
     assert_eq!(result.reads, r(&["/tmp"]));
 }
 
 #[skuld::test]
 fn find_with_parens() {
-    let result = FindParser.parse(&["/tmp", "(", "-name", "*.txt", ")"], "/cwd").unwrap();
+    let result = FindParser
+        .parse(&["/tmp", "(", "-name", "*.txt", ")"], "/cwd")
+        .unwrap();
     assert_eq!(result.reads, r(&["/tmp"]));
 }
 
 #[skuld::test]
 fn find_exec() {
-    let result = FindParser.parse(
-        &["/tmp", "-name", "*.txt", "-exec", "rm", "{}", ";"],
-        "/cwd",
-    ).unwrap();
+    let result = FindParser
+        .parse(
+            &["/tmp", "-name", "*.txt", "-exec", "rm", "{}", ";"],
+            "/cwd",
+        )
+        .unwrap();
     assert_eq!(result.reads, r(&["/tmp"]));
 }
 
@@ -61,6 +73,8 @@ fn find_maxdepth_before_path() {
 
 #[skuld::test]
 fn find_newer_variant() {
-    let result = FindParser.parse(&["/tmp", "-newermt", "2023-01-01"], "/cwd").unwrap();
+    let result = FindParser
+        .parse(&["/tmp", "-newermt", "2023-01-01"], "/cwd")
+        .unwrap();
     assert_eq!(result.reads, r(&["/tmp"]));
 }

@@ -30,10 +30,7 @@ fn exact_no_extra_args() {
 #[skuld::test]
 fn wildcard_with_extra_args() {
     let rule = make_rule(&["git", "status"], true);
-    assert!(bash_rule_matches(
-        &rule,
-        &tokens(&["git", "status", "-s"])
-    ));
+    assert!(bash_rule_matches(&rule, &tokens(&["git", "status", "-s"])));
 }
 
 #[skuld::test]
@@ -96,7 +93,10 @@ fn too_short_command() {
 
 #[skuld::test]
 fn file_pattern_match() {
-    assert!(file_rule_matches("/tmp/claude/**", "/tmp/claude/foo/bar.txt"));
+    assert!(file_rule_matches(
+        "/tmp/claude/**",
+        "/tmp/claude/foo/bar.txt"
+    ));
 }
 
 #[skuld::test]
@@ -107,12 +107,18 @@ fn file_pattern_no_match() {
 #[skuld::test]
 fn file_pattern_backslash_in_rule_matches() {
     // User-authored rules may contain backslashes on Windows
-    assert!(file_rule_matches("C:\\Users\\foo\\**", "C:/Users/foo/bar.txt"));
+    assert!(file_rule_matches(
+        "C:\\Users\\foo\\**",
+        "C:/Users/foo/bar.txt"
+    ));
 }
 
 #[skuld::test]
 fn file_pattern_backslash_in_path_matches() {
-    assert!(file_rule_matches("C:/Users/foo/**", "C:\\Users\\foo\\bar.txt"));
+    assert!(file_rule_matches(
+        "C:/Users/foo/**",
+        "C:\\Users\\foo\\bar.txt"
+    ));
 }
 
 // ─── Glob matching: ** and * behavior ─────────────────────────────────────────
@@ -270,12 +276,18 @@ fn bare_edit_matches_any_path() {
 
 #[skuld::test]
 fn to_rule_string_exact() {
-    assert_eq!(make_rule(&["git", "status"], false).to_rule_string(), "Bash(git status)");
+    assert_eq!(
+        make_rule(&["git", "status"], false).to_rule_string(),
+        "Bash(git status)"
+    );
 }
 
 #[skuld::test]
 fn to_rule_string_wildcard() {
-    assert_eq!(make_rule(&["git", "status"], true).to_rule_string(), "Bash(git status *)");
+    assert_eq!(
+        make_rule(&["git", "status"], true).to_rule_string(),
+        "Bash(git status *)"
+    );
 }
 
 #[skuld::test]
@@ -360,7 +372,16 @@ fn doublestar_matches_multiple_tokens() {
     let rule = make_rule(&["curl", "**", "-X", "POST"], true);
     assert!(bash_rule_matches(
         &rule,
-        &tokens(&["curl", "-s", "-S", "-H", "Content-Type: application/json", "-X", "POST", "https://example.com"])
+        &tokens(&[
+            "curl",
+            "-s",
+            "-S",
+            "-H",
+            "Content-Type: application/json",
+            "-X",
+            "POST",
+            "https://example.com"
+        ])
     ));
 }
 

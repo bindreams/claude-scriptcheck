@@ -39,7 +39,9 @@ fn head_n_value_not_treated_as_file() {
 
 #[skuld::test]
 fn head_bytes_value_not_treated_as_file() {
-    let r = HeadParser.parse(&["-c", "100", "file.txt"], "/tmp").unwrap();
+    let r = HeadParser
+        .parse(&["-c", "100", "file.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
 }
 
@@ -135,7 +137,9 @@ fn wc_flags_are_boolean() {
 
 #[skuld::test]
 fn cut_field_value_not_treated_as_file() {
-    let r = CutParser.parse(&["-f", "1,2", "-d", ",", "data.csv"], "/tmp").unwrap();
+    let r = CutParser
+        .parse(&["-f", "1,2", "-d", ",", "data.csv"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/data.csv"]));
 }
 
@@ -157,13 +161,17 @@ fn tac_reads_files() {
 
 #[skuld::test]
 fn nl_value_flags_not_files() {
-    let r = NlParser.parse(&["-b", "a", "-w", "6", "file.txt"], "/tmp").unwrap();
+    let r = NlParser
+        .parse(&["-b", "a", "-w", "6", "file.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
 }
 
 #[skuld::test]
 fn paste_delim_not_file() {
-    let r = PasteParser.parse(&["-d", ",", "a.txt", "b.txt"], "/tmp").unwrap();
+    let r = PasteParser
+        .parse(&["-d", ",", "a.txt", "b.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/a.txt", "/tmp/b.txt"]));
 }
 
@@ -175,13 +183,17 @@ fn rev_reads_files() {
 
 #[skuld::test]
 fn expand_tabstop_not_file() {
-    let r = ExpandParser.parse(&["-t", "4", "file.txt"], "/tmp").unwrap();
+    let r = ExpandParser
+        .parse(&["-t", "4", "file.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
 }
 
 #[skuld::test]
 fn unexpand_tabstop_not_file() {
-    let r = UnexpandParser.parse(&["-t", "4", "file.txt"], "/tmp").unwrap();
+    let r = UnexpandParser
+        .parse(&["-t", "4", "file.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
 }
 
@@ -193,13 +205,17 @@ fn fold_width_not_file() {
 
 #[skuld::test]
 fn column_separator_not_file() {
-    let r = ColumnParser.parse(&["-s", ",", "-t", "data.csv"], "/tmp").unwrap();
+    let r = ColumnParser
+        .parse(&["-s", ",", "-t", "data.csv"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/data.csv"]));
 }
 
 #[skuld::test]
 fn od_skip_not_file() {
-    let r = OdParser.parse(&["-A", "x", "-t", "x1", "-j", "10", "file.bin"], "/tmp").unwrap();
+    let r = OdParser
+        .parse(&["-A", "x", "-t", "x1", "-j", "10", "file.bin"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/file.bin"]));
 }
 
@@ -249,7 +265,9 @@ fn lsof_reads_files() {
 
 #[skuld::test]
 fn lsof_value_flags_not_files() {
-    let r = LsofParser.parse(&["-p", "1234", "-i", ":8080"], "/tmp").unwrap();
+    let r = LsofParser
+        .parse(&["-p", "1234", "-i", ":8080"], "/tmp")
+        .unwrap();
     assert!(r.reads.is_empty());
 }
 
@@ -293,7 +311,9 @@ fn du_bsd_exclude_pattern() {
 #[skuld::test]
 fn du_gnu_exclude() {
     // GNU du --exclude=PATTERN
-    let r = DuParser.parse(&["--exclude", "*.o", "src/"], "/tmp").unwrap();
+    let r = DuParser
+        .parse(&["--exclude", "*.o", "src/"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/src/"]));
 }
 
@@ -302,19 +322,28 @@ fn du_gnu_exclude() {
 #[skuld::test]
 fn tar_bsd_extract_with_verbose() {
     // bsdtar style: tar -xvf archive.tar
-    let r = super::tar::TarParser.parse(
-        &["-xvf", "archive.tar"], "/tmp",
-    ).unwrap();
+    let r = super::tar::TarParser
+        .parse(&["-xvf", "archive.tar"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/archive.tar"]));
 }
 
 #[skuld::test]
 fn tar_gnu_long_flags() {
     // GNU tar with long flags
-    let r = super::tar::TarParser.parse(
-        &["--extract", "--verbose", "--file", "archive.tar", "--directory", "/dest"],
-        "/tmp",
-    ).unwrap();
+    let r = super::tar::TarParser
+        .parse(
+            &[
+                "--extract",
+                "--verbose",
+                "--file",
+                "archive.tar",
+                "--directory",
+                "/dest",
+            ],
+            "/tmp",
+        )
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/archive.tar"]));
     assert_eq!(r.writes, writes(&["/dest"]));
 }
@@ -322,9 +351,9 @@ fn tar_gnu_long_flags() {
 #[skuld::test]
 fn tar_gnu_gzip_flag() {
     // GNU tar -z (gzip compression) — should not fail
-    let r = super::tar::TarParser.parse(
-        &["-czf", "archive.tar.gz", "dir/"], "/tmp",
-    ).unwrap();
+    let r = super::tar::TarParser
+        .parse(&["-czf", "archive.tar.gz", "dir/"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/dir/"]));
     assert_eq!(r.writes, writes(&["/tmp/archive.tar.gz"]));
 }
@@ -332,9 +361,9 @@ fn tar_gnu_gzip_flag() {
 #[skuld::test]
 fn tar_gnu_xz_flag() {
     // GNU tar -J (xz compression)
-    let r = super::tar::TarParser.parse(
-        &["-cJf", "archive.tar.xz", "dir/"], "/tmp",
-    ).unwrap();
+    let r = super::tar::TarParser
+        .parse(&["-cJf", "archive.tar.xz", "dir/"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/dir/"]));
     assert_eq!(r.writes, writes(&["/tmp/archive.tar.xz"]));
 }
@@ -342,9 +371,9 @@ fn tar_gnu_xz_flag() {
 #[skuld::test]
 fn tar_gnu_bzip2_flag() {
     // GNU tar -j (bzip2 compression)
-    let r = super::tar::TarParser.parse(
-        &["-cjf", "archive.tar.bz2", "src/"], "/tmp",
-    ).unwrap();
+    let r = super::tar::TarParser
+        .parse(&["-cjf", "archive.tar.bz2", "src/"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/src/"]));
     assert_eq!(r.writes, writes(&["/tmp/archive.tar.bz2"]));
 }
@@ -390,14 +419,18 @@ fn base64_output_flag() {
 
 #[skuld::test]
 fn base64_both_flags() {
-    let r = Base64Parser.parse(&["-i", "in.bin", "-o", "out.txt"], "/tmp").unwrap();
+    let r = Base64Parser
+        .parse(&["-i", "in.bin", "-o", "out.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/in.bin"]));
     assert_eq!(r.writes, writes(&["/tmp/out.txt"]));
 }
 
 #[skuld::test]
 fn base64_long_flags() {
-    let r = Base64Parser.parse(&["--input", "in.bin", "--output", "out.txt"], "/tmp").unwrap();
+    let r = Base64Parser
+        .parse(&["--input", "in.bin", "--output", "out.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/in.bin"]));
     assert_eq!(r.writes, writes(&["/tmp/out.txt"]));
 }
@@ -457,7 +490,9 @@ fn b2sum_basic() {
 
 #[skuld::test]
 fn b2sum_with_length() {
-    let r = B2sumParser.parse(&["--length", "256", "file.txt"], "/tmp").unwrap();
+    let r = B2sumParser
+        .parse(&["--length", "256", "file.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
 }
 

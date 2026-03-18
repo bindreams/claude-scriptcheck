@@ -1,6 +1,6 @@
 use claude_scriptcheck::path_util::*;
 
-// is_absolute =====
+// is_absolute =========================================================================================================
 
 #[skuld::test]
 fn unix_absolute() {
@@ -43,7 +43,7 @@ fn bare_drive_letter_not_absolute() {
     assert!(!is_absolute("C:foo"));
 }
 
-// normalize_separators =====
+// normalize_separators ================================================================================================
 
 #[skuld::test]
 fn backslashes_to_forward() {

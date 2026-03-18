@@ -76,7 +76,12 @@ pub fn parse_rules(perms: &Permissions) -> ParsedPermissions {
 pub fn parse_single_rule(rule: &str, home: &str) -> Option<ParsedRule> {
     // Bare tool-level wildcards (no parentheses)
     match rule {
-        "Bash" => return Some(ParsedRule::Bash(BashRule { prefix_tokens: vec![], wildcard: true })),
+        "Bash" => {
+            return Some(ParsedRule::Bash(BashRule {
+                prefix_tokens: vec![],
+                wildcard: true,
+            }))
+        }
         "Read" => return Some(ParsedRule::Read("**".to_string())),
         "Write" => return Some(ParsedRule::Write("**".to_string())),
         "Edit" => return Some(ParsedRule::Edit("**".to_string())),
@@ -104,26 +109,38 @@ pub fn parse_single_rule(rule: &str, home: &str) -> Option<ParsedRule> {
         if tokens[0] == "readonly" {
             return None;
         }
-        let (prefix, wildcard) = if tokens.last().map(|s| s.as_str()) == Some("*") && tokens.len() > 1 {
-            (tokens[..tokens.len() - 1].to_vec(), true)
-        } else if tokens.len() == 1 && tokens[0] == "*" {
-            // Bash(*) — matches everything
-            (vec![], true)
-        } else {
-            (tokens, false)
-        };
+        let (prefix, wildcard) =
+            if tokens.last().map(|s| s.as_str()) == Some("*") && tokens.len() > 1 {
+                (tokens[..tokens.len() - 1].to_vec(), true)
+            } else if tokens.len() == 1 && tokens[0] == "*" {
+                // Bash(*) — matches everything
+                (vec![], true)
+            } else {
+                (tokens, false)
+            };
         Some(ParsedRule::Bash(BashRule {
             prefix_tokens: prefix,
             wildcard,
         }))
     } else if let Some(inner) = rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')')) {
-        Some(ParsedRule::Read(crate::canonicalize::best_effort_canonicalize(&inner.replace('~', home))))
-    } else if let Some(inner) = rule.strip_prefix("Write(").and_then(|s| s.strip_suffix(')')) {
-        Some(ParsedRule::Write(crate::canonicalize::best_effort_canonicalize(&inner.replace('~', home))))
-    } else if let Some(inner) = rule.strip_prefix("Edit(").and_then(|s| s.strip_suffix(')')) {
-        Some(ParsedRule::Edit(crate::canonicalize::best_effort_canonicalize(&inner.replace('~', home))))
+        Some(ParsedRule::Read(
+            crate::canonicalize::best_effort_canonicalize(&inner.replace('~', home)),
+        ))
+    } else if let Some(inner) = rule
+        .strip_prefix("Write(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        Some(ParsedRule::Write(
+            crate::canonicalize::best_effort_canonicalize(&inner.replace('~', home)),
+        ))
     } else {
-        None
+        rule.strip_prefix("Edit(")
+            .and_then(|s| s.strip_suffix(')'))
+            .map(|inner| {
+                ParsedRule::Edit(crate::canonicalize::best_effort_canonicalize(
+                    &inner.replace('~', home),
+                ))
+            })
     }
 }
 
@@ -148,7 +165,11 @@ pub fn bash_rule_matches(rule: &BashRule, cmd_tokens: &[String]) -> bool {
 /// Recursive token matcher that supports `**` (matches zero or more tokens).
 fn match_tokens(rule_tokens: &[String], cmd_tokens: &[String], wildcard: bool) -> bool {
     if rule_tokens.is_empty() {
-        return if wildcard { true } else { cmd_tokens.is_empty() };
+        return if wildcard {
+            true
+        } else {
+            cmd_tokens.is_empty()
+        };
     }
     if rule_tokens[0] == "**" {
         // ** matches 0 or more command tokens

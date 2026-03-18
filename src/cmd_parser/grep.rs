@@ -268,10 +268,34 @@ impl CommandParser for JqParser {
             .arg(flag_l("raw-output0"))
             // Value flags
             .arg(val_l("indent"))
-            .arg(clap::Arg::new("arg".to_string()).long("arg".to_string()).num_args(2).action(ArgAction::Append).required(false))
-            .arg(clap::Arg::new("argjson".to_string()).long("argjson".to_string()).num_args(2).action(ArgAction::Append).required(false))
-            .arg(clap::Arg::new("slurpfile".to_string()).long("slurpfile".to_string()).num_args(2).action(ArgAction::Append).required(false))
-            .arg(clap::Arg::new("rawfile".to_string()).long("rawfile".to_string()).num_args(2).action(ArgAction::Append).required(false))
+            .arg(
+                clap::Arg::new("arg".to_string())
+                    .long("arg".to_string())
+                    .num_args(2)
+                    .action(ArgAction::Append)
+                    .required(false),
+            )
+            .arg(
+                clap::Arg::new("argjson".to_string())
+                    .long("argjson".to_string())
+                    .num_args(2)
+                    .action(ArgAction::Append)
+                    .required(false),
+            )
+            .arg(
+                clap::Arg::new("slurpfile".to_string())
+                    .long("slurpfile".to_string())
+                    .num_args(2)
+                    .action(ArgAction::Append)
+                    .required(false),
+            )
+            .arg(
+                clap::Arg::new("rawfile".to_string())
+                    .long("rawfile".to_string())
+                    .num_args(2)
+                    .action(ArgAction::Append)
+                    .required(false),
+            )
             .arg(val_l("from-file"))
             .arg(val('L', "library-path"))
             .arg(files_arg())
@@ -282,7 +306,7 @@ impl CommandParser for JqParser {
 
         // --slurpfile NAME FILE and --rawfile NAME FILE → FILE (2nd value) is a read
         for flag_name in &["slurpfile", "rawfile"] {
-            if let Some(vals) = matches.get_many::<String>(*flag_name) {
+            if let Some(vals) = matches.get_many::<String>(flag_name) {
                 let vals: Vec<&String> = vals.collect();
                 // Values come in pairs: [name, file, name, file, ...]
                 for chunk in vals.chunks(2) {

@@ -11,7 +11,9 @@ fn detect_git_source() {
     });
     assert_eq!(
         parse_install_source(&json, "claude-scriptcheck"),
-        Some(InstallSource::Git("https://github.com/bindreams/claude-scriptcheck.git".into()))
+        Some(InstallSource::Git(
+            "https://github.com/bindreams/claude-scriptcheck.git".into()
+        ))
     );
 }
 
@@ -41,7 +43,9 @@ fn detect_path_source() {
     });
     assert_eq!(
         parse_install_source(&json, "claude-scriptcheck"),
-        Some(InstallSource::Path("/home/user/src/claude-scriptcheck".into()))
+        Some(InstallSource::Path(
+            "/home/user/src/claude-scriptcheck".into()
+        ))
     );
 }
 
@@ -86,7 +90,9 @@ fn detect_path_source_windows() {
     });
     assert_eq!(
         parse_install_source(&json, "claude-scriptcheck"),
-        Some(InstallSource::Path("C:/Users/dev/claude-scriptcheck".into()))
+        Some(InstallSource::Path(
+            "C:/Users/dev/claude-scriptcheck".into()
+        ))
     );
 }
 
@@ -101,6 +107,8 @@ fn git_source_without_commit_hash() {
     });
     assert_eq!(
         parse_install_source(&json, "claude-scriptcheck"),
-        Some(InstallSource::Git("https://github.com/bindreams/claude-scriptcheck.git".into()))
+        Some(InstallSource::Git(
+            "https://github.com/bindreams/claude-scriptcheck.git".into()
+        ))
     );
 }

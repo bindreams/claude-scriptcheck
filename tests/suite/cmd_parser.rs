@@ -28,10 +28,7 @@ fn no_file_access_command_returns_empty() {
 #[skuld::test]
 fn sentinel_filtered_from_reads() {
     let cfa = CommandFileAccesses {
-        reads: vec![
-            "/tmp/real.txt".into(),
-            format!("/tmp/{SENTINEL}"),
-        ],
+        reads: vec!["/tmp/real.txt".into(), format!("/tmp/{SENTINEL}")],
         writes: vec![],
         inline_script_start: None,
     };
@@ -43,10 +40,7 @@ fn sentinel_filtered_from_reads() {
 fn sentinel_filtered_from_writes() {
     let cfa = CommandFileAccesses {
         reads: vec![],
-        writes: vec![
-            "/tmp/real.txt".into(),
-            format!("/tmp/{SENTINEL}"),
-        ],
+        writes: vec!["/tmp/real.txt".into(), format!("/tmp/{SENTINEL}")],
         inline_script_start: None,
     };
     let filtered = cfa.filter_sentinel(SENTINEL);
@@ -55,11 +49,7 @@ fn sentinel_filtered_from_writes() {
 
 #[skuld::test]
 fn dynamic_arg_filtered_via_sentinel() {
-    let result = parse_file_accesses(
-        "cp",
-        &[None, Some("dest.txt".into())],
-        "/tmp",
-    );
+    let result = parse_file_accesses("cp", &[None, Some("dest.txt".into())], "/tmp");
     match result {
         CmdParseResult::Parsed(cfa) => {
             assert!(cfa.reads.is_empty(), "sentinel read should be filtered");

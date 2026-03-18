@@ -31,13 +31,17 @@ fn tee_writes_files() {
 
 #[skuld::test]
 fn truncate_writes_files() {
-    let r = TruncateParser.parse(&["-s", "0", "file.txt"], "/tmp").unwrap();
+    let r = TruncateParser
+        .parse(&["-s", "0", "file.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.writes, writes(&["/tmp/file.txt"]));
 }
 
 #[skuld::test]
 fn truncate_size_not_file() {
-    let r = TruncateParser.parse(&["--size", "1M", "a.bin", "b.bin"], "/tmp").unwrap();
+    let r = TruncateParser
+        .parse(&["--size", "1M", "a.bin", "b.bin"], "/tmp")
+        .unwrap();
     assert_eq!(r.writes, writes(&["/tmp/a.bin", "/tmp/b.bin"]));
 }
 

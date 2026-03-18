@@ -89,11 +89,15 @@ impl CommandParser for TarParser {
                         "diff" | "compare" => mode = TarMode::Diff,
                         "file" => {
                             i += 1;
-                            if i < args.len() { archive = Some(args[i]); }
+                            if i < args.len() {
+                                archive = Some(args[i]);
+                            }
                         }
                         "directory" => {
                             i += 1;
-                            if i < args.len() { change_dir = Some(args[i]); }
+                            if i < args.len() {
+                                change_dir = Some(args[i]);
+                            }
                         }
                         // Other long flags — skip (no value consumption needed for
                         // flags like --verbose, --gzip, --bzip2, etc.)
@@ -123,7 +127,9 @@ impl CommandParser for TarParser {
                                 archive = Some(Box::leak(rest.into_boxed_str()));
                             } else {
                                 i += 1;
-                                if i < args.len() { archive = Some(args[i]); }
+                                if i < args.len() {
+                                    archive = Some(args[i]);
+                                }
                             }
                             break;
                         }
@@ -133,7 +139,9 @@ impl CommandParser for TarParser {
                                 change_dir = Some(Box::leak(rest.into_boxed_str()));
                             } else {
                                 i += 1;
-                                if i < args.len() { change_dir = Some(args[i]); }
+                                if i < args.len() {
+                                    change_dir = Some(args[i]);
+                                }
                             }
                             break;
                         }
@@ -180,6 +188,10 @@ impl CommandParser for TarParser {
             }
         }
 
-        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
+        Ok(CommandFileAccesses {
+            reads,
+            writes,
+            inline_script_start: None,
+        })
     }
 }

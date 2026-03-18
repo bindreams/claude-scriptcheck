@@ -42,10 +42,7 @@ fn strip_legacy_normal_flags_unchanged() {
 
 #[skuld::test]
 fn strip_legacy_bare_dash_unchanged() {
-    assert_eq!(
-        strip_legacy_numeric(&["-"], false),
-        vec!["-"],
-    );
+    assert_eq!(strip_legacy_numeric(&["-"], false), vec!["-"],);
 }
 
 #[skuld::test]

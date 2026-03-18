@@ -12,7 +12,9 @@ fn writes(paths: &[&str]) -> Vec<String> {
 
 #[skuld::test]
 fn curl_o_writes() {
-    let r = CurlParser.parse(&["-o", "out.html", "https://example.com"], "/tmp").unwrap();
+    let r = CurlParser
+        .parse(&["-o", "out.html", "https://example.com"], "/tmp")
+        .unwrap();
     assert_eq!(r.writes, writes(&["/tmp/out.html"]));
 }
 
@@ -25,20 +27,26 @@ fn curl_no_file_access() {
 
 #[skuld::test]
 fn curl_cookie_jar_writes() {
-    let r = CurlParser.parse(&["-c", "cookies.txt", "https://example.com"], "/tmp").unwrap();
+    let r = CurlParser
+        .parse(&["-c", "cookies.txt", "https://example.com"], "/tmp")
+        .unwrap();
     assert_eq!(r.writes, writes(&["/tmp/cookies.txt"]));
 }
 
 #[skuld::test]
 fn curl_dump_header_writes() {
-    let r = CurlParser.parse(&["-D", "headers.txt", "https://example.com"], "/tmp").unwrap();
+    let r = CurlParser
+        .parse(&["-D", "headers.txt", "https://example.com"], "/tmp")
+        .unwrap();
     assert_eq!(r.writes, writes(&["/tmp/headers.txt"]));
 }
 
 #[skuld::test]
 #[allow(non_snake_case)]
 fn wget_O_writes() {
-    let r = WgetParser.parse(&["-O", "out.html", "https://example.com"], "/tmp").unwrap();
+    let r = WgetParser
+        .parse(&["-O", "out.html", "https://example.com"], "/tmp")
+        .unwrap();
     assert_eq!(r.writes, writes(&["/tmp/out.html"]));
 }
 

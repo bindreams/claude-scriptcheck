@@ -105,11 +105,7 @@ fn empty_command_allows() {
 
 #[skuld::test]
 fn and_chain() {
-    let d = check(
-        "echo a && echo b",
-        &["Bash(echo *)", "Bash(echo)"],
-        &[],
-    );
+    let d = check("echo a && echo b", &["Bash(echo *)", "Bash(echo)"], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
@@ -137,11 +133,7 @@ fn compound_if() {
 
 #[skuld::test]
 fn compound_for() {
-    let d = check(
-        "for f in a b; do echo $f; done",
-        &["Bash(echo *)"],
-        &[],
-    );
+    let d = check("for f in a b; do echo $f; done", &["Bash(echo *)"], &[]);
     assert_eq!(d, Decision::Allow);
 }
 
@@ -482,7 +474,9 @@ fn python_script_file_logs_normal_rule() {
     let d = check("python3 script.py", &[], &[]);
     if let Decision::Ask(ref rules) = d {
         assert!(
-            rules.iter().any(|r| r == "Bash(python3 script.py)" || r == "Read(/tmp/script.py)"),
+            rules
+                .iter()
+                .any(|r| r == "Bash(python3 script.py)" || r == "Read(/tmp/script.py)"),
             "expected normal rule tokens, got {rules:?}",
         );
     } else {
@@ -645,7 +639,10 @@ fn dotdot_query_path_matches_clean_rule() {
 fn rule_with_dotdot_matches_normalized_query() {
     let d = check(
         "cat /tmp/file.txt",
-        &[&format!("Read({}/nonexistent/../**)", c("/tmp")), "Bash(cat *)"],
+        &[
+            &format!("Read({}/nonexistent/../**)", c("/tmp")),
+            "Bash(cat *)",
+        ],
         &[],
     );
     assert_eq!(d, Decision::Allow);

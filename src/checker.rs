@@ -138,8 +138,7 @@ impl PermissionChecker<'_> {
             Some(name) => name.clone(),
             None => {
                 // Dynamic command name — can't determine identity
-                self.unmatched
-                    .push("Bash(<dynamic command>)".to_string());
+                self.unmatched.push("Bash(<dynamic command>)".to_string());
                 // Still check redirects
                 for redirect in &cmd.redirects {
                     if let Some(access) = extract_redirect_access(redirect, self.cwd) {
@@ -185,17 +184,13 @@ impl PermissionChecker<'_> {
 
         // Check against Bash() allow rules (skip if ask matched)
         let bash_allowed = !bash_asked
-            && self
-                .perms
-                .allow_bash
-                .iter()
-                .any(|rule| {
-                    let matched = permission::bash_rule_matches(rule, &cmd_tokens);
-                    if matched {
-                        self.matched_allow.push(rule.to_rule_string());
-                    }
-                    matched
-                });
+            && self.perms.allow_bash.iter().any(|rule| {
+                let matched = permission::bash_rule_matches(rule, &cmd_tokens);
+                if matched {
+                    self.matched_allow.push(rule.to_rule_string());
+                }
+                matched
+            });
 
         // Extract file accesses from redirects
         let redirect_accesses = extract_redirect_accesses(&cmd.redirects, self.cwd);
@@ -279,18 +274,25 @@ impl PermissionChecker<'_> {
 
         // Check deny first
         let deny_matched = match access.kind {
-            AccessKind::Read => {
-                self.perms.deny_read.iter().find(|pat| permission::file_rule_matches(pat, &path))
-                    .map(|pat| format!("Read({pat})"))
-            }
-            AccessKind::Write => {
-                self.perms.deny_write.iter().find(|pat| permission::file_rule_matches(pat, &path))
-                    .map(|pat| format!("Write({pat})"))
-                    .or_else(|| {
-                        self.perms.deny_edit.iter().find(|pat| permission::file_rule_matches(pat, &path))
-                            .map(|pat| format!("Edit({pat})"))
-                    })
-            }
+            AccessKind::Read => self
+                .perms
+                .deny_read
+                .iter()
+                .find(|pat| permission::file_rule_matches(pat, &path))
+                .map(|pat| format!("Read({pat})")),
+            AccessKind::Write => self
+                .perms
+                .deny_write
+                .iter()
+                .find(|pat| permission::file_rule_matches(pat, &path))
+                .map(|pat| format!("Write({pat})"))
+                .or_else(|| {
+                    self.perms
+                        .deny_edit
+                        .iter()
+                        .find(|pat| permission::file_rule_matches(pat, &path))
+                        .map(|pat| format!("Edit({pat})"))
+                }),
         };
         if let Some(rule_str) = deny_matched {
             self.matched_deny.push(rule_str);
@@ -303,12 +305,21 @@ impl PermissionChecker<'_> {
 
         // Check ask rules — force ask even if allowed
         let ask_matched = match access.kind {
-            AccessKind::Read => {
-                self.perms.ask_read.iter().any(|pat| permission::file_rule_matches(pat, &path))
-            }
+            AccessKind::Read => self
+                .perms
+                .ask_read
+                .iter()
+                .any(|pat| permission::file_rule_matches(pat, &path)),
             AccessKind::Write => {
-                self.perms.ask_write.iter().any(|pat| permission::file_rule_matches(pat, &path))
-                    || self.perms.ask_edit.iter().any(|pat| permission::file_rule_matches(pat, &path))
+                self.perms
+                    .ask_write
+                    .iter()
+                    .any(|pat| permission::file_rule_matches(pat, &path))
+                    || self
+                        .perms
+                        .ask_edit
+                        .iter()
+                        .any(|pat| permission::file_rule_matches(pat, &path))
             }
         };
         if ask_matched {
@@ -322,18 +333,25 @@ impl PermissionChecker<'_> {
 
         // Check allow
         let allow_matched = match access.kind {
-            AccessKind::Read => {
-                self.perms.allow_read.iter().find(|pat| permission::file_rule_matches(pat, &path))
-                    .map(|pat| format!("Read({pat})"))
-            }
-            AccessKind::Write => {
-                self.perms.allow_write.iter().find(|pat| permission::file_rule_matches(pat, &path))
-                    .map(|pat| format!("Write({pat})"))
-                    .or_else(|| {
-                        self.perms.allow_edit.iter().find(|pat| permission::file_rule_matches(pat, &path))
-                            .map(|pat| format!("Edit({pat})"))
-                    })
-            }
+            AccessKind::Read => self
+                .perms
+                .allow_read
+                .iter()
+                .find(|pat| permission::file_rule_matches(pat, &path))
+                .map(|pat| format!("Read({pat})")),
+            AccessKind::Write => self
+                .perms
+                .allow_write
+                .iter()
+                .find(|pat| permission::file_rule_matches(pat, &path))
+                .map(|pat| format!("Write({pat})"))
+                .or_else(|| {
+                    self.perms
+                        .allow_edit
+                        .iter()
+                        .find(|pat| permission::file_rule_matches(pat, &path))
+                        .map(|pat| format!("Edit({pat})"))
+                }),
         };
         if let Some(rule_str) = allow_matched {
             self.matched_allow.push(rule_str);

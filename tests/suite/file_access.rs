@@ -35,7 +35,7 @@ fn non_file_commands_not_file_only() {
     assert!(!is_file_only_command("curl"));
 }
 
-// Windows paths =====
+// Windows paths =======================================================================================================
 
 #[skuld::test]
 fn resolve_windows_drive_letter_absolute() {

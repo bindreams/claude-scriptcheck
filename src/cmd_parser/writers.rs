@@ -24,7 +24,9 @@ impl CommandParser for RmParser {
                 .arg(bool_s('W')) // undelete
                 .arg(bool_s('x')) // don't cross mount points (BSD)
                 .arg(files_arg()),
-            args, cwd, extract_positional_writes,
+            args,
+            cwd,
+            extract_positional_writes,
         )
     }
 }
@@ -38,7 +40,9 @@ impl CommandParser for RmdirParser {
                 .arg(flag('v', "verbose"))
                 .arg(flag_l("ignore-fail-on-non-empty"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_writes,
+            args,
+            cwd,
+            extract_positional_writes,
         )
     }
 }
@@ -52,7 +56,9 @@ impl CommandParser for TeeParser {
                 .arg(flag('i', "ignore-interrupts"))
                 .arg(flag('p', "output-error"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_writes,
+            args,
+            cwd,
+            extract_positional_writes,
         )
     }
 }
@@ -67,7 +73,9 @@ impl CommandParser for TruncateParser {
                 .arg(flag('c', "no-create"))
                 .arg(flag('o', "io-blocks"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_writes,
+            args,
+            cwd,
+            extract_positional_writes,
         )
     }
 }

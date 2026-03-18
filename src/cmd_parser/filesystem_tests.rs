@@ -19,7 +19,9 @@ fn cp_basic() {
 
 #[skuld::test]
 fn cp_with_t_flag() {
-    let r = CpParser.parse(&["-t", "/dest", "src1.txt", "src2.txt"], "/tmp").unwrap();
+    let r = CpParser
+        .parse(&["-t", "/dest", "src1.txt", "src2.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/src1.txt", "/tmp/src2.txt"]));
     assert_eq!(r.writes, writes(&["/dest"]));
 }
@@ -42,7 +44,9 @@ fn mv_basic() {
 
 #[skuld::test]
 fn mv_with_t_flag() {
-    let r = MvParser.parse(&["-t", "/dest", "file1", "file2"], "/tmp").unwrap();
+    let r = MvParser
+        .parse(&["-t", "/dest", "file1", "file2"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/file1", "/tmp/file2"]));
     assert_eq!(r.writes, writes(&["/dest"]));
 }
@@ -67,21 +71,27 @@ fn install_basic() {
 
 #[skuld::test]
 fn install_d_flag() {
-    let r = InstallParser.parse(&["-d", "dir1", "dir2"], "/tmp").unwrap();
+    let r = InstallParser
+        .parse(&["-d", "dir1", "dir2"], "/tmp")
+        .unwrap();
     assert!(r.reads.is_empty());
     assert_eq!(r.writes, writes(&["/tmp/dir1", "/tmp/dir2"]));
 }
 
 #[skuld::test]
 fn install_t_flag() {
-    let r = InstallParser.parse(&["-t", "/dest", "src1", "src2"], "/tmp").unwrap();
+    let r = InstallParser
+        .parse(&["-t", "/dest", "src1", "src2"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/src1", "/tmp/src2"]));
     assert_eq!(r.writes, writes(&["/dest"]));
 }
 
 #[skuld::test]
 fn install_mode_value_not_file() {
-    let r = InstallParser.parse(&["-m", "755", "src", "dest"], "/tmp").unwrap();
+    let r = InstallParser
+        .parse(&["-m", "755", "src", "dest"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/src"]));
     assert_eq!(r.writes, writes(&["/tmp/dest"]));
 }
@@ -116,7 +126,9 @@ fn touch_basic() {
 
 #[skuld::test]
 fn touch_t_value_not_file() {
-    let r = TouchParser.parse(&["-t", "202301010000", "file.txt"], "/tmp").unwrap();
+    let r = TouchParser
+        .parse(&["-t", "202301010000", "file.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.writes, writes(&["/tmp/file.txt"]));
 }
 
@@ -130,7 +142,9 @@ fn diff_two_files() {
 
 #[skuld::test]
 fn diff_u_value_not_file() {
-    let r = DiffParser.parse(&["-U", "3", "a.txt", "b.txt"], "/tmp").unwrap();
+    let r = DiffParser
+        .parse(&["-U", "3", "a.txt", "b.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/a.txt", "/tmp/b.txt"]));
 }
 
@@ -145,14 +159,18 @@ fn sort_basic() {
 
 #[skuld::test]
 fn sort_o_is_write() {
-    let r = SortParser.parse(&["-o", "out.txt", "in.txt"], "/tmp").unwrap();
+    let r = SortParser
+        .parse(&["-o", "out.txt", "in.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/in.txt"]));
     assert_eq!(r.writes, writes(&["/tmp/out.txt"]));
 }
 
 #[skuld::test]
 fn sort_k_value_not_file() {
-    let r = SortParser.parse(&["-k", "2", "-t", ",", "data.csv"], "/tmp").unwrap();
+    let r = SortParser
+        .parse(&["-k", "2", "-t", ",", "data.csv"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/data.csv"]));
 }
 
@@ -167,7 +185,9 @@ fn uniq_input_only() {
 
 #[skuld::test]
 fn uniq_input_and_output() {
-    let r = UniqParser.parse(&["input.txt", "output.txt"], "/tmp").unwrap();
+    let r = UniqParser
+        .parse(&["input.txt", "output.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/input.txt"]));
     assert_eq!(r.writes, writes(&["/tmp/output.txt"]));
 }
@@ -194,7 +214,9 @@ fn chmod_recursive() {
 
 #[skuld::test]
 fn chown_owner_then_files() {
-    let r = ChownParser.parse(&["root:root", "file.txt"], "/tmp").unwrap();
+    let r = ChownParser
+        .parse(&["root:root", "file.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.writes, writes(&["/tmp/file.txt"]));
 }
 
@@ -214,7 +236,9 @@ fn source_reads_file() {
 
 #[skuld::test]
 fn source_ignores_script_args() {
-    let r = SourceParser.parse(&["script.sh", "arg1", "arg2"], "/tmp").unwrap();
+    let r = SourceParser
+        .parse(&["script.sh", "arg1", "arg2"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/script.sh"]));
 }
 
@@ -235,21 +259,37 @@ fn cp_selinux_z_flag() {
 
 #[skuld::test]
 fn cp_selinux_context_flag() {
-    let r = CpParser.parse(&["--context=system_u:object_r:tmp_t", "a.txt", "b.txt"], "/tmp").unwrap();
+    let r = CpParser
+        .parse(
+            &["--context=system_u:object_r:tmp_t", "a.txt", "b.txt"],
+            "/tmp",
+        )
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/a.txt"]));
     assert_eq!(r.writes, writes(&["/tmp/b.txt"]));
 }
 
 #[skuld::test]
 fn mv_selinux_z_flag() {
-    let r = MvParser.parse(&["-Z", "old.txt", "new.txt"], "/tmp").unwrap();
+    let r = MvParser
+        .parse(&["-Z", "old.txt", "new.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/old.txt"]));
     assert_eq!(r.writes, writes(&["/tmp/new.txt"]));
 }
 
 #[skuld::test]
 fn mv_selinux_context_flag() {
-    let r = MvParser.parse(&["--context=unconfined_u:object_r:user_home_t", "a.txt", "b.txt"], "/tmp").unwrap();
+    let r = MvParser
+        .parse(
+            &[
+                "--context=unconfined_u:object_r:user_home_t",
+                "a.txt",
+                "b.txt",
+            ],
+            "/tmp",
+        )
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/a.txt"]));
     assert_eq!(r.writes, writes(&["/tmp/b.txt"]));
 }
@@ -262,7 +302,9 @@ fn mkdir_selinux_z_flag() {
 
 #[skuld::test]
 fn mkdir_selinux_context_flag() {
-    let r = MkdirParser.parse(&["--context=system_u:object_r:tmp_t", "newdir"], "/tmp").unwrap();
+    let r = MkdirParser
+        .parse(&["--context=system_u:object_r:tmp_t", "newdir"], "/tmp")
+        .unwrap();
     assert_eq!(r.writes, writes(&["/tmp/newdir"]));
 }
 
@@ -275,7 +317,18 @@ fn install_selinux_z_flag() {
 
 #[skuld::test]
 fn install_selinux_context_flag() {
-    let r = InstallParser.parse(&["--context=system_u:object_r:bin_t", "-m", "755", "src", "dest"], "/tmp").unwrap();
+    let r = InstallParser
+        .parse(
+            &[
+                "--context=system_u:object_r:bin_t",
+                "-m",
+                "755",
+                "src",
+                "dest",
+            ],
+            "/tmp",
+        )
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/src"]));
     assert_eq!(r.writes, writes(&["/tmp/dest"]));
 }
@@ -296,9 +349,9 @@ fn cp_bsd_clone_flag() {
 fn sed_bsd_inplace_empty_suffix() {
     // macOS sed requires: sed -i '' 's/foo/bar/' file
     // The '' is the explicit empty suffix, followed by the script
-    let r = super::sed::SedParser.parse(
-        &["-i", "s/foo/bar/", "file.txt"], "/tmp",
-    ).unwrap();
+    let r = super::sed::SedParser
+        .parse(&["-i", "s/foo/bar/", "file.txt"], "/tmp")
+        .unwrap();
     // -i is detected, s/foo/bar/ is the script (first non-flag positional), file.txt is the target
     assert_eq!(r.writes, writes(&["/tmp/file.txt"]));
 }
@@ -306,9 +359,9 @@ fn sed_bsd_inplace_empty_suffix() {
 #[skuld::test]
 fn sed_gnu_extended_regexp() {
     // GNU sed -E (extended regex)
-    let r = super::sed::SedParser.parse(
-        &["-E", "s/foo+/bar/", "file.txt"], "/tmp",
-    ).unwrap();
+    let r = super::sed::SedParser
+        .parse(&["-E", "s/foo+/bar/", "file.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/file.txt"]));
 }
 
@@ -317,14 +370,18 @@ fn sed_gnu_extended_regexp() {
 #[skuld::test]
 fn sort_gnu_parallel() {
     // GNU sort --parallel (not on BSD)
-    let r = SortParser.parse(&["--parallel", "4", "data.txt"], "/tmp").unwrap();
+    let r = SortParser
+        .parse(&["--parallel", "4", "data.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/data.txt"]));
 }
 
 #[skuld::test]
 fn sort_gnu_compress_program() {
     // GNU sort --compress-program (not on BSD)
-    let r = SortParser.parse(&["--compress-program", "gzip", "data.txt"], "/tmp").unwrap();
+    let r = SortParser
+        .parse(&["--compress-program", "gzip", "data.txt"], "/tmp")
+        .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/data.txt"]));
 }
 
@@ -340,7 +397,9 @@ fn chmod_bsd_silent() {
 #[skuld::test]
 fn chown_bsd_no_dereference() {
     // BSD chown -h (don't follow symlinks)
-    let r = ChownParser.parse(&["-h", "root:wheel", "link"], "/tmp").unwrap();
+    let r = ChownParser
+        .parse(&["-h", "root:wheel", "link"], "/tmp")
+        .unwrap();
     assert_eq!(r.writes, writes(&["/tmp/link"]));
 }
 

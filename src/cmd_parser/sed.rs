@@ -78,11 +78,25 @@ impl CommandParser for SedParser {
             }
 
             // Known boolean flags
-            if matches!(arg, "-n" | "-E" | "-r" | "-l" | "-u" | "-z" | "-s"
-                | "--quiet" | "--silent" | "--regexp-extended" | "--posix"
-                | "--sandbox" | "--separate" | "--follow-symlinks"
-                | "--null-data" | "--unbuffered" | "--debug")
-            {
+            if matches!(
+                arg,
+                "-n" | "-E"
+                    | "-r"
+                    | "-l"
+                    | "-u"
+                    | "-z"
+                    | "-s"
+                    | "--quiet"
+                    | "--silent"
+                    | "--regexp-extended"
+                    | "--posix"
+                    | "--sandbox"
+                    | "--separate"
+                    | "--follow-symlinks"
+                    | "--null-data"
+                    | "--unbuffered"
+                    | "--debug"
+            ) {
                 i += 1;
                 continue;
             }
@@ -171,6 +185,10 @@ impl CommandParser for SedParser {
             }
         }
 
-        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
+        Ok(CommandFileAccesses {
+            reads,
+            writes,
+            inline_script_start: None,
+        })
     }
 }

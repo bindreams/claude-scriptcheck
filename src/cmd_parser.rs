@@ -1,16 +1,16 @@
-mod helpers;
-mod readers;
-mod writers;
-mod grep;
-mod filesystem;
-mod compression;
-mod network;
 mod archive;
+mod compression;
+mod dd;
+mod filesystem;
 mod find;
+mod grep;
+mod helpers;
+mod network;
+mod readers;
+mod script_runners;
 mod sed;
 mod tar;
-mod dd;
-mod script_runners;
+mod writers;
 
 use crate::file_access;
 
@@ -68,11 +68,7 @@ pub const SENTINEL: &str = "__CLAUDE_DYNAMIC__";
 /// `cmd_name` — the command name (e.g. "grep").
 /// `args` — arguments after the command name. `None` = dynamic/unresolvable.
 /// `cwd` — working directory for resolving relative paths.
-pub fn parse_file_accesses(
-    cmd_name: &str,
-    args: &[Option<String>],
-    cwd: &str,
-) -> CmdParseResult {
+pub fn parse_file_accesses(cmd_name: &str, args: &[Option<String>], cwd: &str) -> CmdParseResult {
     let parser = match get_parser(cmd_name) {
         Some(p) => p,
         None => return CmdParseResult::Parsed(CommandFileAccesses::empty()),
@@ -97,18 +93,18 @@ pub fn parse_file_accesses(
 /// Look up the parser for a known command.
 /// Returns `None` for unknown commands and commands with no file access.
 pub fn get_parser(cmd_name: &str) -> Option<&'static dyn CommandParser> {
-    use readers::*;
-    use writers::*;
-    use grep::*;
-    use filesystem::*;
-    use compression::*;
-    use network::*;
     use archive::*;
+    use compression::*;
+    use dd::*;
+    use filesystem::*;
     use find::*;
+    use grep::*;
+    use network::*;
+    use readers::*;
+    use script_runners::*;
     use sed::*;
     use tar::*;
-    use dd::*;
-    use script_runners::*;
+    use writers::*;
 
     match cmd_name {
         // Simple readers
@@ -242,16 +238,16 @@ pub fn resolve(path: &str, cwd: &str) -> String {
     file_access::resolve_path(path, cwd)
 }
 
-mod helpers_tests;
-mod readers_tests;
-mod writers_tests;
-mod grep_tests;
-mod filesystem_tests;
-mod compression_tests;
-mod network_tests;
 mod archive_tests;
+mod compression_tests;
+mod dd_tests;
+mod filesystem_tests;
 mod find_tests;
+mod grep_tests;
+mod helpers_tests;
+mod network_tests;
+mod readers_tests;
+mod script_runners_tests;
 mod sed_tests;
 mod tar_tests;
-mod dd_tests;
-mod script_runners_tests;
+mod writers_tests;

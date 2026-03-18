@@ -7,7 +7,7 @@ Bash command into an AST (using [thaum](https://github.com/bindreams/thaum)), wa
 and checks two things for each statement:
 
 1. **Command identity** — is this command allowed by a `Bash(...)` rule in your settings?
-2. **File access** — does the command read or write files (via redirects *or*
+1. **File access** — does the command read or write files (via redirects *or*
    well-known command semantics), and are those paths covered by `Read(...)` /
    `Write(...)` / `Edit(...)` rules?
 
@@ -56,11 +56,11 @@ passing JSON on stdin and reading a permission decision from stdout.
 
 For each simple command in the parsed AST:
 
-| Check | Source | Rule format |
-|-------|--------|-------------|
-| Is this command allowed? | `Bash(cmd)`, `Bash(cmd *)` | Prefix match, `*` = any args |
-| Does it read files? | `<` redirects, `cat`, `head`, `source`, ... | `Read(glob)` |
-| Does it write files? | `>`, `>>`, `&>` redirects, `cp` dest, `rm`, `tee`, ... | `Write(glob)`, `Edit(glob)` |
+| Check                    | Source                                                 | Rule format                  |
+| ------------------------ | ------------------------------------------------------ | ---------------------------- |
+| Is this command allowed? | `Bash(cmd)`, `Bash(cmd *)`                             | Prefix match, `*` = any args |
+| Does it read files?      | `<` redirects, `cat`, `head`, `source`, ...            | `Read(glob)`                 |
+| Does it write files?     | `>`, `>>`, `&>` redirects, `cp` dest, `rm`, `tee`, ... | `Write(glob)`, `Edit(glob)`  |
 
 - **All checks pass** → `allow` (auto-approved, no prompt)
 - **Any deny rule matches** → `deny` (blocked)
@@ -80,13 +80,13 @@ The checker recurses through the full AST:
 
 ### Conservative cases
 
-| Scenario | Decision |
-|----------|----------|
-| `eval ...` | Always `ask` — cannot be statically analyzed |
-| Dynamic command name (`$CMD arg`) | `ask` |
-| Dynamic file path (`cat $FILE`) | Skip file check; approve if `Bash(cat *)` is allowed |
-| Parse failure | `ask` |
-| `/dev/null`, `/dev/stdin`, etc. | Ignored (no file rule needed) |
+| Scenario                          | Decision                                             |
+| --------------------------------- | ---------------------------------------------------- |
+| `eval ...`                        | Always `ask` — cannot be statically analyzed         |
+| Dynamic command name (`$CMD arg`) | `ask`                                                |
+| Dynamic file path (`cat $FILE`)   | Skip file check; approve if `Bash(cat *)` is allowed |
+| Parse failure                     | `ask`                                                |
+| `/dev/null`, `/dev/stdin`, etc.   | Ignored (no file rule needed)                        |
 
 ## CLI reference
 
@@ -178,15 +178,15 @@ claude-scriptcheck reads rules from `~/.claude/settings.json` (global) and
 
 claude-scriptcheck understands the file-access semantics of common commands:
 
-| Category | Commands |
-|----------|----------|
-| **Read** (non-flag args) | `cat`, `head`, `tail`, `less`, `more`, `wc`, `file`, `stat`, `md5sum`, `shasum`, `sha256sum`, `xxd`, `hexdump`, `diff`, `grep`, `rg`, `find`, `sort`, `uniq`, `cut`, `awk`, `tr`, `strings`, `readelf`, `objdump`, `nm`, `ldd`, `size` |
-| **Read src + Write dst** | `cp`, `mv`, `install`, `ln` |
-| **Write** (non-flag args) | `rm`, `rmdir`, `mkdir`, `touch`, `tee` |
-| **Write** (skip first arg) | `chmod`, `chown`, `chgrp` |
-| **Read first arg** | `source`, `.` |
-| **Write if `-i`** | `sed` |
-| **No file access** | `echo`, `printf`, `pwd`, `env`, `date`, `cd`, builtins, ... |
+| Category                   | Commands                                                                                                                                                                                                                               |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Read** (non-flag args)   | `cat`, `head`, `tail`, `less`, `more`, `wc`, `file`, `stat`, `md5sum`, `shasum`, `sha256sum`, `xxd`, `hexdump`, `diff`, `grep`, `rg`, `find`, `sort`, `uniq`, `cut`, `awk`, `tr`, `strings`, `readelf`, `objdump`, `nm`, `ldd`, `size` |
+| **Read src + Write dst**   | `cp`, `mv`, `install`, `ln`                                                                                                                                                                                                            |
+| **Write** (non-flag args)  | `rm`, `rmdir`, `mkdir`, `touch`, `tee`                                                                                                                                                                                                 |
+| **Write** (skip first arg) | `chmod`, `chown`, `chgrp`                                                                                                                                                                                                              |
+| **Read first arg**         | `source`, `.`                                                                                                                                                                                                                          |
+| **Write if `-i`**          | `sed`                                                                                                                                                                                                                                  |
+| **No file access**         | `echo`, `printf`, `pwd`, `env`, `date`, `cd`, builtins, ...                                                                                                                                                                            |
 
 Commands not in the table produce no file-access entries (the `Bash(...)` rule
 check still applies).

@@ -8,10 +8,7 @@ pub fn is_absolute(path: &str) -> bool {
     }
     // Drive letter: C:/ or C:\.
     let b = path.as_bytes();
-    b.len() >= 3
-        && b[0].is_ascii_alphabetic()
-        && b[1] == b':'
-        && (b[2] == b'/' || b[2] == b'\\')
+    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'/' || b[2] == b'\\')
 }
 
 /// Normalize path separators for internal use.

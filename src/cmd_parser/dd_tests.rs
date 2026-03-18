@@ -12,21 +12,27 @@ fn w(paths: &[&str]) -> Vec<String> {
 
 #[skuld::test]
 fn dd_basic() {
-    let result = DdParser.parse(&["if=input.bin", "of=output.bin", "bs=4096"], "/tmp").unwrap();
+    let result = DdParser
+        .parse(&["if=input.bin", "of=output.bin", "bs=4096"], "/tmp")
+        .unwrap();
     assert_eq!(result.reads, r(&["/tmp/input.bin"]));
     assert_eq!(result.writes, w(&["/tmp/output.bin"]));
 }
 
 #[skuld::test]
 fn dd_only_input() {
-    let result = DdParser.parse(&["if=/dev/urandom", "bs=1M", "count=1"], "/tmp").unwrap();
+    let result = DdParser
+        .parse(&["if=/dev/urandom", "bs=1M", "count=1"], "/tmp")
+        .unwrap();
     assert_eq!(result.reads, r(&["/dev/urandom"]));
     assert!(result.writes.is_empty());
 }
 
 #[skuld::test]
 fn dd_only_output() {
-    let result = DdParser.parse(&["of=/tmp/zeros", "bs=1M", "count=100"], "/tmp").unwrap();
+    let result = DdParser
+        .parse(&["of=/tmp/zeros", "bs=1M", "count=100"], "/tmp")
+        .unwrap();
     assert!(result.reads.is_empty());
     assert_eq!(result.writes, w(&["/tmp/zeros"]));
 }

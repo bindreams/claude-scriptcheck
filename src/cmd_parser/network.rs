@@ -129,7 +129,11 @@ impl CommandParser for CurlParser {
         }
 
         // Positionals are URLs — ignore them
-        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
+        Ok(CommandFileAccesses {
+            reads,
+            writes,
+            inline_script_start: None,
+        })
     }
 }
 
@@ -246,6 +250,10 @@ impl CommandParser for WgetParser {
         }
 
         // Positionals are URLs — ignore
-        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
+        Ok(CommandFileAccesses {
+            reads,
+            writes,
+            inline_script_start: None,
+        })
     }
 }

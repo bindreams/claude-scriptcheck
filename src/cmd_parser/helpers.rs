@@ -94,7 +94,12 @@ pub(super) fn extract_positional_writes(matches: &ArgMatches, cwd: &str) -> Comm
     }
 }
 
-pub(super) fn parse_with(cmd: Command, args: &[&str], cwd: &str, extract: fn(&ArgMatches, &str) -> CommandFileAccesses) -> Result<CommandFileAccesses, String> {
+pub(super) fn parse_with(
+    cmd: Command,
+    args: &[&str],
+    cwd: &str,
+    extract: fn(&ArgMatches, &str) -> CommandFileAccesses,
+) -> Result<CommandFileAccesses, String> {
     let matches = cmd.try_get_matches_from(args).map_err(|e| e.to_string())?;
     Ok(extract(&matches, cwd))
 }
@@ -118,12 +123,11 @@ pub(super) fn strip_legacy_numeric(args: &[&str], allow_plus: bool) -> Vec<Strin
             let is_pos = allow_plus && arg.starts_with('+');
             if (is_neg || is_pos) && arg.len() > 1 {
                 let rest = &arg[1..];
-                let digit_end = rest.bytes()
+                let digit_end = rest
+                    .bytes()
                     .position(|b| !b.is_ascii_digit())
                     .unwrap_or(rest.len());
-                if digit_end > 0
-                    && rest[digit_end..].bytes().all(|b| b.is_ascii_lowercase())
-                {
+                if digit_end > 0 && rest[digit_end..].bytes().all(|b| b.is_ascii_lowercase()) {
                     continue; // strip this legacy arg
                 }
             }

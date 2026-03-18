@@ -23,7 +23,9 @@ fn shell_combined_xc() {
 
 #[skuld::test]
 fn shell_c_with_dollar_zero() {
-    let result = ShellParser.parse(&["-c", "echo $0", "myname", "arg1"], "/tmp").unwrap();
+    let result = ShellParser
+        .parse(&["-c", "echo $0", "myname", "arg1"], "/tmp")
+        .unwrap();
     assert!(result.reads.is_empty());
     assert_eq!(result.inline_script_start, Some(1));
 }
@@ -37,7 +39,9 @@ fn shell_script_file() {
 
 #[skuld::test]
 fn shell_script_file_with_flags() {
-    let result = ShellParser.parse(&["-x", "script.sh", "arg1"], "/tmp").unwrap();
+    let result = ShellParser
+        .parse(&["-x", "script.sh", "arg1"], "/tmp")
+        .unwrap();
     assert_eq!(result.reads, r(&["/tmp/script.sh"]));
     assert_eq!(result.inline_script_start, None);
 }
@@ -65,11 +69,12 @@ fn shell_login_script() {
 
 #[skuld::test]
 fn shell_o_option_skipped() {
-    let result = ShellParser.parse(&["-o", "pipefail", "-c", "echo hello"], "/tmp").unwrap();
+    let result = ShellParser
+        .parse(&["-o", "pipefail", "-c", "echo hello"], "/tmp")
+        .unwrap();
     assert!(result.reads.is_empty());
     assert_eq!(result.inline_script_start, Some(3));
 }
-
 
 #[skuld::test]
 fn python_inline_c() {
@@ -94,7 +99,9 @@ fn python_script_file() {
 
 #[skuld::test]
 fn python_script_file_with_args() {
-    let result = PythonParser.parse(&["script.py", "--verbose"], "/tmp").unwrap();
+    let result = PythonParser
+        .parse(&["script.py", "--verbose"], "/tmp")
+        .unwrap();
     assert_eq!(result.reads, r(&["/tmp/script.py"]));
     assert_eq!(result.inline_script_start, None);
 }
@@ -122,11 +129,12 @@ fn python_no_args() {
 
 #[skuld::test]
 fn python_w_flag_value_consumed() {
-    let result = PythonParser.parse(&["-W", "ignore", "-c", "print(1)"], "/tmp").unwrap();
+    let result = PythonParser
+        .parse(&["-W", "ignore", "-c", "print(1)"], "/tmp")
+        .unwrap();
     assert!(result.reads.is_empty());
     assert_eq!(result.inline_script_start, Some(3));
 }
-
 
 #[skuld::test]
 fn ruby_inline_e() {
@@ -156,24 +164,29 @@ fn ruby_no_args() {
     assert_eq!(result.inline_script_start, None);
 }
 
-
 #[skuld::test]
 fn node_inline_e() {
-    let result = NodeParser.parse(&["-e", "console.log('hi')"], "/tmp").unwrap();
+    let result = NodeParser
+        .parse(&["-e", "console.log('hi')"], "/tmp")
+        .unwrap();
     assert!(result.reads.is_empty());
     assert_eq!(result.inline_script_start, Some(1));
 }
 
 #[skuld::test]
 fn node_inline_eval_long() {
-    let result = NodeParser.parse(&["--eval", "console.log('hi')"], "/tmp").unwrap();
+    let result = NodeParser
+        .parse(&["--eval", "console.log('hi')"], "/tmp")
+        .unwrap();
     assert!(result.reads.is_empty());
     assert_eq!(result.inline_script_start, Some(1));
 }
 
 #[skuld::test]
 fn node_inline_eval_equals() {
-    let result = NodeParser.parse(&["--eval=console.log('hi')"], "/tmp").unwrap();
+    let result = NodeParser
+        .parse(&["--eval=console.log('hi')"], "/tmp")
+        .unwrap();
     assert!(result.reads.is_empty());
     assert_eq!(result.inline_script_start, Some(0));
 }
@@ -206,7 +219,6 @@ fn node_no_args() {
     assert!(result.reads.is_empty());
     assert_eq!(result.inline_script_start, None);
 }
-
 
 #[skuld::test]
 fn perl_inline_e() {
@@ -253,7 +265,9 @@ fn perl_no_args() {
 
 #[skuld::test]
 fn perl_i_flag_value_consumed() {
-    let result = PerlParser.parse(&["-I", "/usr/lib", "-e", "print 1"], "/tmp").unwrap();
+    let result = PerlParser
+        .parse(&["-I", "/usr/lib", "-e", "print 1"], "/tmp")
+        .unwrap();
     assert!(result.reads.is_empty());
     assert_eq!(result.inline_script_start, Some(3));
 }

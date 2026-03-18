@@ -18,9 +18,17 @@ fn parse_compression(matches: &ArgMatches, cwd: &str) -> CommandFileAccesses {
         .unwrap_or_default();
 
     if to_stdout {
-        CommandFileAccesses { reads: paths, writes: Vec::new(), inline_script_start: None }
+        CommandFileAccesses {
+            reads: paths,
+            writes: Vec::new(),
+            inline_script_start: None,
+        }
     } else {
-        CommandFileAccesses { reads: Vec::new(), writes: paths, inline_script_start: None }
+        CommandFileAccesses {
+            reads: Vec::new(),
+            writes: paths,
+            inline_script_start: None,
+        }
     }
 }
 
@@ -39,10 +47,17 @@ impl CommandParser for GzipParser {
             .arg(flag('r', "recursive"))
             .arg(flag('t', "test"))
             .arg(flag('v', "verbose"))
-            .arg(bool_s('1')).arg(bool_s('2')).arg(bool_s('3'))
-            .arg(bool_s('4')).arg(bool_s('5')).arg(bool_s('6'))
-            .arg(bool_s('7')).arg(bool_s('8')).arg(bool_s('9'))
-            .arg(flag_l("best")).arg(flag_l("fast"))
+            .arg(bool_s('1'))
+            .arg(bool_s('2'))
+            .arg(bool_s('3'))
+            .arg(bool_s('4'))
+            .arg(bool_s('5'))
+            .arg(bool_s('6'))
+            .arg(bool_s('7'))
+            .arg(bool_s('8'))
+            .arg(bool_s('9'))
+            .arg(flag_l("best"))
+            .arg(flag_l("fast"))
             .arg(val('S', "suffix"))
             .arg(val_l("rsyncable"))
             .arg(files_arg())
@@ -73,10 +88,17 @@ impl CommandParser for Bzip2Parser {
             .arg(flag('s', "small"))
             .arg(flag('t', "test"))
             .arg(flag('v', "verbose"))
-            .arg(bool_s('1')).arg(bool_s('2')).arg(bool_s('3'))
-            .arg(bool_s('4')).arg(bool_s('5')).arg(bool_s('6'))
-            .arg(bool_s('7')).arg(bool_s('8')).arg(bool_s('9'))
-            .arg(flag_l("best")).arg(flag_l("fast"))
+            .arg(bool_s('1'))
+            .arg(bool_s('2'))
+            .arg(bool_s('3'))
+            .arg(bool_s('4'))
+            .arg(bool_s('5'))
+            .arg(bool_s('6'))
+            .arg(bool_s('7'))
+            .arg(bool_s('8'))
+            .arg(bool_s('9'))
+            .arg(flag_l("best"))
+            .arg(flag_l("fast"))
             .arg(files_arg())
             .try_get_matches_from(args)
             .map_err(|e| e.to_string())?;
@@ -105,11 +127,18 @@ impl CommandParser for XzParser {
             .arg(flag('t', "test"))
             .arg(flag('v', "verbose"))
             .arg(flag('e', "extreme"))
-            .arg(bool_s('0')).arg(bool_s('1')).arg(bool_s('2'))
-            .arg(bool_s('3')).arg(bool_s('4')).arg(bool_s('5'))
-            .arg(bool_s('6')).arg(bool_s('7')).arg(bool_s('8'))
+            .arg(bool_s('0'))
+            .arg(bool_s('1'))
+            .arg(bool_s('2'))
+            .arg(bool_s('3'))
+            .arg(bool_s('4'))
+            .arg(bool_s('5'))
+            .arg(bool_s('6'))
+            .arg(bool_s('7'))
+            .arg(bool_s('8'))
             .arg(bool_s('9'))
-            .arg(flag_l("best")).arg(flag_l("fast"))
+            .arg(flag_l("best"))
+            .arg(flag_l("fast"))
             .arg(val('T', "threads"))
             .arg(val('M', "memlimit"))
             .arg(val('F', "format"))

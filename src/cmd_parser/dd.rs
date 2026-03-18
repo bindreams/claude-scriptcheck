@@ -23,6 +23,10 @@ impl CommandParser for DdParser {
             }
         }
 
-        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
+        Ok(CommandFileAccesses {
+            reads,
+            writes,
+            inline_script_start: None,
+        })
     }
 }

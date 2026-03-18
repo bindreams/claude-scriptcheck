@@ -351,7 +351,9 @@ fn write_settings_json(path: &Path, value: &serde_json::Value) {
 }
 
 fn is_installed(pre_tool_use: &[serde_json::Value], binary_path: &str) -> bool {
-    pre_tool_use.iter().any(|entry| entry_matches(entry, binary_path))
+    pre_tool_use
+        .iter()
+        .any(|entry| entry_matches(entry, binary_path))
 }
 
 fn entry_matches(entry: &serde_json::Value, binary_path: &str) -> bool {

@@ -122,7 +122,11 @@ fn parse_copy_like(matches: &ArgMatches, cwd: &str) -> Result<CommandFileAccesse
         writes.push(resolve(last, cwd));
     }
 
-    Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
+    Ok(CommandFileAccesses {
+        reads,
+        writes,
+        inline_script_start: None,
+    })
 }
 
 pub(super) struct InstallParser;
@@ -178,7 +182,11 @@ impl CommandParser for InstallParser {
             writes.push(resolve(last, cwd));
         }
 
-        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
+        Ok(CommandFileAccesses {
+            reads,
+            writes,
+            inline_script_start: None,
+        })
     }
 }
 
@@ -196,7 +204,9 @@ impl CommandParser for MkdirParser {
                 .arg(bool_s('Z'))
                 .arg(val_l("context"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_writes,
+            args,
+            cwd,
+            extract_positional_writes,
         )
     }
 }
@@ -216,7 +226,9 @@ impl CommandParser for TouchParser {
                 // BSD/macOS
                 .arg(bool_s('A'))
                 .arg(files_arg()),
-            args, cwd, extract_positional_writes,
+            args,
+            cwd,
+            extract_positional_writes,
         )
     }
 }
@@ -334,7 +346,11 @@ impl CommandParser for SortParser {
             writes.push(resolve(output, cwd));
         }
 
-        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
+        Ok(CommandFileAccesses {
+            reads,
+            writes,
+            inline_script_start: None,
+        })
     }
 }
 
@@ -374,7 +390,11 @@ impl CommandParser for UniqParser {
             writes.push(resolve(output, cwd));
         }
 
-        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
+        Ok(CommandFileAccesses {
+            reads,
+            writes,
+            inline_script_start: None,
+        })
     }
 }
 

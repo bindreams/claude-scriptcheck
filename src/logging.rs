@@ -11,7 +11,7 @@ const APP_DIR: &str = "claude-scriptcheck";
 /// Returns the platform-appropriate log file path.
 ///
 /// - Linux: `$XDG_STATE_HOME/claude-scriptcheck/log.yaml`
-///          (defaults to `~/.local/state/claude-scriptcheck/log.yaml`)
+///   (defaults to `~/.local/state/claude-scriptcheck/log.yaml`)
 /// - macOS: `~/Library/Logs/claude-scriptcheck/log.yaml`
 /// - Fallback: `~/.local/share/claude-scriptcheck/log.yaml`
 pub fn log_path() -> PathBuf {
@@ -46,6 +46,7 @@ struct LogEntry<'a> {
     missing_rules: Vec<&'a str>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn log_decision(
     session: &str,
     cwd: &str,
@@ -61,11 +62,7 @@ pub fn log_decision(
         let _ = fs::create_dir_all(dir);
     }
 
-    let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    else {
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) else {
         return;
     };
 

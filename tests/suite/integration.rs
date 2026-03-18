@@ -35,7 +35,9 @@ fn redirect_to_allowed_path() {
 #[skuld::test]
 fn redirect_to_disallowed_path() {
     let decision = check_command("echo hello > /etc/test-output.txt", "/tmp");
-    assert!(matches!(decision, Decision::Ask(ref rules) if rules.iter().any(|r| r.contains("Write("))));
+    assert!(
+        matches!(decision, Decision::Ask(ref rules) if rules.iter().any(|r| r.contains("Write(")))
+    );
 }
 
 #[skuld::test]
@@ -53,10 +55,7 @@ fn pipeline_allowed() {
 
 #[skuld::test]
 fn git_status_allowed() {
-    assert_eq!(
-        check_command("git status --short", "/tmp"),
-        Decision::Allow,
-    );
+    assert_eq!(check_command("git status --short", "/tmp"), Decision::Allow,);
 }
 
 #[skuld::test]
@@ -86,12 +85,7 @@ fn run_binary(stdin_bytes: &[u8]) -> std::process::Output {
         .spawn()
         .expect("Failed to start binary");
 
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(stdin_bytes)
-        .unwrap();
+    child.stdin.take().unwrap().write_all(stdin_bytes).unwrap();
 
     child.wait_with_output().unwrap()
 }

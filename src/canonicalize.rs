@@ -23,8 +23,7 @@ pub fn best_effort_canonicalize(path: &str) -> String {
 
     // Step 1: Logical normalization (normalize separators for consistent splitting)
     let normalized = PathBuf::from(path).clean();
-    let normalized_str =
-        crate::path_util::normalize_separators(&normalized.to_string_lossy());
+    let normalized_str = crate::path_util::normalize_separators(&normalized.to_string_lossy());
 
     // Step 2: Split at first wildcard segment
     let segments: Vec<&str> = normalized_str.split('/').collect();
@@ -38,9 +37,7 @@ pub fn best_effort_canonicalize(path: &str) -> String {
     let prefix_segments = &segments[..wildcard_idx];
     let suffix_segments = &segments[wildcard_idx..];
 
-    if prefix_segments.is_empty()
-        || (prefix_segments.len() == 1 && prefix_segments[0].is_empty())
-    {
+    if prefix_segments.is_empty() || (prefix_segments.len() == 1 && prefix_segments[0].is_empty()) {
         return normalized_str;
     }
 

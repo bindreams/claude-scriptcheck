@@ -17,7 +17,7 @@ fn canonical(path: &str) -> String {
     path_util::normalize_separators(&std::fs::canonicalize(path).unwrap().to_string_lossy())
 }
 
-// is_wildcard_segment =====
+// is_wildcard_segment =================================================================================================
 
 #[skuld::test]
 fn wildcard_star() {
@@ -52,7 +52,7 @@ fn plain_segment_not_wildcard() {
     assert!(!is_wildcard_segment(".hidden"));
 }
 
-// best_effort_canonicalize =====
+// best_effort_canonicalize ============================================================================================
 
 #[skuld::test]
 fn empty_string() {
@@ -141,7 +141,10 @@ fn dotdot_before_wildcard(#[fixture(temp_dir)] dir: &Path) {
 #[skuld::test]
 fn dotdot_in_existing_path() {
     let tmp = canonical_temp();
-    let input = format!("{tmp}/../{}", Path::new(&tmp).file_name().unwrap().to_str().unwrap());
+    let input = format!(
+        "{tmp}/../{}",
+        Path::new(&tmp).file_name().unwrap().to_str().unwrap()
+    );
     let result = best_effort_canonicalize(&input);
     assert_eq!(result, tmp);
 }

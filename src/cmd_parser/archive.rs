@@ -22,9 +22,15 @@ impl CommandParser for ZipParser {
             .arg(flag('e', "encrypt"))
             .arg(flag('g', "grow"))
             .arg(flag_l("filesync"))
-            .arg(bool_s('0')).arg(bool_s('1')).arg(bool_s('2'))
-            .arg(bool_s('3')).arg(bool_s('4')).arg(bool_s('5'))
-            .arg(bool_s('6')).arg(bool_s('7')).arg(bool_s('8'))
+            .arg(bool_s('0'))
+            .arg(bool_s('1'))
+            .arg(bool_s('2'))
+            .arg(bool_s('3'))
+            .arg(bool_s('4'))
+            .arg(bool_s('5'))
+            .arg(bool_s('6'))
+            .arg(bool_s('7'))
+            .arg(bool_s('8'))
             .arg(bool_s('9'))
             .arg(val('x', "exclude").action(ArgAction::Append))
             .arg(val('i', "include").action(ArgAction::Append))
@@ -52,7 +58,11 @@ impl CommandParser for ZipParser {
             }
         }
 
-        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
+        Ok(CommandFileAccesses {
+            reads,
+            writes,
+            inline_script_start: None,
+        })
     }
 }
 
@@ -97,7 +107,11 @@ impl CommandParser for UnzipParser {
             writes.push(resolve(dir, cwd));
         }
 
-        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
+        Ok(CommandFileAccesses {
+            reads,
+            writes,
+            inline_script_start: None,
+        })
     }
 }
 
@@ -162,7 +176,11 @@ impl CommandParser for PatchParser {
             reads.push(resolve(patchfile, cwd));
         }
 
-        Ok(CommandFileAccesses { reads, writes, inline_script_start: None })
+        Ok(CommandFileAccesses {
+            reads,
+            writes,
+            inline_script_start: None,
+        })
     }
 }
 

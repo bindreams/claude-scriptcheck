@@ -22,7 +22,9 @@ impl CommandParser for CatParser {
                 // BSD/macOS
                 .arg(bool_s('l')) // line buffering (BSD)
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -40,7 +42,9 @@ impl CommandParser for HeadParser {
                 .arg(flag('v', "verbose"))
                 .arg(flag('z', "zero-terminated"))
                 .arg(files_arg()),
-            &str_args, cwd, extract_positional_reads,
+            &str_args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -63,7 +67,9 @@ impl CommandParser for TailParser {
                 .arg(val('s', "sleep-interval"))
                 .arg(val_l("max-unchanged-stats"))
                 .arg(files_arg()),
-            &str_args, cwd, extract_positional_reads,
+            &str_args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -104,7 +110,9 @@ impl CommandParser for LessParser {
                 .arg(val_s('k'))
                 .arg(val_s('D'))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -123,7 +131,9 @@ impl CommandParser for MoreParser {
                 .arg(bool_s('u'))
                 .arg(val_s('n'))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -141,7 +151,9 @@ impl CommandParser for WcParser {
                 .arg(val_l("files0-from"))
                 .arg(val_l("total"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -165,7 +177,9 @@ impl CommandParser for FileParser {
                 .arg(val_l("mime-type"))
                 .arg(val_l("mime-encoding"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -187,7 +201,9 @@ impl CommandParser for StatParser {
                 .arg(bool_s('s')) // display in "shell" format
                 .arg(bool_s('n')) // suppress newline
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -208,7 +224,9 @@ impl CommandParser for Md5sumParser {
                 .arg(flag_l("ignore-missing"))
                 .arg(flag('z', "zero"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -229,7 +247,9 @@ impl CommandParser for ShasumParser {
                 .arg(flag_l("quiet"))
                 .arg(flag_l("ignore-missing"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -250,7 +270,9 @@ impl CommandParser for Sha256sumParser {
                 .arg(flag_l("ignore-missing"))
                 .arg(flag('z', "zero"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -272,7 +294,9 @@ impl CommandParser for XxdParser {
                 .arg(val_s('g'))
                 .arg(val_s('o'))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -293,7 +317,9 @@ impl CommandParser for HexdumpParser {
                 .arg(val_s('s'))
                 .arg(val_s('e'))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -310,7 +336,9 @@ impl CommandParser for StringsParser {
                 .arg(flag_l("print-file-name"))
                 .arg(bool_s('f'))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -343,7 +371,9 @@ impl CommandParser for ReadelfParser {
                 .arg(val('D', "use-dynamic"))
                 .arg(val('C', "demangle"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -377,7 +407,9 @@ impl CommandParser for ObjdumpParser {
                 .arg(val_l("start-address"))
                 .arg(val_l("stop-address"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -402,7 +434,9 @@ impl CommandParser for NmParser {
                 .arg(val('t', "radix"))
                 .arg(val_l("target"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -417,7 +451,9 @@ impl CommandParser for LddParser {
                 .arg(flag('d', "data-relocs"))
                 .arg(flag('r', "function-relocs"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -437,7 +473,9 @@ impl CommandParser for SizeParser {
                 .arg(val_l("target"))
                 .arg(val_l("radix"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -456,7 +494,9 @@ impl CommandParser for CutParser {
                 .arg(flag_l("complement"))
                 .arg(flag('z', "zero-terminated"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -472,7 +512,9 @@ impl CommandParser for TacParser {
                 .arg(flag('r', "regex"))
                 .arg(val('s', "separator"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -494,7 +536,9 @@ impl CommandParser for NlParser {
                 .arg(val('v', "starting-line-number"))
                 .arg(val('w', "number-width"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -508,7 +552,9 @@ impl CommandParser for PasteParser {
                 .arg(flag('s', "serial"))
                 .arg(flag('z', "zero-terminated"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -516,7 +562,12 @@ impl CommandParser for PasteParser {
 pub(super) struct RevParser;
 impl CommandParser for RevParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
-        parse_with(base_cmd("rev").arg(files_arg()), args, cwd, extract_positional_reads)
+        parse_with(
+            base_cmd("rev").arg(files_arg()),
+            args,
+            cwd,
+            extract_positional_reads,
+        )
     }
 }
 
@@ -528,7 +579,9 @@ impl CommandParser for ExpandParser {
                 .arg(val('t', "tabs"))
                 .arg(flag('i', "initial"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -542,7 +595,9 @@ impl CommandParser for UnexpandParser {
                 .arg(flag('a', "all"))
                 .arg(flag_l("first-only"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -556,7 +611,9 @@ impl CommandParser for FoldParser {
                 .arg(flag('b', "bytes"))
                 .arg(flag('s', "spaces"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -584,7 +641,9 @@ impl CommandParser for ColumnParser {
                 .arg(val('l', "table-truncate"))
                 .arg(val('d', "table-noheadings"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -613,7 +672,9 @@ impl CommandParser for OdParser {
                 .arg(bool_s('x'))
                 .arg(flag_l("traditional"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -623,7 +684,9 @@ impl CommandParser for ZcatParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
         parse_with(
             base_cmd("zcat").arg(flag('f', "force")).arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -633,7 +696,9 @@ impl CommandParser for BzcatParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
         parse_with(
             base_cmd("bzcat").arg(flag('s', "small")).arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -641,7 +706,12 @@ impl CommandParser for BzcatParser {
 pub(super) struct XzcatParser;
 impl CommandParser for XzcatParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
-        parse_with(base_cmd("xzcat").arg(files_arg()), args, cwd, extract_positional_reads)
+        parse_with(
+            base_cmd("xzcat").arg(files_arg()),
+            args,
+            cwd,
+            extract_positional_reads,
+        )
     }
 }
 
@@ -657,7 +727,9 @@ impl CommandParser for ReadlinkParser {
                 .arg(flag('v', "verbose"))
                 .arg(flag('z', "zero"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -691,7 +763,9 @@ impl CommandParser for DuParser {
                 // BSD/macOS
                 .arg(val('I', "ignore"))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }
@@ -835,10 +909,10 @@ impl CommandParser for Md5Parser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
         parse_with(
             base_cmd("md5")
-                .arg(bool_s('r'))         // reverse output format
-                .arg(bool_s('p'))         // passthrough (echo stdin)
-                .arg(bool_s('q'))         // quiet
-                .arg(val('s', "string"))  // hash a string, NOT a file
+                .arg(bool_s('r')) // reverse output format
+                .arg(bool_s('p')) // passthrough (echo stdin)
+                .arg(bool_s('q')) // quiet
+                .arg(val('s', "string")) // hash a string, NOT a file
                 .arg(files_arg()),
             args,
             cwd,
@@ -854,20 +928,20 @@ impl CommandParser for OtoolParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
         parse_with(
             base_cmd("otool")
-                .arg(bool_s('L'))  // shared libraries
-                .arg(bool_s('l'))  // load commands
-                .arg(bool_s('h'))  // Mach header
-                .arg(bool_s('t'))  // text section
-                .arg(bool_s('d'))  // data section
-                .arg(bool_s('o'))  // Objective-C segment
-                .arg(bool_s('r'))  // relocation entries
-                .arg(bool_s('I'))  // indirect symbol table
-                .arg(bool_s('S'))  // stab symbols
-                .arg(bool_s('v'))  // verbose
-                .arg(bool_s('V'))  // very verbose
-                .arg(bool_s('X'))  // omit leading addresses
-                .arg(bool_s('f'))  // fat headers
-                .arg(val_s('p'))   // start at symbol name
+                .arg(bool_s('L')) // shared libraries
+                .arg(bool_s('l')) // load commands
+                .arg(bool_s('h')) // Mach header
+                .arg(bool_s('t')) // text section
+                .arg(bool_s('d')) // data section
+                .arg(bool_s('o')) // Objective-C segment
+                .arg(bool_s('r')) // relocation entries
+                .arg(bool_s('I')) // indirect symbol table
+                .arg(bool_s('S')) // stab symbols
+                .arg(bool_s('v')) // verbose
+                .arg(bool_s('V')) // very verbose
+                .arg(bool_s('X')) // omit leading addresses
+                .arg(bool_s('f')) // fat headers
+                .arg(val_s('p')) // start at symbol name
                 .arg(val_l("arch"))
                 .arg(files_arg()),
             args,
@@ -906,7 +980,9 @@ impl CommandParser for LsofParser {
                 .arg(bool_s('w'))
                 .arg(bool_s('X'))
                 .arg(files_arg()),
-            args, cwd, extract_positional_reads,
+            args,
+            cwd,
+            extract_positional_reads,
         )
     }
 }

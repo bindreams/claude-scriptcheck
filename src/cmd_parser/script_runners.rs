@@ -20,10 +20,7 @@ impl CommandParser for ShellParser {
     }
 }
 
-fn parse_shell_runner(
-    args: &[&str],
-    cwd: &str,
-) -> Result<CommandFileAccesses, String> {
+fn parse_shell_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
     let mut has_s = false;
     let mut i = 0;
 
@@ -42,8 +39,7 @@ fn parse_shell_runner(
                     'c' => {
                         // Script text is the NEXT argument
                         i += 1;
-                        let inline_script_start =
-                            if i < args.len() { Some(i) } else { None };
+                        let inline_script_start = if i < args.len() { Some(i) } else { None };
                         return Ok(CommandFileAccesses {
                             reads: Vec::new(),
                             writes: Vec::new(),
@@ -111,10 +107,7 @@ impl CommandParser for PythonParser {
     }
 }
 
-fn parse_python_runner(
-    args: &[&str],
-    cwd: &str,
-) -> Result<CommandFileAccesses, String> {
+fn parse_python_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
     let mut i = 0;
 
     while i < args.len() {
@@ -139,8 +132,7 @@ fn parse_python_runner(
                 match ch {
                     'c' => {
                         i += 1;
-                        let inline_script_start =
-                            if i < args.len() { Some(i) } else { None };
+                        let inline_script_start = if i < args.len() { Some(i) } else { None };
                         return Ok(CommandFileAccesses {
                             reads: Vec::new(),
                             writes: Vec::new(),
@@ -207,10 +199,7 @@ impl CommandParser for RubyParser {
     }
 }
 
-fn parse_ruby_runner(
-    args: &[&str],
-    cwd: &str,
-) -> Result<CommandFileAccesses, String> {
+fn parse_ruby_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
     let mut i = 0;
 
     while i < args.len() {
@@ -226,8 +215,7 @@ fn parse_ruby_runner(
                 match ch {
                     'e' => {
                         i += 1;
-                        let inline_script_start =
-                            if i < args.len() { Some(i) } else { None };
+                        let inline_script_start = if i < args.len() { Some(i) } else { None };
                         return Ok(CommandFileAccesses {
                             reads: Vec::new(),
                             writes: Vec::new(),
@@ -287,10 +275,7 @@ impl CommandParser for NodeParser {
     }
 }
 
-fn parse_node_runner(
-    args: &[&str],
-    cwd: &str,
-) -> Result<CommandFileAccesses, String> {
+fn parse_node_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
     let mut i = 0;
 
     while i < args.len() {
@@ -326,8 +311,7 @@ fn parse_node_runner(
                 match ch {
                     'e' | 'p' => {
                         i += 1;
-                        let inline_script_start =
-                            if i < args.len() { Some(i) } else { None };
+                        let inline_script_start = if i < args.len() { Some(i) } else { None };
                         return Ok(CommandFileAccesses {
                             reads: Vec::new(),
                             writes: Vec::new(),
@@ -358,10 +342,15 @@ fn parse_node_runner(
             }
             // Check known boolean flags
             match arg {
-                "--check" | "--interactive" | "--no-deprecation"
-                | "--no-warnings" | "--preserve-symlinks"
-                | "--throw-deprecation" | "--trace-deprecation"
-                | "--trace-warnings" | "--zero-fill-buffers" => {
+                "--check"
+                | "--interactive"
+                | "--no-deprecation"
+                | "--no-warnings"
+                | "--preserve-symlinks"
+                | "--throw-deprecation"
+                | "--trace-deprecation"
+                | "--trace-warnings"
+                | "--zero-fill-buffers" => {
                     i += 1;
                     continue;
                 }
@@ -403,10 +392,7 @@ impl CommandParser for PerlParser {
     }
 }
 
-fn parse_perl_runner(
-    args: &[&str],
-    cwd: &str,
-) -> Result<CommandFileAccesses, String> {
+fn parse_perl_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
     let mut i = 0;
 
     while i < args.len() {
@@ -432,8 +418,7 @@ fn parse_perl_runner(
                             });
                         }
                         i += 1;
-                        let inline_script_start =
-                            if i < args.len() { Some(i) } else { None };
+                        let inline_script_start = if i < args.len() { Some(i) } else { None };
                         return Ok(CommandFileAccesses {
                             reads: Vec::new(),
                             writes: Vec::new(),
