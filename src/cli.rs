@@ -209,6 +209,96 @@ pub enum InstallSource {
     Path(String),
 }
 
+// Windows upgrade guard ===============================================================================================
+
+/// Renames the running executable to `{path}.old` so `cargo install` can write a new binary to
+/// the original path. Must call [`cleanup()`](ExeRenameGuard::cleanup) explicitly before
+/// `process::exit`, since exit skips destructors. [`Drop`] is implemented as a safety net for
+/// panic unwinding.
+#[cfg(target_os = "windows")]
+struct ExeRenameGuard {
+    original: PathBuf,
+    renamed: PathBuf,
+    disarmed: bool,
+    done: bool,
+}
+
+#[cfg(target_os = "windows")]
+impl ExeRenameGuard {
+    fn new(exe_path: PathBuf) -> Result<Self, String> {
+        let mut renamed_os = exe_path.as_os_str().to_os_string();
+        renamed_os.push(".old");
+        let renamed = PathBuf::from(renamed_os);
+
+        // Remove stale .old from a prior failed upgrade.
+        if renamed.exists() {
+            std::fs::remove_file(&renamed).map_err(|e| {
+                format!(
+                    "Failed to remove stale {}: {e} (another upgrade may be in progress)",
+                    renamed.display()
+                )
+            })?;
+        }
+
+        std::fs::rename(&exe_path, &renamed).map_err(|e| {
+            format!(
+                "Failed to rename {} → {}: {e}",
+                exe_path.display(),
+                renamed.display()
+            )
+        })?;
+
+        Ok(Self {
+            original: exe_path,
+            renamed,
+            disarmed: false,
+            done: false,
+        })
+    }
+
+    fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+
+    fn cleanup(&mut self) {
+        if self.done {
+            return;
+        }
+        self.done = true;
+
+        if self.disarmed {
+            // Success path: delete the old binary (best-effort).
+            if let Err(e) = std::fs::remove_file(&self.renamed) {
+                eprintln!("Warning: could not remove {}: {e}", self.renamed.display());
+            }
+        } else {
+            // Failure path: restore the original binary.
+            // On Windows, fs::rename fails if the target exists (e.g. cargo install left a
+            // partial binary). Remove it first so the restore can succeed.
+            let _ = std::fs::remove_file(&self.original);
+            if let Err(e) = std::fs::rename(&self.renamed, &self.original) {
+                eprintln!(
+                    "Failed to restore {} from {}: {e}",
+                    self.original.display(),
+                    self.renamed.display()
+                );
+                eprintln!(
+                    "Manual recovery: rename {} back to {}",
+                    self.renamed.display(),
+                    self.original.display()
+                );
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for ExeRenameGuard {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
+}
+
 /// Upgrade claude-scriptcheck to the latest version, respecting the original install source.
 pub fn upgrade() {
     let source = detect_install_source();
@@ -233,10 +323,32 @@ pub fn upgrade() {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    let mut guard = {
+        let exe = std::env::current_exe().unwrap_or_else(|e| {
+            eprintln!("Failed to determine executable path: {e}");
+            process::exit(1);
+        });
+        ExeRenameGuard::new(exe).unwrap_or_else(|e| {
+            eprintln!("Failed to prepare upgrade: {e}");
+            process::exit(1);
+        })
+    };
+
     let status = cmd.status().unwrap_or_else(|e| {
         eprintln!("Failed to run cargo: {e}");
+        #[cfg(target_os = "windows")]
+        guard.cleanup();
         process::exit(1);
     });
+
+    #[cfg(target_os = "windows")]
+    {
+        if status.success() {
+            guard.disarm();
+        }
+        guard.cleanup();
+    }
 
     process::exit(status.code().unwrap_or(1));
 }
@@ -368,4 +480,142 @@ fn entry_matches(entry: &serde_json::Value, binary_path: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+#[cfg(target_os = "windows")]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_exe_path(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join("claude-scriptcheck-tests");
+        fs::create_dir_all(&dir).unwrap();
+        dir.join(name)
+    }
+
+    #[skuld::test]
+    fn guard_renames_file_to_old() {
+        let path = temp_exe_path("guard_renames.exe");
+        let old_path = PathBuf::from(format!("{}.old", path.display()));
+        fs::write(&path, b"original").unwrap();
+
+        let _guard = ExeRenameGuard::new(path.clone()).unwrap();
+
+        assert!(!path.exists(), "original should be renamed away");
+        assert!(old_path.exists(), ".old should exist");
+        assert_eq!(fs::read(&old_path).unwrap(), b"original");
+
+        // Cleanup
+        let _ = fs::remove_file(&old_path);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[skuld::test]
+    fn guard_restores_on_cleanup_when_not_disarmed() {
+        let path = temp_exe_path("guard_restores.exe");
+        let old_path = PathBuf::from(format!("{}.old", path.display()));
+        fs::write(&path, b"original").unwrap();
+
+        let mut guard = ExeRenameGuard::new(path.clone()).unwrap();
+        guard.cleanup();
+
+        assert!(path.exists(), "original should be restored");
+        assert!(!old_path.exists(), ".old should be gone");
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+
+        // Cleanup
+        let _ = fs::remove_file(&path);
+    }
+
+    #[skuld::test]
+    fn guard_deletes_old_on_cleanup_when_disarmed() {
+        let path = temp_exe_path("guard_disarmed.exe");
+        let old_path = PathBuf::from(format!("{}.old", path.display()));
+        fs::write(&path, b"original").unwrap();
+
+        let mut guard = ExeRenameGuard::new(path.clone()).unwrap();
+        guard.disarm();
+        guard.cleanup();
+
+        assert!(!path.exists(), "original was renamed and not restored");
+        assert!(!old_path.exists(), ".old should be deleted");
+
+        // Cleanup (nothing to do, both gone)
+    }
+
+    #[skuld::test]
+    fn guard_removes_stale_old_before_renaming() {
+        let path = temp_exe_path("guard_stale.exe");
+        let old_path = PathBuf::from(format!("{}.old", path.display()));
+        fs::write(&path, b"current").unwrap();
+        fs::write(&old_path, b"stale").unwrap();
+
+        let _guard = ExeRenameGuard::new(path.clone()).unwrap();
+
+        assert!(!path.exists());
+        assert_eq!(
+            fs::read(&old_path).unwrap(),
+            b"current",
+            "stale .old should be replaced"
+        );
+
+        // Cleanup
+        let _ = fs::remove_file(&old_path);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[skuld::test]
+    fn guard_restores_via_drop() {
+        let path = temp_exe_path("guard_drop.exe");
+        let old_path = PathBuf::from(format!("{}.old", path.display()));
+        fs::write(&path, b"original").unwrap();
+
+        {
+            let _guard = ExeRenameGuard::new(path.clone()).unwrap();
+            // guard drops here without explicit cleanup
+        }
+
+        assert!(path.exists(), "Drop should restore the original");
+        assert!(!old_path.exists(), ".old should be gone after Drop");
+
+        // Cleanup
+        let _ = fs::remove_file(&path);
+    }
+
+    #[skuld::test]
+    fn guard_cleanup_is_idempotent() {
+        let path = temp_exe_path("guard_idempotent.exe");
+        let old_path = PathBuf::from({
+            let mut s = path.as_os_str().to_os_string();
+            s.push(".old");
+            s
+        });
+        fs::write(&path, b"original").unwrap();
+
+        let mut guard = ExeRenameGuard::new(path.clone()).unwrap();
+        guard.cleanup(); // first cleanup restores
+        assert!(path.exists());
+        assert!(!old_path.exists());
+
+        guard.cleanup(); // second cleanup is a no-op
+        assert!(path.exists());
+        assert!(!old_path.exists());
+
+        drop(guard); // Drop also calls cleanup — should be a no-op
+        assert!(path.exists());
+        assert!(!old_path.exists());
+
+        // Cleanup
+        let _ = fs::remove_file(&path);
+    }
+
+    #[skuld::test]
+    fn guard_new_fails_if_file_missing() {
+        let path = temp_exe_path("guard_missing.exe");
+        let _ = fs::remove_file(&path); // ensure it doesn't exist
+
+        let result = ExeRenameGuard::new(path);
+        assert!(result.is_err());
+    }
 }
