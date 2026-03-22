@@ -1,4 +1,5 @@
-use claude_scriptcheck::checker::{check_program, Decision};
+use claude_scriptcheck::checker::{check_file_accesses, check_program, Decision};
+use claude_scriptcheck::file_access::{AccessKind, FileAccess};
 use claude_scriptcheck::path_util;
 use claude_scriptcheck::permission::{self, ParsedPermissions};
 use claude_scriptcheck::settings::Permissions;
@@ -116,8 +117,15 @@ fn and_chain_partial_deny() {
 }
 
 #[skuld::test]
-fn redirect_to_dev_null_ignored() {
+fn redirect_to_dev_null_needs_write_rule() {
     let d = check("echo hello 2>/dev/null", &["Bash(echo *)"], &[]);
+    assert!(matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.contains("Write("))));
+
+    let d = check(
+        "echo hello 2>/dev/null",
+        &["Bash(echo *)", "Write(/dev/*)"],
+        &[],
+    );
     assert_eq!(d, Decision::Allow);
 }
 
@@ -666,4 +674,186 @@ fn relative_path_in_query_canonicalized() {
         &[],
     );
     assert_eq!(d, Decision::Allow);
+}
+
+// ── check_file_accesses tests ────────────────────────────────────────────────
+
+fn check_accesses(accesses: &[FileAccess], allow: &[&str], deny: &[&str]) -> Decision {
+    let perms = make_perms(allow, deny);
+    check_file_accesses(accesses, &perms, "/tmp").decision
+}
+
+fn check_accesses_full(
+    accesses: &[FileAccess],
+    allow: &[&str],
+    deny: &[&str],
+    ask: &[&str],
+) -> Decision {
+    let perms = make_perms_full(allow, deny, ask);
+    check_file_accesses(accesses, &perms, "/tmp").decision
+}
+
+#[skuld::test]
+fn file_accesses_read_allowed() {
+    let accesses = [FileAccess {
+        path: "/tmp/data.txt".into(),
+        kind: AccessKind::Read,
+    }];
+    let result = check_file_accesses(&accesses, &make_perms(&["Read(/tmp/**)"], &[]), "/tmp");
+    assert_eq!(result.decision, Decision::Allow);
+    assert!(
+        result.matched_allow.iter().any(|r| r.contains("Read(")),
+        "expected matched_allow to contain Read rule, got {:?}",
+        result.matched_allow,
+    );
+}
+
+#[skuld::test]
+fn file_accesses_read_denied() {
+    let accesses = [FileAccess {
+        path: "/etc/shadow".into(),
+        kind: AccessKind::Read,
+    }];
+    let result = check_file_accesses(
+        &accesses,
+        &make_perms(&["Read(/etc/**)"], &["Read(/etc/shadow)"]),
+        "/tmp",
+    );
+    assert!(matches!(result.decision, Decision::Deny(_)));
+    assert!(
+        result.matched_deny.iter().any(|r| r.contains("Read(")),
+        "expected matched_deny to contain Read rule, got {:?}",
+        result.matched_deny,
+    );
+}
+
+#[skuld::test]
+fn file_accesses_read_no_matching_rule_asks() {
+    let d = check_accesses(
+        &[FileAccess {
+            path: "/home/user/secret.txt".into(),
+            kind: AccessKind::Read,
+        }],
+        &[],
+        &[],
+    );
+    if let Decision::Ask(ref rules) = d {
+        assert!(
+            rules.iter().any(|r| r.contains("Read(")),
+            "expected Ask with Read rule, got {rules:?}",
+        );
+    } else {
+        panic!("expected Ask, got {d:?}");
+    }
+}
+
+#[skuld::test]
+fn file_accesses_read_ask_overrides_allow() {
+    let d = check_accesses_full(
+        &[FileAccess {
+            path: "/tmp/secret.txt".into(),
+            kind: AccessKind::Read,
+        }],
+        &["Read(/tmp/**)"],
+        &[],
+        &["Read(/tmp/secret.txt)"],
+    );
+    assert!(matches!(d, Decision::Ask(_)));
+}
+
+#[skuld::test]
+fn file_accesses_write_allowed() {
+    let d = check_accesses(
+        &[FileAccess {
+            path: "/tmp/out.txt".into(),
+            kind: AccessKind::Write,
+        }],
+        &["Write(/tmp/**)"],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn file_accesses_write_allowed_by_edit_fallback() {
+    let d = check_accesses(
+        &[FileAccess {
+            path: "/tmp/out.txt".into(),
+            kind: AccessKind::Write,
+        }],
+        &["Edit(/tmp/**)"],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn file_accesses_write_denied() {
+    let d = check_accesses(
+        &[FileAccess {
+            path: "/etc/passwd".into(),
+            kind: AccessKind::Write,
+        }],
+        &[],
+        &["Write(/etc/**)"],
+    );
+    assert!(matches!(d, Decision::Deny(_)));
+}
+
+#[skuld::test]
+fn file_accesses_empty_list_allows() {
+    let d = check_accesses(&[], &[], &[]);
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn file_accesses_multiple_with_deny_stops_early() {
+    let accesses = [
+        FileAccess {
+            path: "/etc/shadow".into(),
+            kind: AccessKind::Read,
+        },
+        FileAccess {
+            path: "/tmp/safe.txt".into(),
+            kind: AccessKind::Read,
+        },
+    ];
+    let d = check_accesses(&accesses, &["Read(/tmp/**)"], &["Read(/etc/shadow)"]);
+    assert!(matches!(d, Decision::Deny(_)));
+}
+
+#[skuld::test]
+fn file_accesses_multiple_unmatched_collected() {
+    let accesses = [
+        FileAccess {
+            path: "/home/a.txt".into(),
+            kind: AccessKind::Read,
+        },
+        FileAccess {
+            path: "/home/b.txt".into(),
+            kind: AccessKind::Read,
+        },
+    ];
+    let d = check_accesses(&accesses, &[], &[]);
+    if let Decision::Ask(ref rules) = d {
+        assert!(
+            rules.len() >= 2,
+            "expected at least 2 unmatched rules, got {rules:?}",
+        );
+    } else {
+        panic!("expected Ask, got {d:?}");
+    }
+}
+
+#[skuld::test]
+fn file_accesses_write_denied_by_edit_rule() {
+    let d = check_accesses(
+        &[FileAccess {
+            path: "/etc/config.json".into(),
+            kind: AccessKind::Write,
+        }],
+        &[],
+        &["Edit(/etc/**)"],
+    );
+    assert!(matches!(d, Decision::Deny(_)));
 }

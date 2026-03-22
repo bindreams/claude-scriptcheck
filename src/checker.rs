@@ -33,27 +33,31 @@ pub fn check_program(program: &Program, perms: &ParsedPermissions, cwd: &str) ->
         matched_deny: Vec::new(),
     };
     checker.visit_program(program);
+    checker.finalize()
+}
 
-    let decision = if let Some(reason) = checker.denied {
-        Decision::Deny(reason)
-    } else if checker.unmatched.is_empty() {
-        Decision::Allow
-    } else {
-        checker.unmatched.sort();
-        checker.unmatched.dedup();
-        Decision::Ask(checker.unmatched)
+/// Check file accesses against permission rules, without parsing bash.
+/// Used for non-Bash tools (Read, Write, Edit, Grep, Glob).
+pub fn check_file_accesses(
+    accesses: &[FileAccess],
+    perms: &ParsedPermissions,
+    cwd: &str,
+) -> CheckResult {
+    let mut checker = PermissionChecker {
+        perms,
+        cwd,
+        unmatched: Vec::new(),
+        denied: None,
+        matched_allow: Vec::new(),
+        matched_deny: Vec::new(),
     };
-
-    checker.matched_allow.sort();
-    checker.matched_allow.dedup();
-    checker.matched_deny.sort();
-    checker.matched_deny.dedup();
-
-    CheckResult {
-        decision,
-        matched_allow: checker.matched_allow,
-        matched_deny: checker.matched_deny,
+    for access in accesses {
+        checker.check_file_access(access);
+        if checker.denied.is_some() {
+            break;
+        }
     }
+    checker.finalize()
 }
 
 struct PermissionChecker<'a> {
@@ -114,6 +118,29 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
 // ─── Domain logic ────────────────────────────────────────────────────────────
 
 impl PermissionChecker<'_> {
+    fn finalize(mut self) -> CheckResult {
+        let decision = if let Some(reason) = self.denied {
+            Decision::Deny(reason)
+        } else if self.unmatched.is_empty() {
+            Decision::Allow
+        } else {
+            self.unmatched.sort();
+            self.unmatched.dedup();
+            Decision::Ask(self.unmatched)
+        };
+
+        self.matched_allow.sort();
+        self.matched_allow.dedup();
+        self.matched_deny.sort();
+        self.matched_deny.dedup();
+
+        CheckResult {
+            decision,
+            matched_allow: self.matched_allow,
+            matched_deny: self.matched_deny,
+        }
+    }
+
     fn deny(&mut self, reason: String) {
         if self.denied.is_none() {
             self.denied = Some(reason);
@@ -408,10 +435,6 @@ fn extract_redirect_access(redirect: &Redirect, cwd: &str) -> Option<FileAccess>
 
     let word = word?;
     let path = word.try_to_static_string()?;
-    // Skip /dev/* special files
-    if path.starts_with("/dev/") {
-        return None;
-    }
     Some(FileAccess {
         path: file_access::resolve_path(&path, cwd),
         kind,

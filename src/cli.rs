@@ -5,6 +5,9 @@ use crate::{checker, logging, path_util, permission, settings};
 
 const HOOK_ENTRY_MARKER: &str = "claude-scriptcheck";
 
+/// Tool matchers that claude-scriptcheck handles. Each gets its own hook entry.
+pub const SUPPORTED_MATCHERS: &[&str] = &["Bash", "Grep", "Glob", "Read", "Write", "Edit"];
+
 /// Install the hook into Claude settings.
 pub fn install(project: bool) {
     let settings_path = settings_path(project);
@@ -26,26 +29,35 @@ pub fn install(project: bool) {
     }
     let pre_tool_use = hooks["PreToolUse"].as_array_mut().unwrap();
 
-    // Check if already installed
-    if is_installed(pre_tool_use, &binary_path) {
+    // Add entries for any missing matchers
+    let mut added = Vec::new();
+    for &matcher in SUPPORTED_MATCHERS {
+        if !is_installed_for(pre_tool_use, &binary_path, matcher) {
+            let entry = serde_json::json!({
+                "matcher": matcher,
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": binary_path
+                    }
+                ]
+            });
+            pre_tool_use.push(entry);
+            added.push(matcher);
+        }
+    }
+
+    if added.is_empty() {
         eprintln!("Hook is already installed in {}", settings_path.display());
         return;
     }
 
-    // Add the hook entry
-    let entry = serde_json::json!({
-        "matcher": "Bash",
-        "hooks": [
-            {
-                "type": "command",
-                "command": binary_path
-            }
-        ]
-    });
-    pre_tool_use.push(entry);
-
     write_settings_json(&settings_path, &root);
-    eprintln!("Installed hook in {}", settings_path.display());
+    eprintln!(
+        "Installed hook for {} in {}",
+        added.join(", "),
+        settings_path.display()
+    );
     eprintln!("Binary: {binary_path}");
 }
 
@@ -462,12 +474,6 @@ fn write_settings_json(path: &Path, value: &serde_json::Value) {
     });
 }
 
-fn is_installed(pre_tool_use: &[serde_json::Value], binary_path: &str) -> bool {
-    pre_tool_use
-        .iter()
-        .any(|entry| entry_matches(entry, binary_path))
-}
-
 fn entry_matches(entry: &serde_json::Value, binary_path: &str) -> bool {
     // Match by checking if any hook command contains our binary path or marker
     if let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
@@ -480,6 +486,21 @@ fn entry_matches(entry: &serde_json::Value, binary_path: &str) -> bool {
         }
     }
     false
+}
+
+/// Check if a hook entry exists for a specific matcher and binary path.
+pub fn is_installed_for(
+    pre_tool_use: &[serde_json::Value],
+    binary_path: &str,
+    matcher: &str,
+) -> bool {
+    pre_tool_use.iter().any(|entry| {
+        let matcher_matches = entry
+            .get("matcher")
+            .and_then(|m| m.as_str())
+            .is_some_and(|m| m == matcher);
+        matcher_matches && entry_matches(entry, binary_path)
+    })
 }
 
 #[cfg(test)]

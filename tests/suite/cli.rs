@@ -1,4 +1,6 @@
-use claude_scriptcheck::cli::{parse_install_source, InstallSource};
+use claude_scriptcheck::cli::{
+    is_installed_for, parse_install_source, InstallSource, SUPPORTED_MATCHERS,
+};
 
 #[skuld::test]
 fn detect_git_source() {
@@ -111,4 +113,84 @@ fn git_source_without_commit_hash() {
             "https://github.com/bindreams/claude-scriptcheck.git".into()
         ))
     );
+}
+
+// ── Install matcher tests ────────────────────────────────────────────────────
+
+#[skuld::test]
+fn supported_matchers_includes_all_tools() {
+    for tool in ["Bash", "Grep", "Glob", "Read", "Write", "Edit"] {
+        assert!(
+            SUPPORTED_MATCHERS.contains(&tool),
+            "SUPPORTED_MATCHERS should include {tool}",
+        );
+    }
+}
+
+#[skuld::test]
+fn is_installed_for_matches_binary_and_matcher() {
+    let entries = vec![serde_json::json!({
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "/usr/bin/claude-scriptcheck" }]
+    })];
+    assert!(is_installed_for(
+        &entries,
+        "/usr/bin/claude-scriptcheck",
+        "Bash"
+    ));
+    assert!(!is_installed_for(
+        &entries,
+        "/usr/bin/claude-scriptcheck",
+        "Grep"
+    ));
+    // entry_matches also matches by marker substring, so any binary path matches
+    // if the entry command contains "claude-scriptcheck". Test with a non-matching entry:
+    let other_entries = vec![serde_json::json!({
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "/usr/bin/other-tool" }]
+    })];
+    assert!(!is_installed_for(
+        &other_entries,
+        "/usr/bin/claude-scriptcheck",
+        "Bash"
+    ));
+}
+
+#[skuld::test]
+fn is_installed_for_no_false_positive_on_wrong_matcher() {
+    let entries = vec![
+        serde_json::json!({
+            "matcher": "Bash",
+            "hooks": [{ "type": "command", "command": "/usr/bin/claude-scriptcheck" }]
+        }),
+        serde_json::json!({
+            "matcher": "Grep",
+            "hooks": [{ "type": "command", "command": "/usr/bin/claude-scriptcheck" }]
+        }),
+    ];
+    assert!(is_installed_for(
+        &entries,
+        "/usr/bin/claude-scriptcheck",
+        "Bash"
+    ));
+    assert!(is_installed_for(
+        &entries,
+        "/usr/bin/claude-scriptcheck",
+        "Grep"
+    ));
+    assert!(!is_installed_for(
+        &entries,
+        "/usr/bin/claude-scriptcheck",
+        "Read"
+    ));
+}
+
+#[skuld::test]
+fn is_installed_for_empty_array() {
+    let entries: Vec<serde_json::Value> = vec![];
+    assert!(!is_installed_for(
+        &entries,
+        "/usr/bin/claude-scriptcheck",
+        "Bash"
+    ));
 }

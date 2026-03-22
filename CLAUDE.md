@@ -1,7 +1,7 @@
 # claude-scriptcheck
 
-AST-aware Bash permission checker, used as a Claude Code pre-tool-use hook.
-Parses shell commands with [thaum](https://github.com/bindreams/thaum), walks the AST, and decides **allow / deny / ask** based on permission rules in Claude's `settings.json`.
+Permission checker for Claude Code pre-tool-use hooks.
+Checks Bash commands (AST-aware, parsed with [thaum](https://github.com/bindreams/thaum)) and file-access tools (Read, Write, Edit, Grep, Glob) against permission rules in Claude's `settings.json`.
 
 ## Build & test
 
@@ -14,20 +14,20 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git  # insta
 
 ## Source map
 
-| File                   | Role                                                                                                              |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `src/lib.rs`           | Library crate root. Re-exports all modules so they are usable without spawning the binary.                        |
-| `src/main.rs`          | Thin binary wrapper: CLI routing (clap) and hook-mode I/O (stdin JSON → decision JSON).                           |
-| `src/cli.rs`           | Subcommand implementations: `install`, `uninstall`, `check`, `log`, `log-path`, `upgrade`.                        |
-| `src/checker.rs`       | Core logic. `check_program()` walks AST, checks each command against rules, returns `Decision`. ~60 unit tests.   |
-| `src/permission.rs`    | Parses rule strings (`Bash(cmd *)`, `Read(glob)`, etc.) into `ParsedPermissions`. Matching logic. ~20 unit tests. |
-| `src/file_access.rs`   | Maps well-known commands to file-access semantics (read/write args, redirects). ~25 unit tests.                   |
-| `src/hook.rs`          | `HookInput` / `HookOutput` serde structs for JSON protocol with Claude Code.                                      |
-| `src/settings.rs`      | Loads and merges permission rules from global + project settings files.                                           |
-| `src/logging.rs`       | Appends missing rules to platform-specific log file.                                                              |
-| `src/path_util.rs`     | Cross-platform path helpers: `is_absolute()`, `normalize_separators()`.                                           |
-| `src/word_util.rs`     | Extracts static string literals from bash `Word` nodes; detects dynamic content.                                  |
-| `tests/integration.rs` | Integration tests: logic tests call the library API directly; binary I/O tests invoke the compiled binary.        |
+| File                 | Role                                                                                                               |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `src/lib.rs`         | Library crate root. Re-exports all modules so they are usable without spawning the binary.                         |
+| `src/main.rs`        | Binary: CLI routing (clap), hook-mode dispatch (Bash/Grep/Glob/Read/Write/Edit), I/O (stdin JSON → decision JSON). |
+| `src/cli.rs`         | Subcommand implementations: `install`, `uninstall`, `check`, `log`, `log-path`, `upgrade`.                         |
+| `src/checker.rs`     | Core logic. `check_program()` for Bash AST, `check_file_accesses()` for non-Bash tools. Returns `Decision`.        |
+| `src/permission.rs`  | Parses rule strings (`Bash(cmd *)`, `Read(glob)`, etc.) into `ParsedPermissions`. Matching logic. ~20 unit tests.  |
+| `src/file_access.rs` | Maps well-known commands to file-access semantics (read/write args, redirects). ~25 unit tests.                    |
+| `src/hook.rs`        | `HookInput` / `HookOutput` serde structs for JSON protocol with Claude Code.                                       |
+| `src/settings.rs`    | Loads and merges permission rules from global + project settings files.                                            |
+| `src/logging.rs`     | Appends missing rules to platform-specific log file.                                                               |
+| `src/path_util.rs`   | Cross-platform path helpers: `is_absolute()`, `normalize_separators()`.                                            |
+| `src/word_util.rs`   | Extracts static string literals from bash `Word` nodes; detects dynamic content.                                   |
+| `tests/suite/`       | Integration tests: logic tests call the library API directly; binary I/O tests invoke the compiled binary.         |
 
 ## Key types
 
@@ -37,22 +37,28 @@ ParsedPermissions  { allow_bash, deny_bash, allow_read, deny_read, allow_write, 
 BashRule         { prefix_tokens: Vec<String>, wildcard: bool }
 FileAccess       { path: String, kind: AccessKind }   // AccessKind = Read | Write
 HookInput        { session_id, cwd, tool_name, tool_input }
+ToolInput        { command?, file_path?, path? }          // each tool uses a different subset
 HookOutput       { hookEventName, permissionDecision, permissionDecisionReason }
 ```
 
 ## Decision flow
 
 ```
-stdin JSON → is tool_name "Bash"? → parse command (thaum) → walk AST:
-  for each command:
-    1. check deny Bash rules  →  hit? → Deny
-    2. check allow Bash rules →  miss? → collect as unmatched
-    3. extract file accesses (redirects + well-known command semantics)
-    4. check deny file rules  →  hit? → Deny
-    5. check allow file rules →  miss? → collect as unmatched
-  any deny? → Deny
-  any unmatched? → Ask (+ log missing rules)
-  all matched → Allow
+stdin JSON → match tool_name:
+  "Bash" → parse command (thaum) → walk AST:
+    for each command:
+      1. check deny Bash rules  →  hit? → Deny
+      2. check allow Bash rules →  miss? → collect as unmatched
+      3. extract file accesses (redirects + well-known command semantics)
+      4. check deny file rules  →  hit? → Deny
+      5. check allow file rules →  miss? → collect as unmatched
+    any deny? → Deny
+    any unmatched? → Ask (+ log missing rules)
+    all matched → Allow
+  "Grep" | "Glob" → extract path (default cwd) → check against Read rules
+  "Read"          → extract file_path → check against Read rules
+  "Write" | "Edit"→ extract file_path → check against Write/Edit rules
+  other           → silent exit (code 0)
 ```
 
 ## Conventions
@@ -62,5 +68,5 @@ stdin JSON → is tool_name "Bash"? → parse command (thaum) → walk AST:
 - `pretty_assertions` is used in dev for readable test diffs.
 - No CI/CD configured yet.
 - Conservative defaults: `eval`, dynamic command names, dynamic file paths, and parse failures all result in `ask`.
-- `/dev/*` paths are silently ignored (no rule needed).
+- The Edit and Write tools are checked identically (`AccessKind::Write`): `Write(pat)` allows both, `Edit(pat)` also allows both (fallback). There is no way to allow Edit-only while denying Write on the same path.
 - Pattern/program arguments in `awk`, `grep`, `rg`, `sed` are skipped during file-access analysis.

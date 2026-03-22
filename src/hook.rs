@@ -16,6 +16,8 @@ pub struct HookInput {
 #[derive(Deserialize)]
 pub struct ToolInput {
     pub command: Option<String>,
+    pub file_path: Option<String>,
+    pub path: Option<String>,
 }
 
 #[derive(Serialize)]

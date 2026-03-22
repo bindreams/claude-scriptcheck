@@ -103,9 +103,52 @@ fn hook_json(tool_name: &str, command: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+fn file_tool_json(tool_name: &str, file_path: &str) -> Vec<u8> {
+    serde_json::json!({
+        "session_id": "test-session",
+        "cwd": "/tmp",
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool_name,
+        "tool_input": { "file_path": file_path },
+        "tool_use_id": "toolu_test"
+    })
+    .to_string()
+    .into_bytes()
+}
+
+fn search_tool_json(tool_name: &str, path: Option<&str>, pattern: &str) -> Vec<u8> {
+    let mut tool_input = serde_json::json!({ "pattern": pattern });
+    if let Some(p) = path {
+        tool_input["path"] = serde_json::json!(p);
+    }
+    serde_json::json!({
+        "session_id": "test-session",
+        "cwd": "/tmp",
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool_name,
+        "tool_input": tool_input,
+        "tool_use_id": "toolu_test"
+    })
+    .to_string()
+    .into_bytes()
+}
+
+fn parse_decision(output: &std::process::Output) -> String {
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "stdout is not valid JSON: {e}\nstdout: {}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    json["hookSpecificOutput"]["permissionDecision"]
+        .as_str()
+        .expect("missing permissionDecision field")
+        .to_string()
+}
+
 #[skuld::test]
-fn non_bash_tool_exits_cleanly() {
-    let output = run_binary(&hook_json("Read", "anything"));
+fn unsupported_tool_exits_cleanly() {
+    let output = run_binary(&hook_json("Agent", "anything"));
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
 }
@@ -121,4 +164,84 @@ fn empty_command_exits_cleanly() {
 fn invalid_json_exits_with_error() {
     let output = run_binary(b"not json at all");
     assert_eq!(output.status.code(), Some(2));
+}
+
+// ── Non-Bash tool tests ─────────────────────────────────────────────────────
+
+#[skuld::test]
+fn grep_tool_produces_decision() {
+    let output = run_binary(&search_tool_json("Grep", Some("/tmp"), "pattern"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(!output.stdout.is_empty(), "Grep should produce JSON output");
+    let decision = parse_decision(&output);
+    assert!(
+        decision == "allow" || decision == "ask",
+        "expected allow or ask, got {decision}",
+    );
+}
+
+#[skuld::test]
+fn read_tool_produces_decision() {
+    let output = run_binary(&file_tool_json("Read", "/tmp/test.txt"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(!output.stdout.is_empty(), "Read should produce JSON output");
+    parse_decision(&output); // just verify it parses
+}
+
+#[skuld::test]
+fn write_tool_produces_decision() {
+    let output = run_binary(&file_tool_json("Write", "/tmp/test.txt"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        !output.stdout.is_empty(),
+        "Write should produce JSON output"
+    );
+    parse_decision(&output);
+}
+
+#[skuld::test]
+fn edit_tool_produces_decision() {
+    let output = run_binary(&file_tool_json("Edit", "/tmp/test.txt"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(!output.stdout.is_empty(), "Edit should produce JSON output");
+    parse_decision(&output);
+}
+
+#[skuld::test]
+fn glob_tool_produces_decision() {
+    let output = run_binary(&search_tool_json("Glob", Some("/tmp"), "**/*.txt"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(!output.stdout.is_empty(), "Glob should produce JSON output");
+    parse_decision(&output);
+}
+
+#[skuld::test]
+fn grep_no_path_defaults_to_cwd() {
+    let output = run_binary(&search_tool_json("Grep", None, "pattern"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        !output.stdout.is_empty(),
+        "Grep with no path should still produce JSON output"
+    );
+    parse_decision(&output);
+}
+
+#[skuld::test]
+fn file_tool_missing_path_asks() {
+    for tool in ["Read", "Write", "Edit"] {
+        let input = serde_json::json!({
+            "session_id": "test-session",
+            "cwd": "/tmp",
+            "hook_event_name": "PreToolUse",
+            "tool_name": tool,
+            "tool_input": {},
+            "tool_use_id": "toolu_test"
+        })
+        .to_string()
+        .into_bytes();
+        let output = run_binary(&input);
+        assert_eq!(output.status.code(), Some(0), "{tool} should exit 0");
+        let decision = parse_decision(&output);
+        assert_eq!(decision, "ask", "{tool} with no file_path should ask");
+    }
 }
