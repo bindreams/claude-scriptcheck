@@ -175,6 +175,47 @@ fn parse_bash_rule_wildcard() {
 }
 
 #[skuld::test]
+fn parse_then_match_trailing_wildcard() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Bash(git status *)", home).unwrap();
+    match parsed {
+        ParsedRule::Bash(rule) => {
+            // Zero extra args
+            assert!(bash_rule_matches(&rule, &tokens(&["git", "status"])));
+            // Multiple extra args
+            assert!(bash_rule_matches(
+                &rule,
+                &tokens(&["git", "status", "-s", "--porcelain"])
+            ));
+            // Wrong prefix
+            assert!(!bash_rule_matches(
+                &rule,
+                &tokens(&["git", "commit", "-m", "msg"])
+            ));
+        }
+        _ => panic!("expected Bash rule"),
+    }
+}
+
+#[skuld::test]
+fn bash_star_parens_matches_any_command() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Bash(*)", home).unwrap();
+    match parsed {
+        ParsedRule::Bash(rule) => {
+            assert!(rule.prefix_tokens.is_empty());
+            assert!(rule.wildcard);
+            assert!(bash_rule_matches(&rule, &tokens(&["ls"])));
+            assert!(bash_rule_matches(
+                &rule,
+                &tokens(&["git", "push", "origin", "main"])
+            ));
+        }
+        _ => panic!("expected Bash rule"),
+    }
+}
+
+#[skuld::test]
 fn parse_read_rule(#[fixture(temp_dir)] dir: &Path) {
     let base = claude_scriptcheck::path_util::normalize_separators(
         &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
@@ -433,6 +474,31 @@ fn trailing_doublestar_without_wildcard() {
 }
 
 #[skuld::test]
+fn trailing_doublestar_without_wildcard_rejects_wrong_command() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Bash(curl **)", home).unwrap();
+    match parsed {
+        ParsedRule::Bash(rule) => {
+            assert!(!bash_rule_matches(&rule, &tokens(&["wget"])));
+            assert!(!bash_rule_matches(&rule, &tokens(&["wget", "-O", "file"])));
+        }
+        _ => panic!("expected Bash rule"),
+    }
+}
+
+#[skuld::test]
+fn trailing_doublestar_without_wildcard_empty_command() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Bash(curl **)", home).unwrap();
+    match parsed {
+        ParsedRule::Bash(rule) => {
+            assert!(!bash_rule_matches(&rule, &tokens(&[])));
+        }
+        _ => panic!("expected Bash rule"),
+    }
+}
+
+#[skuld::test]
 fn doublestar_parse_roundtrip() {
     let home = "/home/test";
     let parsed = parse_single_rule("Bash(curl ** -X POST *)", home).unwrap();
@@ -441,6 +507,118 @@ fn doublestar_parse_roundtrip() {
             assert_eq!(rule.prefix_tokens, vec!["curl", "**", "-X", "POST"]);
             assert!(rule.wildcard);
             assert_eq!(rule.to_rule_string(), "Bash(curl ** -X POST *)");
+        }
+        _ => panic!("expected Bash rule"),
+    }
+}
+
+// ─── Multiple double-stars in one rule ───────────────────────────────────────
+
+#[skuld::test]
+fn multiple_doublestars_both_skip_zero() {
+    let rule = make_rule(&["curl", "**", "-X", "**", "POST"], false);
+    assert!(bash_rule_matches(&rule, &tokens(&["curl", "-X", "POST"])));
+}
+
+#[skuld::test]
+fn multiple_doublestars_first_skips() {
+    let rule = make_rule(&["curl", "**", "-X", "**", "POST"], false);
+    assert!(bash_rule_matches(
+        &rule,
+        &tokens(&["curl", "-s", "-X", "POST"])
+    ));
+}
+
+#[skuld::test]
+fn multiple_doublestars_second_skips() {
+    let rule = make_rule(&["curl", "**", "-X", "**", "POST"], false);
+    assert!(bash_rule_matches(
+        &rule,
+        &tokens(&["curl", "-X", "GET", "POST"])
+    ));
+}
+
+#[skuld::test]
+fn multiple_doublestars_both_skip() {
+    let rule = make_rule(&["curl", "**", "-X", "**", "POST"], false);
+    assert!(bash_rule_matches(
+        &rule,
+        &tokens(&["curl", "-s", "-S", "-X", "-H", "Accept: */*", "POST"])
+    ));
+}
+
+#[skuld::test]
+fn multiple_doublestars_no_match_missing_literal() {
+    let rule = make_rule(&["curl", "**", "-X", "**", "POST"], false);
+    assert!(!bash_rule_matches(
+        &rule,
+        &tokens(&["curl", "-s", "-X", "GET"])
+    ));
+}
+
+#[skuld::test]
+fn multiple_doublestars_rejects_trailing() {
+    let rule = make_rule(&["curl", "**", "-X", "**", "POST"], false);
+    assert!(!bash_rule_matches(
+        &rule,
+        &tokens(&["curl", "-X", "POST", "https://example.com"])
+    ));
+}
+
+#[skuld::test]
+fn doublestar_insufficient_tokens_for_suffix() {
+    let rule = make_rule(&["curl", "**", "-X", "POST"], false);
+    assert!(!bash_rule_matches(&rule, &tokens(&["curl", "-X"])));
+}
+
+// ─── Double-star with trailing wildcard (parse-then-match) ───────────────────
+
+#[skuld::test]
+fn doublestar_with_trailing_wildcard_both_consume() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Bash(curl ** -X POST *)", home).unwrap();
+    match parsed {
+        ParsedRule::Bash(rule) => {
+            assert!(bash_rule_matches(
+                &rule,
+                &tokens(&[
+                    "curl",
+                    "-s",
+                    "-S",
+                    "-X",
+                    "POST",
+                    "https://example.com",
+                    "-d",
+                    "body"
+                ])
+            ));
+        }
+        _ => panic!("expected Bash rule"),
+    }
+}
+
+#[skuld::test]
+fn doublestar_with_trailing_wildcard_no_trailing_args() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Bash(curl ** -X POST *)", home).unwrap();
+    match parsed {
+        ParsedRule::Bash(rule) => {
+            assert!(bash_rule_matches(&rule, &tokens(&["curl", "-X", "POST"])));
+        }
+        _ => panic!("expected Bash rule"),
+    }
+}
+
+#[skuld::test]
+fn doublestar_with_trailing_wildcard_wrong_method() {
+    let home = "/home/test";
+    let parsed = parse_single_rule("Bash(curl ** -X POST *)", home).unwrap();
+    match parsed {
+        ParsedRule::Bash(rule) => {
+            assert!(!bash_rule_matches(
+                &rule,
+                &tokens(&["curl", "-s", "-X", "GET", "https://example.com"])
+            ));
         }
         _ => panic!("expected Bash rule"),
     }
