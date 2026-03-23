@@ -438,11 +438,23 @@ fn settings_path(project: bool) -> PathBuf {
     }
 }
 
+/// Returns the binary path to write into settings.json hook entries.
+///
+/// If argv[0] is a bare command name (no path separators), returns it as-is
+/// so that settings.json uses PATH lookup — making it portable across machines.
+/// Otherwise falls back to `current_exe()` for a resolved absolute path.
 fn current_binary_path() -> String {
-    std::env::current_exe()
-        .expect("Could not determine binary path")
-        .to_string_lossy()
-        .to_string()
+    match std::env::args().next() {
+        // Bare command name (no path separators) → PATH lookup, keep as-is
+        Some(argv0) if !argv0.is_empty() && !argv0.contains('/') && !argv0.contains('\\') => {
+            argv0
+        }
+        // Path-based invocation, empty argv[0], or missing argv → resolve to absolute
+        _ => std::env::current_exe()
+            .expect("Could not determine binary path")
+            .to_string_lossy()
+            .to_string(),
+    }
 }
 
 fn read_settings_json(path: &Path) -> serde_json::Value {

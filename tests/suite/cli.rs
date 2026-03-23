@@ -194,3 +194,199 @@ fn is_installed_for_empty_array() {
         "Bash"
     ));
 }
+
+// ── Cross-format matching (bare name vs absolute path) ──────────────────────
+
+#[skuld::test]
+fn is_installed_for_matches_bare_command_name() {
+    let entries = vec![serde_json::json!({
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "claude-scriptcheck" }]
+    })];
+    assert!(is_installed_for(&entries, "claude-scriptcheck", "Bash"));
+}
+
+#[skuld::test]
+fn is_installed_for_matches_absolute_against_bare() {
+    // Entry has absolute path, lookup with bare name — marker match on cmd
+    let entries = vec![serde_json::json!({
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "/usr/local/bin/claude-scriptcheck" }]
+    })];
+    assert!(is_installed_for(&entries, "claude-scriptcheck", "Bash"));
+}
+
+#[skuld::test]
+fn is_installed_for_matches_bare_against_absolute() {
+    // Entry has bare name, lookup with absolute path — marker match on cmd
+    let entries = vec![serde_json::json!({
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "claude-scriptcheck" }]
+    })];
+    assert!(is_installed_for(
+        &entries,
+        "/usr/local/bin/claude-scriptcheck",
+        "Bash"
+    ));
+}
+
+#[skuld::test]
+fn is_installed_for_mixed_format_no_duplicate() {
+    // Simulates: first install wrote bare name, second install checks with absolute path.
+    // Should detect existing entry via marker and avoid duplicates.
+    let entries = vec![
+        serde_json::json!({
+            "matcher": "Bash",
+            "hooks": [{ "type": "command", "command": "claude-scriptcheck" }]
+        }),
+        serde_json::json!({
+            "matcher": "Grep",
+            "hooks": [{ "type": "command", "command": "claude-scriptcheck" }]
+        }),
+    ];
+    // Both matchers detected as installed regardless of binary_path format
+    assert!(is_installed_for(
+        &entries,
+        "/home/user/.cargo/bin/claude-scriptcheck",
+        "Bash"
+    ));
+    assert!(is_installed_for(
+        &entries,
+        "/home/user/.cargo/bin/claude-scriptcheck",
+        "Grep"
+    ));
+    // Unrelated matcher still not installed
+    assert!(!is_installed_for(
+        &entries,
+        "/home/user/.cargo/bin/claude-scriptcheck",
+        "Read"
+    ));
+}
+
+// ── Install/uninstall round-trip via binary ─────────────────────────────────
+
+#[skuld::test]
+fn install_uninstall_roundtrip() {
+    use std::process::Command;
+
+    let dir = std::env::temp_dir()
+        .join("claude-scriptcheck-tests")
+        .join("roundtrip");
+    // Clean up from any prior failed run
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
+
+    // Install
+    let output = Command::new(binary)
+        .args(["install", "--project"])
+        .current_dir(&dir)
+        .output()
+        .expect("Failed to run binary");
+    assert!(output.status.success(), "install failed: {}", String::from_utf8_lossy(&output.stderr));
+
+    let settings_path = dir.join(".claude/settings.json");
+    let content = std::fs::read_to_string(&settings_path).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+    let hooks = json["hooks"]["PreToolUse"]
+        .as_array()
+        .expect("PreToolUse should be an array");
+    assert_eq!(
+        hooks.len(),
+        SUPPORTED_MATCHERS.len(),
+        "should have one entry per supported matcher"
+    );
+
+    // Every entry's command should contain "claude-scriptcheck"
+    for entry in hooks {
+        let cmd = entry["hooks"][0]["command"]
+            .as_str()
+            .expect("command should be a string");
+        assert!(
+            cmd.contains("claude-scriptcheck"),
+            "command should contain binary name, got: {cmd}"
+        );
+    }
+
+    // Verify all matchers are present
+    for &matcher in SUPPORTED_MATCHERS {
+        assert!(
+            hooks
+                .iter()
+                .any(|e| e["matcher"].as_str() == Some(matcher)),
+            "missing matcher: {matcher}"
+        );
+    }
+
+    // Uninstall
+    let output = Command::new(binary)
+        .args(["uninstall", "--project"])
+        .current_dir(&dir)
+        .output()
+        .expect("Failed to run binary");
+    assert!(output.status.success(), "uninstall failed: {}", String::from_utf8_lossy(&output.stderr));
+
+    let content = std::fs::read_to_string(&settings_path).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+    assert!(
+        json.get("hooks").is_none(),
+        "hooks should be removed after uninstall, got: {json}"
+    );
+
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[skuld::test]
+#[cfg(unix)]
+fn install_via_bare_name_writes_bare_command() {
+    use std::os::unix::fs::symlink;
+    use std::process::Command;
+
+    let dir = std::env::temp_dir()
+        .join("claude-scriptcheck-tests")
+        .join("bare-name");
+    let _ = std::fs::remove_dir_all(&dir);
+    let bin_dir = dir.join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+
+    // Symlink the test binary into a temp bin/ directory
+    let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
+    let link_path = bin_dir.join("claude-scriptcheck");
+    symlink(binary, &link_path).unwrap();
+
+    // Invoke via bare name by putting bin/ on PATH
+    let output = Command::new("claude-scriptcheck")
+        .args(["install", "--project"])
+        .current_dir(&dir)
+        .env("PATH", &bin_dir)
+        .output()
+        .expect("Failed to run binary");
+    assert!(
+        output.status.success(),
+        "install failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let settings_path = dir.join(".claude/settings.json");
+    let content = std::fs::read_to_string(&settings_path).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+    let hooks = json["hooks"]["PreToolUse"]
+        .as_array()
+        .expect("PreToolUse should be an array");
+
+    // The command should be the bare name "claude-scriptcheck", not an absolute path
+    let cmd = hooks[0]["hooks"][0]["command"]
+        .as_str()
+        .expect("command should be a string");
+    assert_eq!(
+        cmd, "claude-scriptcheck",
+        "bare-name invocation should write bare command, got: {cmd}"
+    );
+
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&dir);
+}
