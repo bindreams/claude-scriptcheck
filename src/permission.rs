@@ -124,21 +124,21 @@ pub fn parse_single_rule(rule: &str, home: &str) -> Option<ParsedRule> {
         }))
     } else if let Some(inner) = rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')')) {
         Some(ParsedRule::Read(
-            crate::canonicalize::best_effort_canonicalize(&inner.replace('~', home)),
+            crate::canonicalize::best_effort_canonicalize(&expand_tilde(inner, home)),
         ))
     } else if let Some(inner) = rule
         .strip_prefix("Write(")
         .and_then(|s| s.strip_suffix(')'))
     {
         Some(ParsedRule::Write(
-            crate::canonicalize::best_effort_canonicalize(&inner.replace('~', home)),
+            crate::canonicalize::best_effort_canonicalize(&expand_tilde(inner, home)),
         ))
     } else {
         rule.strip_prefix("Edit(")
             .and_then(|s| s.strip_suffix(')'))
             .map(|inner| {
                 ParsedRule::Edit(crate::canonicalize::best_effort_canonicalize(
-                    &inner.replace('~', home),
+                    &expand_tilde(inner, home),
                 ))
             })
     }
@@ -198,6 +198,49 @@ fn token_matches(pattern: &str, actual: &str) -> bool {
         glob_match::glob_match(pattern, actual)
     } else {
         pattern == actual
+    }
+}
+
+/// Inject ephemeral allow rules for `acceptEdits` mode.
+/// Each workspace directory gets `Write(dir/**)` and `Edit(dir/**)` allow rules,
+/// parsed through the standard `parse_single_rule` pipeline.
+pub fn inject_accept_edits_rules(perms: &mut ParsedPermissions, workspace_dirs: &[String]) {
+    let home = dirs::home_dir()
+        .map(|h| crate::path_util::normalize_separators(&h.to_string_lossy()))
+        .unwrap_or_default();
+
+    for dir in workspace_dirs {
+        let normalized = crate::path_util::normalize_separators(dir);
+        let base = normalized.trim_end_matches('/');
+        if base.is_empty() {
+            continue;
+        }
+
+        let write_rule = format!("Write({base}/**)");
+        let edit_rule = format!("Edit({base}/**)");
+
+        if let Some(ParsedRule::Write(pat)) = parse_single_rule(&write_rule, &home) {
+            perms.allow_write.push(pat);
+        }
+        if let Some(ParsedRule::Edit(pat)) = parse_single_rule(&edit_rule, &home) {
+            perms.allow_edit.push(pat);
+        }
+    }
+}
+
+/// Expand a leading `~/` or bare `~` to the home directory.
+/// Does NOT expand `~` in the middle of a path (e.g. `/home/user/my~project`).
+/// Returns the input unchanged if `home` is empty (cannot expand).
+fn expand_tilde(path: &str, home: &str) -> String {
+    if home.is_empty() {
+        return path.to_string();
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        format!("{home}/{rest}")
+    } else if path == "~" {
+        home.to_string()
+    } else {
+        path.to_string()
     }
 }
 

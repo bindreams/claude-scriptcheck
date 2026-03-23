@@ -79,19 +79,19 @@ fn parse_managed_settings_no_permissions() {
 
 #[skuld::test]
 fn merge_ask_from_multiple_files() {
-    let perms = load_settings_from_contents(
+    let loaded = load_settings_from_contents(
         None,
         &[
             r#"{"permissions": {"allow": ["Bash(ls)"], "deny": [], "ask": ["Bash(rm *)"]}}"#,
             r#"{"permissions": {"allow": [], "deny": [], "ask": ["Bash(curl *)"]}}"#,
         ],
     );
-    assert_eq!(perms.ask, vec!["Bash(rm *)", "Bash(curl *)"]);
+    assert_eq!(loaded.permissions.ask, vec!["Bash(rm *)", "Bash(curl *)"]);
 }
 
 #[skuld::test]
 fn managed_only_discards_user_rules() {
-    let perms = load_settings_from_contents(
+    let loaded = load_settings_from_contents(
         Some(
             r#"{"permissions": {"allow": ["Bash(npm *)"], "deny": ["Bash(curl *)"], "ask": []}, "allowManagedPermissionRulesOnly": true}"#,
         ),
@@ -100,27 +100,61 @@ fn managed_only_discards_user_rules() {
         ],
     );
     // Only managed rules survive
-    assert_eq!(perms.allow, vec!["Bash(npm *)"]);
-    assert_eq!(perms.deny, vec!["Bash(curl *)"]);
-    assert!(perms.ask.is_empty());
+    assert_eq!(loaded.permissions.allow, vec!["Bash(npm *)"]);
+    assert_eq!(loaded.permissions.deny, vec!["Bash(curl *)"]);
+    assert!(loaded.permissions.ask.is_empty());
 }
 
 #[skuld::test]
 fn managed_merged_when_flag_false() {
-    let perms = load_settings_from_contents(
+    let loaded = load_settings_from_contents(
         Some(r#"{"permissions": {"allow": ["Bash(npm *)"], "deny": [], "ask": []}}"#),
         &[r#"{"permissions": {"allow": ["Bash(ls *)"], "deny": [], "ask": []}}"#],
     );
-    assert_eq!(perms.allow, vec!["Bash(npm *)", "Bash(ls *)"]);
+    assert_eq!(loaded.permissions.allow, vec!["Bash(npm *)", "Bash(ls *)"]);
 }
 
 #[skuld::test]
 fn managed_none_still_loads_user_rules() {
-    let perms = load_settings_from_contents(
+    let loaded = load_settings_from_contents(
         None,
         &[r#"{"permissions": {"allow": ["Bash(ls *)"], "deny": [], "ask": []}}"#],
     );
-    assert_eq!(perms.allow, vec!["Bash(ls *)"]);
+    assert_eq!(loaded.permissions.allow, vec!["Bash(ls *)"]);
+}
+
+// ─── additionalDirectories ───────────────────────────────────────────────────
+
+#[skuld::test]
+fn parse_additional_directories() {
+    let json = r#"{"additionalDirectories": ["/home/user/other", "~/Desktop"]}"#;
+    let settings: Settings = serde_json::from_str(json).unwrap();
+    assert_eq!(
+        settings.additional_directories,
+        vec!["/home/user/other", "~/Desktop"]
+    );
+}
+
+#[skuld::test]
+fn additional_directories_defaults_empty() {
+    let json = r#"{"permissions": {"allow": [], "deny": []}}"#;
+    let settings: Settings = serde_json::from_str(json).unwrap();
+    assert!(settings.additional_directories.is_empty());
+}
+
+#[skuld::test]
+fn additional_directories_merged_from_contents() {
+    let loaded = load_settings_from_contents(
+        None,
+        &[
+            r#"{"additionalDirectories": ["/dir1"]}"#,
+            r#"{"additionalDirectories": ["/dir2", "/dir3"]}"#,
+        ],
+    );
+    assert_eq!(
+        loaded.additional_directories,
+        vec!["/dir1", "/dir2", "/dir3"]
+    );
 }
 
 // ─── resolve_rule_relative_paths (cwd == project_root) ──────────────────────

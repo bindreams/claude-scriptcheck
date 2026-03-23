@@ -4,6 +4,8 @@ use std::path::Path;
 #[derive(Deserialize)]
 pub struct Settings {
     pub permissions: Option<PermissionsJson>,
+    #[serde(default, rename = "additionalDirectories")]
+    pub additional_directories: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -30,66 +32,79 @@ pub struct Permissions {
     pub ask: Vec<String>,
 }
 
+/// Result of loading settings: merged permissions + workspace configuration.
+#[derive(Default)]
+pub struct LoadedSettings {
+    pub permissions: Permissions,
+    pub additional_directories: Vec<String>,
+}
+
 /// Load and merge permission rules from all settings files.
 ///
 /// `cwd` is the current working directory (used for bare/`./` relative paths).
 /// `project_root` is the project root directory, typically `$CLAUDE_PROJECT_DIR`
 /// (used for `/path` project-root-relative patterns and locating settings files).
-pub fn load_settings(cwd: &str, project_root: &str) -> Permissions {
+pub fn load_settings(cwd: &str, project_root: &str) -> LoadedSettings {
+    let mut result = LoadedSettings::default();
+
     // 1. Managed settings (highest authority)
-    let (mut merged, managed_only) = load_managed();
+    let (merged, managed_only) = load_managed();
+    result.permissions = merged;
 
     if managed_only {
-        return merged;
+        return result;
     }
 
     // 2. Global settings
     if let Some(home) = dirs::home_dir() {
         let global = home.join(".claude/settings.json");
-        merge_from_with_base(&global, cwd, project_root, &mut merged);
+        merge_from_with_base(&global, cwd, project_root, &mut result);
     }
 
     // 3. Project-level settings (located at project root)
     let project = Path::new(project_root).join(".claude/settings.json");
-    merge_from_with_base(&project, cwd, project_root, &mut merged);
+    merge_from_with_base(&project, cwd, project_root, &mut result);
 
     // 4. Project-level local settings (located at project root)
     let local = Path::new(project_root).join(".claude/settings.local.json");
-    merge_from_with_base(&local, cwd, project_root, &mut merged);
+    merge_from_with_base(&local, cwd, project_root, &mut result);
 
-    merged
+    result
 }
 
 /// Testable merge logic that operates on string contents instead of file paths.
 pub fn load_settings_from_contents(
     managed_content: Option<&str>,
     settings_contents: &[&str],
-) -> Permissions {
-    let mut merged = Permissions::default();
+) -> LoadedSettings {
+    let mut result = LoadedSettings::default();
     let mut managed_only = false;
 
     if let Some(content) = managed_content {
         if let Ok(ms) = serde_json::from_str::<ManagedSettings>(content) {
             managed_only = ms.allow_managed_permission_rules_only;
             if let Some(perms) = ms.permissions {
-                merge_permissions(&mut merged, perms);
+                merge_permissions(&mut result.permissions, perms);
             }
         }
     }
 
     if managed_only {
-        return merged;
+        return result;
     }
 
     for content in settings_contents {
         if let Ok(settings) = serde_json::from_str::<Settings>(content) {
             if let Some(perms) = settings.permissions {
-                merge_permissions(&mut merged, perms);
+                merge_permissions(&mut result.permissions, perms);
             }
+            result
+                .additional_directories
+                .extend(settings.additional_directories);
         }
     }
 
-    merged
+    result
 }
 
 fn load_managed() -> (Permissions, bool) {
@@ -119,7 +134,12 @@ fn managed_settings_path() -> &'static str {
     }
 }
 
-fn merge_from_with_base(path: &Path, cwd: &str, project_root: &str, merged: &mut Permissions) {
+fn merge_from_with_base(
+    path: &Path,
+    cwd: &str,
+    project_root: &str,
+    result: &mut LoadedSettings,
+) {
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
     };
@@ -130,8 +150,11 @@ fn merge_from_with_base(path: &Path, cwd: &str, project_root: &str, merged: &mut
         resolve_rule_relative_paths(&mut perms.allow, cwd, project_root);
         resolve_rule_relative_paths(&mut perms.deny, cwd, project_root);
         resolve_rule_relative_paths(&mut perms.ask, cwd, project_root);
-        merge_permissions(merged, perms);
+        merge_permissions(&mut result.permissions, perms);
     }
+    result
+        .additional_directories
+        .extend(settings.additional_directories);
 }
 
 fn merge_permissions(merged: &mut Permissions, perms: PermissionsJson) {

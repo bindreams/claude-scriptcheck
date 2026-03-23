@@ -624,6 +624,95 @@ fn doublestar_with_trailing_wildcard_wrong_method() {
     }
 }
 
+// ─── Tilde expansion in file rules ────────────────────────────────────────────
+
+#[skuld::test]
+fn tilde_in_middle_of_path_not_expanded(#[fixture(temp_dir)] dir: &Path) {
+    let home = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
+    );
+    // Create a directory with a tilde in its name
+    let tilde_dir = dir.join("my~project");
+    std::fs::create_dir(&tilde_dir).unwrap();
+
+    let rule = format!("Read({home}/my~project/**)");
+    let parsed = parse_single_rule(&rule, "/unused").unwrap();
+    match parsed {
+        ParsedRule::Read(pat) => assert!(
+            pat.contains("my~project"),
+            "tilde in middle of path should not be expanded, got: {pat}"
+        ),
+        _ => panic!("expected Read rule"),
+    }
+}
+
+#[skuld::test]
+fn tilde_prefix_expanded_in_read_rule(#[fixture(temp_dir)] dir: &Path) {
+    let home = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
+    );
+    std::fs::create_dir(dir.join("Documents")).unwrap();
+
+    let parsed = parse_single_rule("Read(~/Documents/**)", &home).unwrap();
+    match parsed {
+        ParsedRule::Read(pat) => assert_eq!(pat, format!("{home}/Documents/**")),
+        _ => panic!("expected Read rule"),
+    }
+}
+
+#[skuld::test]
+fn bare_tilde_expanded(#[fixture(temp_dir)] dir: &Path) {
+    let home = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
+    );
+    let parsed = parse_single_rule("Read(~)", &home).unwrap();
+    match parsed {
+        ParsedRule::Read(pat) => assert_eq!(pat, home),
+        _ => panic!("expected Read rule"),
+    }
+}
+
+#[skuld::test]
+fn tilde_prefix_expanded_in_write_rule(#[fixture(temp_dir)] dir: &Path) {
+    let home = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
+    );
+    std::fs::create_dir(dir.join("out")).unwrap();
+
+    let parsed = parse_single_rule("Write(~/out/**)", &home).unwrap();
+    match parsed {
+        ParsedRule::Write(pat) => assert_eq!(pat, format!("{home}/out/**")),
+        _ => panic!("expected Write rule"),
+    }
+}
+
+#[skuld::test]
+fn tilde_prefix_expanded_in_edit_rule(#[fixture(temp_dir)] dir: &Path) {
+    let home = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
+    );
+    std::fs::create_dir(dir.join("config")).unwrap();
+
+    let parsed = parse_single_rule("Edit(~/config/**)", &home).unwrap();
+    match parsed {
+        ParsedRule::Edit(pat) => assert_eq!(pat, format!("{home}/config/**")),
+        _ => panic!("expected Edit rule"),
+    }
+}
+
+#[skuld::test]
+fn tilde_with_empty_home_not_expanded() {
+    let home = "";
+    let parsed = parse_single_rule("Read(~/foo)", home).unwrap();
+    match parsed {
+        ParsedRule::Read(pat) => assert!(
+            !pat.starts_with("/foo"),
+            "empty home should not produce /foo, got: {pat}"
+        ),
+        _ => panic!("expected Read rule"),
+    }
+}
+
 // ─── Colon-wildcard format (Claude Code's native format) ─────────────────────
 
 #[skuld::test]
@@ -676,4 +765,102 @@ fn parse_colon_wildcard_preserves_glob_in_prefix() {
         }
         _ => panic!("expected Bash rule"),
     }
+}
+
+// ─── inject_accept_edits_rules ────────────────────────────────────────────────
+
+#[skuld::test]
+fn inject_empty_workspace_dirs() {
+    let mut perms = ParsedPermissions::default();
+    inject_accept_edits_rules(&mut perms, &[]);
+    assert!(perms.allow_write.is_empty());
+    assert!(perms.allow_edit.is_empty());
+}
+
+#[skuld::test]
+fn inject_single_dir(#[fixture(temp_dir)] dir: &Path) {
+    let canonical = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
+    );
+    let mut perms = ParsedPermissions::default();
+    inject_accept_edits_rules(&mut perms, &[canonical.clone()]);
+    assert_eq!(perms.allow_write.len(), 1);
+    assert_eq!(perms.allow_edit.len(), 1);
+    assert_eq!(perms.allow_write[0], format!("{canonical}/**"));
+    assert_eq!(perms.allow_edit[0], format!("{canonical}/**"));
+}
+
+#[skuld::test]
+fn inject_multiple_dirs(#[fixture(temp_dir)] dir: &Path) {
+    let base = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
+    );
+    let sub1 = dir.join("sub1");
+    let sub2 = dir.join("sub2");
+    std::fs::create_dir(&sub1).unwrap();
+    std::fs::create_dir(&sub2).unwrap();
+    let c1 = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(&sub1).unwrap().to_string_lossy(),
+    );
+    let c2 = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(&sub2).unwrap().to_string_lossy(),
+    );
+    let mut perms = ParsedPermissions::default();
+    inject_accept_edits_rules(&mut perms, &[base, c1.clone(), c2.clone()]);
+    assert_eq!(perms.allow_write.len(), 3);
+    assert!(perms.allow_write[1].starts_with(&c1));
+    assert!(perms.allow_write[2].starts_with(&c2));
+}
+
+#[skuld::test]
+fn inject_dir_with_trailing_slash(#[fixture(temp_dir)] dir: &Path) {
+    let canonical = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
+    );
+    let with_slash = format!("{canonical}/");
+    let mut perms = ParsedPermissions::default();
+    inject_accept_edits_rules(&mut perms, &[with_slash]);
+    // Should not produce /path//**
+    assert!(
+        !perms.allow_write[0].contains("//**"),
+        "double slash in pattern: {}",
+        perms.allow_write[0]
+    );
+    assert_eq!(perms.allow_write[0], format!("{canonical}/**"));
+}
+
+#[skuld::test]
+fn inject_does_not_add_bash_or_read_rules() {
+    let mut perms = ParsedPermissions::default();
+    inject_accept_edits_rules(&mut perms, &["/tmp/project".to_string()]);
+    assert!(perms.allow_bash.is_empty());
+    assert!(perms.allow_read.is_empty());
+}
+
+#[skuld::test]
+fn inject_root_dir_skipped() {
+    let mut perms = ParsedPermissions::default();
+    inject_accept_edits_rules(&mut perms, &["/".to_string()]);
+    // Root directory "/" is intentionally skipped to prevent Write(/**) which would
+    // auto-allow writes to every file on the filesystem
+    assert!(perms.allow_write.is_empty());
+    assert!(perms.allow_edit.is_empty());
+}
+
+#[skuld::test]
+fn injected_rules_match_workspace_file(#[fixture(temp_dir)] dir: &Path) {
+    let canonical = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
+    );
+    std::fs::create_dir(dir.join("src")).unwrap();
+
+    let mut perms = ParsedPermissions::default();
+    inject_accept_edits_rules(&mut perms, &[canonical.clone()]);
+
+    // The ephemeral rule should match files within the workspace
+    let file_in_workspace = format!("{canonical}/src/main.rs");
+    assert!(file_rule_matches(&perms.allow_write[0], &file_in_workspace));
+
+    // But not files outside the workspace
+    assert!(!file_rule_matches(&perms.allow_write[0], "/etc/passwd"));
 }

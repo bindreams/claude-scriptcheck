@@ -3,8 +3,8 @@ use claude_scriptcheck::{checker, permission, settings};
 
 /// Parse and check a command against the user's actual settings.
 fn check_command(command: &str, cwd: &str) -> Decision {
-    let permissions = settings::load_settings(cwd, cwd);
-    let parsed_perms = permission::parse_rules(&permissions);
+    let loaded = settings::load_settings(cwd, cwd);
+    let parsed_perms = permission::parse_rules(&loaded.permissions);
     let program = thaum::parse_with(command, thaum::Dialect::Bash).unwrap();
     checker::check_program(&program, &parsed_perms, cwd).decision
 }
@@ -244,4 +244,124 @@ fn file_tool_missing_path_asks() {
         let decision = parse_decision(&output);
         assert_eq!(decision, "ask", "{tool} with no file_path should ask");
     }
+}
+
+// ── Permission mode (acceptEdits) tests ─────────────────────────────────────
+
+fn run_binary_with_env(stdin_bytes: &[u8], env: &[(&str, &str)]) -> std::process::Output {
+    let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
+    let mut cmd = Command::new(binary);
+    // Isolate from developer's real settings by pointing HOME to a temp dir
+    cmd.env("HOME", "/tmp/claude-scriptcheck-test-nonexistent");
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to start binary");
+
+    child.stdin.take().unwrap().write_all(stdin_bytes).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+fn file_tool_json_with_mode(
+    tool_name: &str,
+    file_path: &str,
+    cwd: &str,
+    permission_mode: Option<&str>,
+) -> Vec<u8> {
+    let mut json = serde_json::json!({
+        "session_id": "test-session",
+        "cwd": cwd,
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool_name,
+        "tool_input": { "file_path": file_path },
+        "tool_use_id": "toolu_test"
+    });
+    if let Some(mode) = permission_mode {
+        json["permission_mode"] = serde_json::json!(mode);
+    }
+    json.to_string().into_bytes()
+}
+
+#[skuld::test]
+fn accept_edits_allows_workspace_write(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let project_root = dir.to_string_lossy().to_string();
+    let file_in_workspace = format!("{}/src/main.rs", project_root);
+    std::fs::create_dir(dir.join("src")).unwrap();
+
+    let input = file_tool_json_with_mode("Edit", &file_in_workspace, &project_root, Some("acceptEdits"));
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
+
+    assert_eq!(output.status.code(), Some(0));
+    let decision = parse_decision(&output);
+    assert_eq!(decision, "allow", "acceptEdits should auto-allow workspace edit");
+}
+
+#[skuld::test]
+fn accept_edits_allows_workspace_write_tool(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let project_root = dir.to_string_lossy().to_string();
+    let file_in_workspace = format!("{}/output.txt", project_root);
+
+    let input = file_tool_json_with_mode("Write", &file_in_workspace, &project_root, Some("acceptEdits"));
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
+
+    assert_eq!(output.status.code(), Some(0));
+    let decision = parse_decision(&output);
+    assert_eq!(decision, "allow", "acceptEdits should auto-allow workspace Write tool");
+}
+
+#[skuld::test]
+fn accept_edits_asks_outside_workspace(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let project_root = dir.to_string_lossy().to_string();
+    let file_outside = "/etc/passwd";
+
+    let input = file_tool_json_with_mode("Edit", file_outside, &project_root, Some("acceptEdits"));
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
+
+    assert_eq!(output.status.code(), Some(0));
+    let decision = parse_decision(&output);
+    assert_eq!(decision, "ask", "acceptEdits should not auto-allow outside workspace");
+}
+
+#[skuld::test]
+fn accept_edits_does_not_override_read(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let project_root = dir.to_string_lossy().to_string();
+    let file_outside = "/etc/passwd";
+
+    let input = file_tool_json_with_mode("Read", file_outside, &project_root, Some("acceptEdits"));
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
+
+    assert_eq!(output.status.code(), Some(0));
+    let decision = parse_decision(&output);
+    assert_eq!(decision, "ask", "acceptEdits should not auto-allow reads");
+}
+
+#[skuld::test]
+fn missing_permission_mode_is_default(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let project_root = dir.to_string_lossy().to_string();
+    let file_in_workspace = format!("{}/test.txt", project_root);
+
+    let input = file_tool_json_with_mode("Edit", &file_in_workspace, &project_root, None);
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
+
+    assert_eq!(output.status.code(), Some(0));
+    let decision = parse_decision(&output);
+    assert_eq!(decision, "ask", "without permission_mode, should ask for workspace edits");
+}
+
+#[skuld::test]
+fn default_mode_no_ephemeral_rules(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let project_root = dir.to_string_lossy().to_string();
+    let file_in_workspace = format!("{}/test.txt", project_root);
+
+    let input = file_tool_json_with_mode("Edit", &file_in_workspace, &project_root, Some("default"));
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
+
+    assert_eq!(output.status.code(), Some(0));
+    let decision = parse_decision(&output);
+    assert_eq!(decision, "ask", "default mode should ask for workspace edits");
 }

@@ -23,7 +23,7 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git  # insta
 | `src/permission.rs`  | Parses rule strings (`Bash(cmd *)`, `Read(glob)`, etc.) into `ParsedPermissions`. Matching logic. ~20 unit tests.  |
 | `src/file_access.rs` | Maps well-known commands to file-access semantics (read/write args, redirects). ~25 unit tests.                    |
 | `src/hook.rs`        | `HookInput` / `HookOutput` serde structs for JSON protocol with Claude Code.                                       |
-| `src/settings.rs`    | Loads and merges permission rules from global + project settings files.                                            |
+| `src/settings.rs`    | Loads and merges permission rules + `additionalDirectories` from settings files. Returns `LoadedSettings`.         |
 | `src/logging.rs`     | Appends missing rules to platform-specific log file.                                                               |
 | `src/path_util.rs`   | Cross-platform path helpers: `is_absolute()`, `normalize_separators()`.                                            |
 | `src/word_util.rs`   | Extracts static string literals from bash `Word` nodes; detects dynamic content.                                   |
@@ -36,15 +36,19 @@ Decision        = Allow | Deny(reason) | Ask(Vec<missing_rules>)
 ParsedPermissions  { allow_bash, deny_bash, allow_read, deny_read, allow_write, deny_write, allow_edit, deny_edit }
 BashRule         { prefix_tokens: Vec<String>, wildcard: bool }
 FileAccess       { path: String, kind: AccessKind }   // AccessKind = Read | Write
-HookInput        { session_id, cwd, tool_name, tool_input }
+HookInput        { session_id, cwd, tool_name, tool_input, permission_mode? }
 ToolInput        { command?, file_path?, path? }          // each tool uses a different subset
 HookOutput       { hookEventName, permissionDecision, permissionDecisionReason }
+LoadedSettings   { permissions: Permissions, additional_directories: Vec<String> }
 ```
 
 ## Decision flow
 
 ```
-stdin JSON → match tool_name:
+stdin JSON → parse permission_mode →
+  if permission_mode == "acceptEdits":
+    inject Write/Edit allow rules for workspace dirs (CLAUDE_PROJECT_DIR + additionalDirectories)
+  match tool_name:
   "Bash" → parse command (thaum) → walk AST:
     for each command:
       1. check deny Bash rules  →  hit? → Deny
@@ -70,3 +74,5 @@ stdin JSON → match tool_name:
 - Conservative defaults: `eval`, dynamic command names, dynamic file paths, and parse failures all result in `ask`.
 - The Edit and Write tools are checked identically (`AccessKind::Write`): `Write(pat)` allows both, `Edit(pat)` also allows both (fallback). There is no way to allow Edit-only while denying Write on the same path.
 - Pattern/program arguments in `awk`, `grep`, `rg`, `sed` are skipped during file-access analysis.
+- When `permission_mode` is `"acceptEdits"`, ephemeral Write/Edit allow rules are injected for workspace directories. Deny and ask rules still take priority. The `cli::check` subcommand does not support `--permission-mode`.
+- Workspace directories for `acceptEdits` are determined from `CLAUDE_PROJECT_DIR` + `additionalDirectories` in settings files. Directories added via `--add-dir` or `/add-dir` at runtime are not visible to the hook.

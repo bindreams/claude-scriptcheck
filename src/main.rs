@@ -98,9 +98,33 @@ fn run_hook() {
     }
 }
 
-fn load_perms(cwd: &str, project_root: &str) -> permission::ParsedPermissions {
-    let permissions = settings::load_settings(cwd, project_root);
-    permission::parse_rules(&permissions)
+fn load_perms(
+    cwd: &str,
+    project_root: &str,
+    permission_mode: Option<&str>,
+) -> permission::ParsedPermissions {
+    let loaded = settings::load_settings(cwd, project_root);
+    let mut parsed_perms = permission::parse_rules(&loaded.permissions);
+
+    if permission_mode == Some("acceptEdits") {
+        let mut workspace_dirs = vec![project_root.to_string()];
+        // Resolve additional directories: relative paths → relative to project_root
+        for dir in loaded.additional_directories {
+            let normalized = path_util::normalize_separators(&dir);
+            if normalized.starts_with('~')
+                || normalized.starts_with('/')
+                || path_util::is_absolute(&normalized)
+            {
+                workspace_dirs.push(normalized);
+            } else {
+                // Relative path → resolve against project root
+                workspace_dirs.push(format!("{project_root}/{normalized}"));
+            }
+        }
+        permission::inject_accept_edits_rules(&mut parsed_perms, &workspace_dirs);
+    }
+
+    parsed_perms
 }
 
 /// Handle the Bash tool: parse the command with thaum and walk the AST.
@@ -110,7 +134,7 @@ fn handle_bash(hook_input: &hook::HookInput, cwd: &str, project_root: &str) {
         _ => process::exit(0),
     };
 
-    let parsed_perms = load_perms(cwd, project_root);
+    let parsed_perms = load_perms(cwd, project_root, hook_input.permission_mode.as_deref());
 
     // Parse the bash command with thaum
     let program = match thaum::parse_with(&command, thaum::Dialect::Bash) {
@@ -144,7 +168,7 @@ fn handle_file_search(hook_input: &hook::HookInput, cwd: &str, project_root: &st
     let normalized = path_util::normalize_separators(&raw_path);
     let resolved = file_access::resolve_path(&normalized, cwd);
 
-    let parsed_perms = load_perms(cwd, project_root);
+    let parsed_perms = load_perms(cwd, project_root, hook_input.permission_mode.as_deref());
     let accesses = [FileAccess {
         path: resolved.clone(),
         kind: AccessKind::Read,
@@ -184,7 +208,7 @@ fn handle_file_tool(
     let normalized = path_util::normalize_separators(&raw_path);
     let resolved = file_access::resolve_path(&normalized, cwd);
 
-    let parsed_perms = load_perms(cwd, project_root);
+    let parsed_perms = load_perms(cwd, project_root, hook_input.permission_mode.as_deref());
     let accesses = [FileAccess {
         path: resolved.clone(),
         kind: access_kind,

@@ -114,8 +114,8 @@ pub fn check(command: &str, cwd: &str) {
     let project_root = std::env::var("CLAUDE_PROJECT_DIR")
         .map(|s| path_util::normalize_separators(&s))
         .unwrap_or_else(|_| resolved_cwd.clone());
-    let permissions = settings::load_settings(&resolved_cwd, &project_root);
-    let parsed_perms = permission::parse_rules(&permissions);
+    let loaded = settings::load_settings(&resolved_cwd, &project_root);
+    let parsed_perms = permission::parse_rules(&loaded.permissions);
 
     let program = match thaum::parse_with(command, thaum::Dialect::Bash) {
         Ok(p) => p,
