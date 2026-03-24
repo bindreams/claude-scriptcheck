@@ -4,7 +4,9 @@
       "Bash(cargo run -- check *)",
       "Bash(cargo run -- log)",
       "Bash(cargo run -- log *)",
-      "Bash(cargo run -- log-path)"
+      "Bash(cargo run -- log-path)",
+      "Bash(./target/debug/claude-scriptcheck *)",
+      "Bash(./target/release/claude-scriptcheck *)"
     ]
   }
 }
