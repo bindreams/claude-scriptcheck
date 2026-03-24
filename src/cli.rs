@@ -144,49 +144,131 @@ pub fn check(command: &str, cwd: &str) {
     }
 }
 
+/// Split content into YAML documents, filter by verdict, apply tail, return matching slices.
+pub(crate) fn filter_and_tail<'a>(
+    content: &'a str,
+    filter: &VerdictFilter,
+    tail: Option<usize>,
+) -> Vec<&'a str> {
+    let docs = logging::split_documents(content);
+    let filtered: Vec<&str> = if filter.shows_all() {
+        docs
+    } else {
+        docs.into_iter()
+            .filter(|doc| match logging::extract_verdict(doc) {
+                Some(ref v) => filter.matches(v),
+                None => true,
+            })
+            .collect()
+    };
+    match tail {
+        Some(n) => filtered[filtered.len().saturating_sub(n)..].to_vec(),
+        None => filtered,
+    }
+}
+
 /// Print the decision log.
-pub fn log(clear: bool, watch: bool) {
-    use std::io::{Read, Seek, SeekFrom};
+pub fn log(clear: bool, follow: bool, tail: Option<usize>, filter: &VerdictFilter) {
+    use std::io::{Read, Seek, SeekFrom, Write};
     use std::thread;
     use std::time::Duration;
 
     let path = logging::log_path();
 
-    if watch {
+    if follow {
+        let mut stdout = std::io::stdout().lock();
+
+        // Initial read: apply filter + tail
         let mut offset: u64 = 0;
         if path.exists() {
-            if let Ok(mut f) = std::fs::File::open(&path) {
-                let mut buf = String::new();
-                let _ = f.read_to_string(&mut buf);
-                if !buf.is_empty() {
-                    print!("{buf}");
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if !content.is_empty() {
+                    let docs = filter_and_tail(&content, filter, tail);
+                    for doc in &docs {
+                        let _ = write!(stdout, "{doc}");
+                    }
+                    let _ = stdout.flush();
                 }
-                offset = f.stream_position().unwrap_or(0);
+                offset = content.len() as u64;
             }
         }
+
+        // Streaming loop: filter only (no tail)
+        let mut leftover = String::new();
         loop {
             thread::sleep(Duration::from_secs(1));
             let Ok(mut f) = std::fs::File::open(&path) else {
                 offset = 0;
+                leftover.clear();
                 continue;
             };
             let len = f.metadata().map(|m| m.len()).unwrap_or(0);
             if len < offset {
-                offset = 0; // file was truncated
+                offset = 0;
+                leftover.clear();
             }
             if len == offset {
-                continue; // no new data
+                // No new data — flush leftover if it looks complete.
+                // A complete entry ends with `\n\n` (YAML body + trailing newline).
+                if !leftover.is_empty() && leftover.ends_with("\n\n") {
+                    let docs = logging::split_documents(&leftover);
+                    for doc in docs {
+                        match logging::extract_verdict(doc) {
+                            Some(ref v) if !filter.matches(v) => {}
+                            _ => { let _ = write!(stdout, "{doc}"); }
+                        }
+                    }
+                    let _ = stdout.flush();
+                    leftover.clear();
+                }
+                continue;
             }
             let _ = f.seek(SeekFrom::Start(offset));
             let mut buf = String::new();
             let _ = f.read_to_string(&mut buf);
-            if !buf.is_empty() {
-                print!("{buf}");
-            }
             offset = f.stream_position().unwrap_or(len);
+
+            if buf.is_empty() {
+                continue;
+            }
+
+            // Prepend leftover from previous partial read
+            let chunk = if leftover.is_empty() {
+                buf
+            } else {
+                let mut combined = std::mem::take(&mut leftover);
+                combined.push_str(&buf);
+                combined
+            };
+
+            // A document is only guaranteed complete when the next `---\n`
+            // boundary appears after it. Buffer the last chunk (which has no
+            // following separator) as leftover for the next iteration.
+            let docs = logging::split_documents(&chunk);
+            if docs.is_empty() {
+                leftover = chunk;
+                continue;
+            }
+            let (complete_docs, trailing) = docs.split_at(docs.len() - 1);
+            leftover = trailing[0].to_string();
+
+            let mut any_printed = false;
+            for doc in complete_docs {
+                match logging::extract_verdict(doc) {
+                    Some(ref v) if !filter.matches(v) => {}
+                    _ => {
+                        let _ = write!(stdout, "{doc}");
+                        any_printed = true;
+                    }
+                }
+            }
+            if any_printed {
+                let _ = stdout.flush();
+            }
         }
     }
 
+    // Non-follow path
     if !path.exists() {
         eprintln!("No log file found at {}", path.display());
         return;
@@ -196,7 +278,10 @@ pub fn log(clear: bool, watch: bool) {
             if content.is_empty() {
                 eprintln!("Log is empty.");
             } else {
-                print!("{content}");
+                let docs = filter_and_tail(&content, filter, tail);
+                for doc in &docs {
+                    print!("{doc}");
+                }
             }
         }
         Err(e) => {
@@ -515,19 +600,175 @@ pub fn is_installed_for(
     })
 }
 
+// Verdict filtering =====
+
+/// Controls which verdicts are displayed in log output.
+#[derive(Debug)]
+pub struct VerdictFilter {
+    pub show_allow: bool,
+    pub show_ask: bool,
+    pub show_deny: bool,
+}
+
+impl VerdictFilter {
+    /// Returns true if the given verdict should be shown.
+    /// Unknown verdicts always pass.
+    pub fn matches(&self, verdict: &str) -> bool {
+        match verdict {
+            "allow" => self.show_allow,
+            "ask" => self.show_ask,
+            "deny" => self.show_deny,
+            _ => true,
+        }
+    }
+
+    /// Returns true when all three verdict types are shown (no filtering needed).
+    pub fn shows_all(&self) -> bool {
+        self.show_allow && self.show_ask && self.show_deny
+    }
+}
+
 #[cfg(test)]
-#[cfg(target_os = "windows")]
 mod tests {
     use super::*;
+
+    // VerdictFilter tests -----
+
+    #[test]
+    fn verdict_filter_matches_allow() {
+        let f = VerdictFilter { show_allow: true, show_ask: false, show_deny: false };
+        assert!(f.matches("allow"));
+    }
+
+    #[test]
+    fn verdict_filter_rejects_allow() {
+        let f = VerdictFilter { show_allow: false, show_ask: true, show_deny: true };
+        assert!(!f.matches("allow"));
+    }
+
+    #[test]
+    fn verdict_filter_matches_ask() {
+        let f = VerdictFilter { show_allow: false, show_ask: true, show_deny: false };
+        assert!(f.matches("ask"));
+    }
+
+    #[test]
+    fn verdict_filter_rejects_ask() {
+        let f = VerdictFilter { show_allow: true, show_ask: false, show_deny: true };
+        assert!(!f.matches("ask"));
+    }
+
+    #[test]
+    fn verdict_filter_matches_deny() {
+        let f = VerdictFilter { show_allow: false, show_ask: false, show_deny: true };
+        assert!(f.matches("deny"));
+    }
+
+    #[test]
+    fn verdict_filter_rejects_deny() {
+        let f = VerdictFilter { show_allow: true, show_ask: true, show_deny: false };
+        assert!(!f.matches("deny"));
+    }
+
+    #[test]
+    fn verdict_filter_unknown_passes() {
+        let f = VerdictFilter { show_allow: false, show_ask: false, show_deny: false };
+        assert!(f.matches("something_else"));
+    }
+
+    #[test]
+    fn verdict_filter_shows_all() {
+        let f = VerdictFilter { show_allow: true, show_ask: true, show_deny: true };
+        assert!(f.shows_all());
+    }
+
+    #[test]
+    fn verdict_filter_not_shows_all() {
+        let f = VerdictFilter { show_allow: true, show_ask: false, show_deny: true };
+        assert!(!f.shows_all());
+    }
+
+    // filter_and_tail tests -----
+
+    fn make_log(verdicts: &[&str]) -> String {
+        let mut s = String::new();
+        for (i, v) in verdicts.iter().enumerate() {
+            s.push_str(&format!(
+                "---\ntimestamp: '2025-01-{:02}T00:00:00Z'\nsession: s{i}\ncwd: /tmp\ncommand: cmd{i}\nverdict: {v}\n\n",
+                i + 1,
+            ));
+        }
+        s
+    }
+
+    #[test]
+    fn filter_and_tail_no_filter_no_tail() {
+        let content = make_log(&["allow", "deny", "ask"]);
+        let all = VerdictFilter { show_allow: true, show_ask: true, show_deny: true };
+        let result = filter_and_tail(&content, &all, None);
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn filter_and_tail_filters_verdict() {
+        let content = make_log(&["allow", "deny", "ask", "allow"]);
+        let f = VerdictFilter { show_allow: false, show_ask: true, show_deny: true };
+        let result = filter_and_tail(&content, &f, None);
+        assert_eq!(result.len(), 2);
+        assert!(result[0].contains("deny"));
+        assert!(result[1].contains("ask"));
+    }
+
+    #[test]
+    fn filter_and_tail_applies_tail() {
+        let content = make_log(&["allow", "deny", "ask", "allow", "deny"]);
+        let all = VerdictFilter { show_allow: true, show_ask: true, show_deny: true };
+        let result = filter_and_tail(&content, &all, Some(2));
+        assert_eq!(result.len(), 2);
+        assert!(result[0].contains("cmd3"));
+        assert!(result[1].contains("cmd4"));
+    }
+
+    #[test]
+    fn filter_and_tail_tail_after_filter() {
+        let content = make_log(&["allow", "ask", "deny", "ask", "allow", "ask"]);
+        let f = VerdictFilter { show_allow: false, show_ask: true, show_deny: false };
+        let result = filter_and_tail(&content, &f, Some(2));
+        assert_eq!(result.len(), 2);
+        assert!(result[0].contains("cmd3"));
+        assert!(result[1].contains("cmd5"));
+    }
+
+    #[test]
+    fn filter_and_tail_tail_zero() {
+        let content = make_log(&["allow", "deny"]);
+        let all = VerdictFilter { show_allow: true, show_ask: true, show_deny: true };
+        let result = filter_and_tail(&content, &all, Some(0));
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_and_tail_tail_exceeds_count() {
+        let content = make_log(&["allow", "deny"]);
+        let all = VerdictFilter { show_allow: true, show_ask: true, show_deny: true };
+        let result = filter_and_tail(&content, &all, Some(100));
+        assert_eq!(result.len(), 2);
+    }
+
+    // ExeRenameGuard tests (Windows only) -----
+
+    #[cfg(target_os = "windows")]
     use std::fs;
 
+    #[cfg(target_os = "windows")]
     fn temp_exe_path(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join("claude-scriptcheck-tests");
         fs::create_dir_all(&dir).unwrap();
         dir.join(name)
     }
 
-    #[skuld::test]
+    #[test]
+    #[cfg(target_os = "windows")]
     fn guard_renames_file_to_old() {
         let path = temp_exe_path("guard_renames.exe");
         let old_path = PathBuf::from(format!("{}.old", path.display()));
@@ -544,7 +785,8 @@ mod tests {
         let _ = fs::remove_file(&path);
     }
 
-    #[skuld::test]
+    #[test]
+    #[cfg(target_os = "windows")]
     fn guard_restores_on_cleanup_when_not_disarmed() {
         let path = temp_exe_path("guard_restores.exe");
         let old_path = PathBuf::from(format!("{}.old", path.display()));
@@ -561,7 +803,8 @@ mod tests {
         let _ = fs::remove_file(&path);
     }
 
-    #[skuld::test]
+    #[test]
+    #[cfg(target_os = "windows")]
     fn guard_deletes_old_on_cleanup_when_disarmed() {
         let path = temp_exe_path("guard_disarmed.exe");
         let old_path = PathBuf::from(format!("{}.old", path.display()));
@@ -573,11 +816,10 @@ mod tests {
 
         assert!(!path.exists(), "original was renamed and not restored");
         assert!(!old_path.exists(), ".old should be deleted");
-
-        // Cleanup (nothing to do, both gone)
     }
 
-    #[skuld::test]
+    #[test]
+    #[cfg(target_os = "windows")]
     fn guard_removes_stale_old_before_renaming() {
         let path = temp_exe_path("guard_stale.exe");
         let old_path = PathBuf::from(format!("{}.old", path.display()));
@@ -598,7 +840,8 @@ mod tests {
         let _ = fs::remove_file(&path);
     }
 
-    #[skuld::test]
+    #[test]
+    #[cfg(target_os = "windows")]
     fn guard_restores_via_drop() {
         let path = temp_exe_path("guard_drop.exe");
         let old_path = PathBuf::from(format!("{}.old", path.display()));
@@ -606,7 +849,6 @@ mod tests {
 
         {
             let _guard = ExeRenameGuard::new(path.clone()).unwrap();
-            // guard drops here without explicit cleanup
         }
 
         assert!(path.exists(), "Drop should restore the original");
@@ -616,7 +858,8 @@ mod tests {
         let _ = fs::remove_file(&path);
     }
 
-    #[skuld::test]
+    #[test]
+    #[cfg(target_os = "windows")]
     fn guard_cleanup_is_idempotent() {
         let path = temp_exe_path("guard_idempotent.exe");
         let old_path = PathBuf::from({
@@ -627,15 +870,15 @@ mod tests {
         fs::write(&path, b"original").unwrap();
 
         let mut guard = ExeRenameGuard::new(path.clone()).unwrap();
-        guard.cleanup(); // first cleanup restores
+        guard.cleanup();
         assert!(path.exists());
         assert!(!old_path.exists());
 
-        guard.cleanup(); // second cleanup is a no-op
+        guard.cleanup();
         assert!(path.exists());
         assert!(!old_path.exists());
 
-        drop(guard); // Drop also calls cleanup — should be a no-op
+        drop(guard);
         assert!(path.exists());
         assert!(!old_path.exists());
 
@@ -643,10 +886,11 @@ mod tests {
         let _ = fs::remove_file(&path);
     }
 
-    #[skuld::test]
+    #[test]
+    #[cfg(target_os = "windows")]
     fn guard_new_fails_if_file_missing() {
         let path = temp_exe_path("guard_missing.exe");
-        let _ = fs::remove_file(&path); // ensure it doesn't exist
+        let _ = fs::remove_file(&path);
 
         let result = ExeRenameGuard::new(path);
         assert!(result.is_err());

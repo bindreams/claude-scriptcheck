@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const LOG_FILENAME: &str = "log.yaml";
 const APP_DIR: &str = "claude-scriptcheck";
@@ -84,7 +84,7 @@ pub fn log_decision(
         missing_rules: missing_rules.iter().map(|s| s.as_str()).collect(),
     };
 
-    let Ok(yaml) = serde_yml::to_string(&entry) else {
+    let Ok(yaml) = yaml_serde::to_string(&entry) else {
         return;
     };
 
@@ -117,4 +117,241 @@ fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
+}
+
+// Parsing helpers =====
+
+/// Minimal struct to extract the verdict field from a log entry.
+#[derive(Deserialize)]
+struct VerdictOnly {
+    #[serde(default)]
+    verdict: String,
+}
+
+/// Split a YAML multi-document log string into individual document slices.
+///
+/// Each returned slice starts with `---\n`. Splitting on `---\n` at column 0 is
+/// safe because the YAML spec guarantees that `---` at column 0 is always a
+/// document separator — a YAML serializer will never produce it within a document body.
+pub fn split_documents(content: &str) -> Vec<&str> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+
+    let mut boundaries = Vec::new();
+    let bytes = content.as_bytes();
+
+    for (i, _) in content.match_indices("---\n") {
+        if i == 0 || bytes[i - 1] == b'\n' {
+            boundaries.push(i);
+        }
+    }
+
+    if boundaries.is_empty() {
+        return Vec::new();
+    }
+
+    let mut docs = Vec::with_capacity(boundaries.len());
+    for pair in boundaries.windows(2) {
+        docs.push(&content[pair[0]..pair[1]]);
+    }
+    docs.push(&content[*boundaries.last().unwrap()..]);
+    docs
+}
+
+/// Extract the verdict field from a raw YAML document string.
+///
+/// Returns `None` if the document cannot be parsed or the verdict field is empty.
+pub fn extract_verdict(doc: &str) -> Option<String> {
+    let body = doc.strip_prefix("---\n").unwrap_or(doc);
+    let parsed: VerdictOnly = yaml_serde::from_str(body).ok()?;
+    if parsed.verdict.is_empty() {
+        None
+    } else {
+        Some(parsed.verdict)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    // yaml_serde output format -----
+
+    #[test]
+    fn yaml_serde_output_format() {
+        let entry = LogEntry {
+            timestamp: "2025-01-01T00:00:00Z".into(),
+            session: "s1",
+            cwd: "/tmp",
+            command: "ls",
+            verdict: "allow",
+            deny_reason: None,
+            allow_rules: vec![],
+            deny_rules: vec![],
+            missing_rules: vec![],
+        };
+        let yaml = yaml_serde::to_string(&entry).unwrap();
+        assert!(
+            !yaml.starts_with("---"),
+            "yaml_serde should not produce a leading `---` marker, got:\n{yaml}"
+        );
+        assert!(
+            yaml.ends_with('\n'),
+            "yaml_serde should produce trailing newline, got:\n{yaml:?}"
+        );
+    }
+
+    #[test]
+    fn yaml_serde_output_with_populated_lists() {
+        let entry = LogEntry {
+            timestamp: "2025-01-01T00:00:00Z".into(),
+            session: "s1",
+            cwd: "/tmp",
+            command: "Read(/some/path)",
+            verdict: "allow",
+            deny_reason: None,
+            allow_rules: vec!["Read(**)"],
+            deny_rules: vec![],
+            missing_rules: vec![],
+        };
+        let yaml = yaml_serde::to_string(&entry).unwrap();
+        assert!(
+            !yaml.starts_with("---"),
+            "yaml_serde should not produce a leading `---` marker with populated lists, got:\n{yaml}"
+        );
+    }
+
+    /// Verify that log_decision writes entries that round-trip through split + extract.
+    #[test]
+    fn log_entry_format_roundtrips() {
+        let entry = LogEntry {
+            timestamp: "2025-01-01T00:00:00Z".into(),
+            session: "s1",
+            cwd: "/tmp",
+            command: "ls",
+            verdict: "allow",
+            deny_reason: None,
+            allow_rules: vec![],
+            deny_rules: vec![],
+            missing_rules: vec![],
+        };
+        let yaml = yaml_serde::to_string(&entry).unwrap();
+        // Simulate what log_decision writes: "---\n{yaml}\n"
+        let written = format!("---\n{yaml}\n");
+        let docs = split_documents(&written);
+        assert_eq!(docs.len(), 1, "single entry should produce one doc, got: {docs:?}");
+        assert_eq!(extract_verdict(docs[0]), Some("allow".into()));
+    }
+
+    /// Two entries written back-to-back must split into exactly two docs.
+    #[test]
+    fn two_entries_roundtrip() {
+        let mk = |v: &str| {
+            let entry = LogEntry {
+                timestamp: "2025-01-01T00:00:00Z".into(),
+                session: "s1",
+                cwd: "/tmp",
+                command: "ls",
+                verdict: v,
+                deny_reason: None,
+                allow_rules: vec![],
+                deny_rules: vec![],
+                missing_rules: vec![],
+            };
+            let yaml = yaml_serde::to_string(&entry).unwrap();
+            format!("---\n{yaml}\n")
+        };
+        let content = format!("{}{}", mk("allow"), mk("deny"));
+        let docs = split_documents(&content);
+        assert_eq!(docs.len(), 2, "two entries should produce two docs, got: {docs:?}");
+        assert_eq!(extract_verdict(docs[0]), Some("allow".into()));
+        assert_eq!(extract_verdict(docs[1]), Some("deny".into()));
+    }
+
+    // split_documents tests -----
+
+    #[test]
+    fn split_empty() {
+        assert_eq!(split_documents(""), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn split_single_doc() {
+        let content = "---\nverdict: allow\ncommand: ls\n\n";
+        let docs = split_documents(content);
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0], content);
+    }
+
+    #[test]
+    fn split_multiple_docs() {
+        let content = "\
+---\nverdict: allow\ncommand: ls\n\n\
+---\nverdict: deny\ncommand: rm\n\n\
+---\nverdict: ask\ncommand: cat\n\n";
+        let docs = split_documents(content);
+        assert_eq!(docs.len(), 3);
+        assert!(docs[0].contains("allow"));
+        assert!(docs[1].contains("deny"));
+        assert!(docs[2].contains("ask"));
+    }
+
+    #[test]
+    fn split_no_separator() {
+        let content = "just some random text\n";
+        assert_eq!(split_documents(content), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn split_does_not_split_on_mid_line_dashes() {
+        let content = "---\ncommand: 'echo ---\\nhello'\nverdict: allow\n\n";
+        let docs = split_documents(content);
+        assert_eq!(docs.len(), 1);
+    }
+
+    // extract_verdict tests -----
+
+    #[test]
+    fn extract_verdict_allow() {
+        let doc = "---\ntimestamp: '2025-01-01T00:00:00Z'\nverdict: allow\ncommand: ls\n\n";
+        assert_eq!(extract_verdict(doc), Some("allow".into()));
+    }
+
+    #[test]
+    fn extract_verdict_deny() {
+        let doc = "---\nverdict: deny\ncommand: rm\ndeny_reason: matched deny rule\n\n";
+        assert_eq!(extract_verdict(doc), Some("deny".into()));
+    }
+
+    #[test]
+    fn extract_verdict_ask() {
+        let doc = "---\nverdict: ask\ncommand: cat /etc/passwd\n\n";
+        assert_eq!(extract_verdict(doc), Some("ask".into()));
+    }
+
+    #[test]
+    fn extract_verdict_malformed() {
+        assert_eq!(extract_verdict("not valid yaml: [[["), None);
+    }
+
+    #[test]
+    fn extract_verdict_empty_string() {
+        let doc = "---\nverdict: ''\ncommand: ls\n\n";
+        assert_eq!(extract_verdict(doc), None);
+    }
+
+    #[test]
+    fn extract_verdict_without_prefix() {
+        let doc = "verdict: allow\ncommand: ls\n";
+        assert_eq!(extract_verdict(doc), Some("allow".into()));
+    }
+
+    #[test]
+    fn extract_verdict_missing_field() {
+        let doc = "---\ncommand: ls\ntimestamp: '2025-01-01'\n\n";
+        assert_eq!(extract_verdict(doc), None);
+    }
+
 }

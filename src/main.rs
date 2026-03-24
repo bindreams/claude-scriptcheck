@@ -42,9 +42,27 @@ enum Commands {
         /// Clear the log after printing
         #[arg(long)]
         clear: bool,
-        /// Watch for new log entries (like tail -f)
-        #[arg(long, conflicts_with = "clear")]
-        watch: bool,
+        /// Follow new log entries (like tail -f)
+        #[arg(long, alias = "watch", conflicts_with = "clear")]
+        follow: bool,
+        /// Show only the last N entries
+        #[arg(long)]
+        tail: Option<usize>,
+        /// Show allow verdicts (use --no-allow to hide)
+        #[arg(long, overrides_with = "no_allow")]
+        allow: bool,
+        #[arg(long, overrides_with = "allow", hide = true)]
+        no_allow: bool,
+        /// Show ask verdicts (use --no-ask to hide)
+        #[arg(long, overrides_with = "no_ask")]
+        ask: bool,
+        #[arg(long, overrides_with = "ask", hide = true)]
+        no_ask: bool,
+        /// Show deny verdicts (use --no-deny to hide)
+        #[arg(long, overrides_with = "no_deny")]
+        deny: bool,
+        #[arg(long, overrides_with = "deny", hide = true)]
+        no_deny: bool,
     },
     /// Print the path to the log file
     LogPath,
@@ -59,7 +77,18 @@ fn main() {
         Some(Commands::Install { project }) => cli::install(project),
         Some(Commands::Uninstall { project }) => cli::uninstall(project),
         Some(Commands::Check { command, cwd }) => cli::check(&command, &cwd),
-        Some(Commands::Log { clear, watch }) => cli::log(clear, watch),
+        Some(Commands::Log {
+            clear, follow, tail, allow, no_allow, ask, no_ask, deny, no_deny,
+        }) => {
+            // Default is shown (when neither --flag nor --no-flag is passed).
+            // `overrides_with` ensures last-one-wins when both are passed.
+            let filter = cli::VerdictFilter {
+                show_allow: allow || !no_allow,
+                show_ask: ask || !no_ask,
+                show_deny: deny || !no_deny,
+            };
+            cli::log(clear, follow, tail, &filter);
+        }
         Some(Commands::LogPath) => cli::log_path(),
         Some(Commands::Upgrade) => cli::upgrade(),
         None => run_hook(),
@@ -268,4 +297,75 @@ fn log_and_output(result: &checker::CheckResult, session_id: &str, cwd: &str, co
 fn output_decision(decision: &str, reason: &str) {
     let output = hook::HookOutput::new(decision, reason);
     serde_json::to_writer(io::stdout(), &output).expect("Failed to write output");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn parse_log_filter(args: &[&str]) -> cli::VerdictFilter {
+        let mut full_args = vec!["claude-scriptcheck", "log"];
+        full_args.extend_from_slice(args);
+        let cli = Cli::try_parse_from(full_args).unwrap();
+        match cli.command.unwrap() {
+            Commands::Log { allow, no_allow, ask, no_ask, deny, no_deny, .. } => {
+                cli::VerdictFilter {
+                    show_allow: allow || !no_allow,
+                    show_ask: ask || !no_ask,
+                    show_deny: deny || !no_deny,
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn no_flags_shows_all() {
+        let f = parse_log_filter(&[]);
+        assert!(f.show_allow && f.show_ask && f.show_deny);
+    }
+
+    #[test]
+    fn no_allow_hides_allow() {
+        let f = parse_log_filter(&["--no-allow"]);
+        assert!(!f.show_allow);
+        assert!(f.show_ask && f.show_deny);
+    }
+
+    #[test]
+    fn no_ask_hides_ask() {
+        let f = parse_log_filter(&["--no-ask"]);
+        assert!(f.show_allow && !f.show_ask && f.show_deny);
+    }
+
+    #[test]
+    fn no_deny_hides_deny() {
+        let f = parse_log_filter(&["--no-deny"]);
+        assert!(f.show_allow && f.show_ask && !f.show_deny);
+    }
+
+    #[test]
+    fn allow_flag_shows_allow() {
+        let f = parse_log_filter(&["--allow"]);
+        assert!(f.show_allow);
+    }
+
+    #[test]
+    fn no_allow_then_allow_last_wins() {
+        let f = parse_log_filter(&["--no-allow", "--allow"]);
+        assert!(f.show_allow);
+    }
+
+    #[test]
+    fn allow_then_no_allow_last_wins() {
+        let f = parse_log_filter(&["--allow", "--no-allow"]);
+        assert!(!f.show_allow);
+    }
+
+    #[test]
+    fn multiple_no_flags() {
+        let f = parse_log_filter(&["--no-allow", "--no-deny"]);
+        assert!(!f.show_allow && f.show_ask && !f.show_deny);
+    }
 }

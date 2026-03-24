@@ -390,3 +390,47 @@ fn install_via_bare_name_writes_bare_command() {
     // Cleanup
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// Log filtering + tail integration tests -----
+
+use claude_scriptcheck::logging;
+
+fn make_log_content(verdicts: &[&str]) -> String {
+    let mut content = String::new();
+    for (i, v) in verdicts.iter().enumerate() {
+        content.push_str(&format!(
+            "---\ntimestamp: '2025-01-{:02}T00:00:00Z'\nsession: s{i}\ncwd: /tmp\ncommand: cmd{i}\nverdict: {v}\n\n",
+            i + 1,
+        ));
+    }
+    content
+}
+
+#[skuld::test]
+fn log_split_roundtrip() {
+    let content = make_log_content(&["allow", "deny", "ask"]);
+    let docs = logging::split_documents(&content);
+    assert_eq!(docs.len(), 3);
+    assert_eq!(logging::extract_verdict(docs[0]), Some("allow".into()));
+    assert_eq!(logging::extract_verdict(docs[1]), Some("deny".into()));
+    assert_eq!(logging::extract_verdict(docs[2]), Some("ask".into()));
+}
+
+#[skuld::test]
+fn log_verdict_filter_public_api() {
+    use claude_scriptcheck::cli::VerdictFilter;
+
+    let content = make_log_content(&["allow", "deny", "ask", "allow"]);
+    let filter = VerdictFilter { show_allow: false, show_ask: true, show_deny: true };
+    let docs = logging::split_documents(&content);
+    let filtered: Vec<_> = docs
+        .into_iter()
+        .filter(|doc| match logging::extract_verdict(doc) {
+            Some(ref v) => filter.matches(v),
+            None => true,
+        })
+        .collect();
+    assert_eq!(filtered.len(), 2);
+    assert_eq!(logging::extract_verdict(filtered[0]), Some("deny".into()));
+    assert_eq!(logging::extract_verdict(filtered[1]), Some("ask".into()));
+}

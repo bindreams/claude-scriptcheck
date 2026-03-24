@@ -18,13 +18,13 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git  # insta
 | -------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `src/lib.rs`         | Library crate root. Re-exports all modules so they are usable without spawning the binary.                         |
 | `src/main.rs`        | Binary: CLI routing (clap), hook-mode dispatch (Bash/Grep/Glob/Read/Write/Edit), I/O (stdin JSON → decision JSON). |
-| `src/cli.rs`         | Subcommand implementations: `install`, `uninstall`, `check`, `log`, `log-path`, `upgrade`.                         |
+| `src/cli.rs`         | Subcommand implementations: `install`, `uninstall`, `check`, `log`, `log-path`, `upgrade`. `VerdictFilter` type.   |
 | `src/checker.rs`     | Core logic. `check_program()` for Bash AST, `check_file_accesses()` for non-Bash tools. Returns `Decision`.        |
 | `src/permission.rs`  | Parses rule strings (`Bash(cmd *)`, `Read(glob)`, etc.) into `ParsedPermissions`. Matching logic. ~20 unit tests.  |
 | `src/file_access.rs` | Maps well-known commands to file-access semantics (read/write args, redirects). ~25 unit tests.                    |
 | `src/hook.rs`        | `HookInput` / `HookOutput` serde structs for JSON protocol with Claude Code.                                       |
 | `src/settings.rs`    | Loads and merges permission rules + `additionalDirectories` from settings files. Returns `LoadedSettings`.         |
-| `src/logging.rs`     | Appends missing rules to platform-specific log file.                                                               |
+| `src/logging.rs`     | Appends decisions to platform-specific log file. Read-back helpers: `split_documents()`, `extract_verdict()`.       |
 | `src/path_util.rs`   | Cross-platform path helpers: `is_absolute()`, `normalize_separators()`.                                            |
 | `src/word_util.rs`   | Extracts static string literals from bash `Word` nodes; detects dynamic content.                                   |
 | `tests/suite/`       | Integration tests: logic tests call the library API directly; binary I/O tests invoke the compiled binary.         |
@@ -40,6 +40,7 @@ HookInput        { session_id, cwd, tool_name, tool_input, permission_mode? }
 ToolInput        { command?, file_path?, path? }          // each tool uses a different subset
 HookOutput       { hookEventName, permissionDecision, permissionDecisionReason }
 LoadedSettings   { permissions: Permissions, additional_directories: Vec<String> }
+VerdictFilter    { show_allow, show_ask, show_deny }  // log output filtering
 ```
 
 ## Decision flow
