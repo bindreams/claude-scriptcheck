@@ -112,6 +112,22 @@ fn run_hook() {
         }
     };
 
+    // Early exit for bypassPermissions mode — allow everything unconditionally.
+    if hook_input.permission_mode.as_deref() == Some("bypassPermissions") {
+        logging::log_decision(
+            &hook_input.session_id,
+            &hook_input.cwd,
+            &format!("{}(bypassPermissions)", hook_input.tool_name),
+            "allow",
+            None,
+            &[],
+            &[],
+            &[],
+        );
+        output_decision("allow", "bypassPermissions mode: all tool calls permitted");
+        return;
+    }
+
     // Normalize path separators (Windows backslashes → forward slashes)
     let cwd = path_util::normalize_separators(&hook_input.cwd);
     let project_root = std::env::var("CLAUDE_PROJECT_DIR")

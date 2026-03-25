@@ -365,3 +365,192 @@ fn default_mode_no_ephemeral_rules(#[fixture(temp_dir)] dir: &std::path::Path) {
     let decision = parse_decision(&output);
     assert_eq!(decision, "ask", "default mode should ask for workspace edits");
 }
+
+// ── Permission mode (bypassPermissions) tests ───────────────────────────────
+
+fn hook_json_with_mode(
+    tool_name: &str,
+    tool_input: serde_json::Value,
+    cwd: &str,
+    permission_mode: Option<&str>,
+) -> Vec<u8> {
+    let mut json = serde_json::json!({
+        "session_id": "test-session",
+        "cwd": cwd,
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool_name,
+        "tool_input": tool_input,
+        "tool_use_id": "toolu_test"
+    });
+    if let Some(mode) = permission_mode {
+        json["permission_mode"] = serde_json::json!(mode);
+    }
+    json.to_string().into_bytes()
+}
+
+fn parse_reason(output: &std::process::Output) -> String {
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "stdout is not valid JSON: {e}\nstdout: {}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    json["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .expect("missing permissionDecisionReason field")
+        .to_string()
+}
+
+#[skuld::test]
+fn bypass_allows_bash() {
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "unknown-cmd --flag"}),
+        "/tmp",
+        Some("bypassPermissions"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+}
+
+#[skuld::test]
+fn bypass_allows_read() {
+    let input = file_tool_json_with_mode("Read", "/etc/passwd", "/tmp", Some("bypassPermissions"));
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+}
+
+#[skuld::test]
+fn bypass_allows_write() {
+    let input =
+        file_tool_json_with_mode("Write", "/etc/passwd", "/tmp", Some("bypassPermissions"));
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+}
+
+#[skuld::test]
+fn bypass_allows_edit() {
+    let input =
+        file_tool_json_with_mode("Edit", "/etc/passwd", "/tmp", Some("bypassPermissions"));
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+}
+
+#[skuld::test]
+fn bypass_allows_grep() {
+    let input = hook_json_with_mode(
+        "Grep",
+        serde_json::json!({"pattern": "x", "path": "/etc"}),
+        "/tmp",
+        Some("bypassPermissions"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+}
+
+#[skuld::test]
+fn bypass_allows_glob() {
+    let input = hook_json_with_mode(
+        "Glob",
+        serde_json::json!({"pattern": "*.txt", "path": "/etc"}),
+        "/tmp",
+        Some("bypassPermissions"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+}
+
+#[skuld::test]
+fn bypass_allows_unknown_tool() {
+    let input = hook_json_with_mode(
+        "Agent",
+        serde_json::json!({}),
+        "/tmp",
+        Some("bypassPermissions"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    // Without bypass, unknown tools exit silently with no stdout.
+    // With bypass, they should get an explicit allow.
+    assert_eq!(parse_decision(&output), "allow");
+}
+
+#[skuld::test]
+fn bypass_reason_message() {
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "ls"}),
+        "/tmp",
+        Some("bypassPermissions"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    let reason = parse_reason(&output);
+    assert!(
+        reason.contains("bypassPermissions"),
+        "reason should mention bypassPermissions, got: {reason}"
+    );
+}
+
+#[skuld::test]
+fn bypass_camelcase_key() {
+    // Verify the camelCase `permissionMode` alias works for bypass
+    let json = serde_json::json!({
+        "session_id": "test-session",
+        "cwd": "/tmp",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "unknown-cmd"},
+        "permissionMode": "bypassPermissions",
+        "tool_use_id": "toolu_test"
+    });
+    let input = json.to_string().into_bytes();
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+}
+
+#[skuld::test]
+fn bypass_empty_bash_command() {
+    // Empty Bash command normally exits silently; bypass should produce explicit allow.
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": ""}),
+        "/tmp",
+        Some("bypassPermissions"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+}
+
+#[skuld::test]
+fn bypass_missing_tool_input_fields() {
+    // Write tool with no file_path — bypass should still allow (early return before validation).
+    let input = hook_json_with_mode(
+        "Write",
+        serde_json::json!({}),
+        "/tmp",
+        Some("bypassPermissions"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+}

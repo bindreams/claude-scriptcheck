@@ -49,6 +49,8 @@ PythonAnalysis   = Analyzed { accesses } | Unanalyzable(reason)  // python -c an
 
 ```
 stdin JSON → parse permission_mode →
+  if permission_mode == "bypassPermissions":
+    log + output allow immediately (no further processing)
   if permission_mode == "acceptEdits":
     inject Write/Edit allow rules for workspace dirs (CLAUDE_PROJECT_DIR + additionalDirectories)
   match tool_name:
@@ -81,6 +83,7 @@ stdin JSON → parse permission_mode →
 - Conservative defaults: `eval`, dynamic command names, dynamic file paths, and parse failures all result in `ask`.
 - The Edit and Write tools are checked identically (`AccessKind::Write`): `Write(pat)` allows both, `Edit(pat)` also allows both (fallback). There is no way to allow Edit-only while denying Write on the same path.
 - Pattern/program arguments in `awk`, `grep`, `rg`, `sed` are skipped during file-access analysis.
+- When `permission_mode` is `"bypassPermissions"`, the hook unconditionally allows all tool calls (including unknown tools) without loading settings or running any checks. Decisions are still logged.
 - When `permission_mode` is `"acceptEdits"`, ephemeral Write/Edit allow rules are injected for workspace directories. Deny and ask rules still take priority. The `cli::check` subcommand does not support `--permission-mode`.
 - Workspace directories for `acceptEdits` are determined from `CLAUDE_PROJECT_DIR` + `additionalDirectories` in settings files. Directories added via `--add-dir` or `/add-dir` at runtime are not visible to the hook.
 - `python -c` and `python3 -c` inline scripts are analyzed via Python AST (rustpython-parser). If the script only uses `open()` with static string paths and no unsafe patterns (exec, eval, subprocess, os file-mutation, shutil, etc.), file accesses are extracted and checked against Read/Write rules — no `Bash()` rule is needed. Unanalyzable scripts fall back to `Bash(python3 -c *)`. Phase 1 covers `open()` and `io.open()` only; `os.remove`/`os.rename`/etc. and `shutil.*` trigger fallback to Ask. `pathlib.Path` method chains are not yet detected (future Phase 2 work).

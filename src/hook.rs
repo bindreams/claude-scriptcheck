@@ -11,7 +11,7 @@ pub struct HookInput {
     pub tool_input: ToolInput,
     #[allow(dead_code)]
     pub tool_use_id: String,
-    /// Permission mode from Claude Code (e.g. "default", "acceptEdits").
+    /// Permission mode from Claude Code (e.g. "default", "acceptEdits", "bypassPermissions").
     /// None if the field is absent (older Claude Code versions).
     #[serde(default, alias = "permissionMode")]
     pub permission_mode: Option<String>,
