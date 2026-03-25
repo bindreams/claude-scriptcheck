@@ -27,6 +27,7 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git  # insta
 | `src/logging.rs`     | Appends decisions to platform-specific log file. Read-back helpers: `split_documents()`, `extract_verdict()`.       |
 | `src/path_util.rs`   | Cross-platform path helpers: `is_absolute()`, `normalize_separators()`.                                            |
 | `src/word_util.rs`   | Extracts static string literals from bash `Word` nodes; detects dynamic content.                                   |
+| `src/python_ast.rs`  | Python AST analysis for `python -c` inline scripts. Parses Python, extracts file accesses, detects unsafe patterns.|
 | `tests/suite/`       | Integration tests: logic tests call the library API directly; binary I/O tests invoke the compiled binary.         |
 
 ## Key types
@@ -41,6 +42,7 @@ ToolInput        { command?, file_path?, path? }          // each tool uses a di
 HookOutput       { hookEventName, permissionDecision, permissionDecisionReason }
 LoadedSettings   { permissions: Permissions, additional_directories: Vec<String> }
 VerdictFilter    { show_allow, show_ask, show_deny }  // log output filtering
+PythonAnalysis   = Analyzed { accesses } | Unanalyzable(reason)  // python -c analysis result
 ```
 
 ## Decision flow
@@ -55,6 +57,10 @@ stdin JSON → parse permission_mode →
       1. check deny Bash rules  →  hit? → Deny
       2. check allow Bash rules →  miss? → collect as unmatched
       3. extract file accesses (redirects + well-known command semantics)
+      3b. if python/python3 -c with static script text:
+          parse Python AST → extract file accesses from open() calls
+          success? → add accesses to file-access list, skip Bash rule
+          failure (unsafe patterns, parse error)? → fall back to Bash(python3 -c *)
       4. check deny file rules  →  hit? → Deny
       5. check allow file rules →  miss? → collect as unmatched
     any deny? → Deny
@@ -77,3 +83,4 @@ stdin JSON → parse permission_mode →
 - Pattern/program arguments in `awk`, `grep`, `rg`, `sed` are skipped during file-access analysis.
 - When `permission_mode` is `"acceptEdits"`, ephemeral Write/Edit allow rules are injected for workspace directories. Deny and ask rules still take priority. The `cli::check` subcommand does not support `--permission-mode`.
 - Workspace directories for `acceptEdits` are determined from `CLAUDE_PROJECT_DIR` + `additionalDirectories` in settings files. Directories added via `--add-dir` or `/add-dir` at runtime are not visible to the hook.
+- `python -c` and `python3 -c` inline scripts are analyzed via Python AST (rustpython-parser). If the script only uses `open()` with static string paths and no unsafe patterns (exec, eval, subprocess, os file-mutation, shutil, etc.), file accesses are extracted and checked against Read/Write rules — no `Bash()` rule is needed. Unanalyzable scripts fall back to `Bash(python3 -c *)`. Phase 1 covers `open()` and `io.open()` only; `os.remove`/`os.rename`/etc. and `shutil.*` trigger fallback to Ask. `pathlib.Path` method chains are not yet detected (future Phase 2 work).

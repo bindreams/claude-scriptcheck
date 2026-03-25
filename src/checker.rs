@@ -4,6 +4,7 @@ use thaum::visit::Visit;
 use crate::cmd_parser::{self, CmdParseResult};
 use crate::file_access::{self, AccessKind, FileAccess};
 use crate::permission::{self, ParsedPermissions};
+use crate::python_ast::{self, PythonAnalysis};
 
 /// Final decision for a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -254,6 +255,26 @@ impl PermissionChecker<'_> {
             }
         };
 
+        // Attempt Python AST analysis for python -c inline scripts.
+        // If the script can be fully analyzed, its file accesses are appended to
+        // cmd_accesses and the Bash() rule requirement is suppressed.
+        let mut python_analyzed = false;
+        let mut cmd_accesses = cmd_accesses;
+        if matches!(cmd_name.as_str(), "python" | "python3") && !bash_asked {
+            if let Some(script_idx) = inline_script_start {
+                // inline_script_start is 0-based into args-after-cmd-name.
+                // arg_literals[0] is the cmd name, so script text is at [script_idx + 1].
+                if let Some(Some(script_text)) = arg_literals.get(script_idx + 1) {
+                    if let PythonAnalysis::Analyzed { accesses } =
+                        python_ast::analyze_python_script(script_text, self.cwd)
+                    {
+                        cmd_accesses.extend(accesses);
+                        python_analyzed = true;
+                    }
+                }
+            }
+        }
+
         // Check all file accesses
         for access in redirect_accesses.iter().chain(cmd_accesses.iter()) {
             self.check_file_access(access);
@@ -267,13 +288,15 @@ impl PermissionChecker<'_> {
         //   1. the command has at least one resolved file access to gate it,
         //   2. all arguments are static (no dynamic args that could hide unchecked paths), and
         //   3. the parser didn't fail (we trust the extracted accesses).
+        // Similarly, when Python AST analysis succeeded, the Bash() rule is suppressed.
         if !bash_allowed && !parse_failed {
             let has_file_accesses = !redirect_accesses.is_empty() || !cmd_accesses.is_empty();
             let has_dynamic_args = arg_literals[1..].iter().any(|a| a.is_none());
-            let can_skip = file_access::is_file_only_command(&cmd_name)
+            let can_skip = (file_access::is_file_only_command(&cmd_name)
                 && has_file_accesses
                 && !has_dynamic_args
-                && !bash_asked;
+                && !bash_asked)
+                || (python_analyzed && !bash_asked);
 
             if !can_skip {
                 let rule = if let Some(idx) = inline_script_start {

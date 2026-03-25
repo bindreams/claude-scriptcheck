@@ -465,8 +465,16 @@ fn bash_xc_logs_wildcard_rule() {
 }
 
 #[skuld::test]
-fn python_c_logs_wildcard_rule() {
+fn python_c_pure_computation_allows() {
+    // Python AST analysis sees print(1) has no file I/O → auto-allow
     let d = check("python3 -c 'print(1)'", &[], &[]);
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn python_c_unanalyzable_logs_wildcard_rule() {
+    // exec() is unanalyzable → falls back to Bash(python3 -c *)
+    let d = check("python3 -c 'exec(\"bad\")'", &[], &[]);
     if let Decision::Ask(ref rules) = d {
         assert!(
             rules.iter().any(|r| r == "Bash(python3 -c *)"),
@@ -856,4 +864,152 @@ fn file_accesses_write_denied_by_edit_rule() {
         &["Edit(/etc/**)"],
     );
     assert!(matches!(d, Decision::Deny(_)));
+}
+
+// Python AST analysis integration tests =====
+
+#[skuld::test]
+fn python_c_open_read_with_read_rule_allows() {
+    let d = check(
+        r#"python3 -c "open('/tmp/x').read()""#,
+        &["Read(/tmp/**)"],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn python_c_open_write_with_write_rule_allows() {
+    let d = check(
+        r#"python3 -c "open('/tmp/x', 'w').write('hi')""#,
+        &["Write(/tmp/**)"],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn python_c_open_write_without_rule_asks_specific_path() {
+    let d = check(r#"python3 -c "open('/tmp/x', 'w')""#, &[], &[]);
+    if let Decision::Ask(ref rules) = d {
+        // /tmp may be canonicalized to /private/tmp on macOS
+        assert!(
+            rules.iter().any(|r| r.starts_with("Write(") && r.contains("/tmp/x")),
+            "expected Write(.../tmp/x), got {rules:?}",
+        );
+        // Should NOT fall back to Bash(python3 -c *)
+        assert!(
+            !rules.iter().any(|r| r.starts_with("Bash(")),
+            "should not ask for Bash rule when Python analysis succeeded, got {rules:?}",
+        );
+    } else {
+        panic!("expected Ask, got {d:?}");
+    }
+}
+
+#[skuld::test]
+fn python_c_open_write_denied_by_rule() {
+    let d = check(
+        r#"python3 -c "open('/tmp/x', 'w')""#,
+        &[],
+        &["Write(/tmp/**)"],
+    );
+    assert!(matches!(d, Decision::Deny(_)));
+}
+
+#[skuld::test]
+fn python_c_import_subprocess_asks_wildcard() {
+    let d = check(r#"python3 -c "import subprocess""#, &[], &[]);
+    if let Decision::Ask(ref rules) = d {
+        assert!(
+            rules.iter().any(|r| r == "Bash(python3 -c *)"),
+            "expected 'Bash(python3 -c *)', got {rules:?}",
+        );
+    } else {
+        panic!("expected Ask, got {d:?}");
+    }
+}
+
+#[skuld::test]
+fn python_c_in_pipeline_allows() {
+    let d = check(
+        r#"python3 -c "open('/tmp/x').read()" && echo done"#,
+        &["Read(/tmp/**)", "Bash(echo *)"],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn python_not_python3_also_analyzed() {
+    let d = check(
+        r#"python -c "open('/tmp/x').read()""#,
+        &["Read(/tmp/**)"],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn python_c_bash_ask_rule_forces_ask() {
+    // If there's an explicit Bash ask rule, Python analysis doesn't suppress it
+    let d = check_with_ask(
+        r#"python3 -c "print(42)""#,
+        &[],
+        &[],
+        &["Bash(python3 *)"],
+    );
+    assert!(matches!(d, Decision::Ask(_)));
+}
+
+#[skuld::test]
+fn python_c_bash_deny_rule_still_denies() {
+    let d = check(
+        r#"python3 -c "print(42)""#,
+        &[],
+        &["Bash(python3 *)"],
+    );
+    assert!(matches!(d, Decision::Deny(_)));
+}
+
+#[skuld::test]
+fn python_c_with_open_read_allows() {
+    let d = check(
+        r#"python3 -c "
+with open('/tmp/data.json') as f:
+    data = f.read()
+print(data)
+""#,
+        &["Read(/tmp/**)"],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn python_c_json_load_open_allows() {
+    let d = check(
+        r#"python3 -c "import json; data = json.load(open('/tmp/data.json'))""#,
+        &["Read(/tmp/**)"],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn python_c_multiple_accesses_all_checked() {
+    // Read is allowed but Write is not → Ask for Write
+    let d = check(
+        r#"python3 -c "open('/tmp/a'); open('/tmp/b', 'w')""#,
+        &["Read(/tmp/**)"],
+        &[],
+    );
+    if let Decision::Ask(ref rules) = d {
+        assert!(
+            rules.iter().any(|r| r.starts_with("Write(")),
+            "expected Write rule, got {rules:?}",
+        );
+    } else {
+        panic!("expected Ask, got {d:?}");
+    }
 }

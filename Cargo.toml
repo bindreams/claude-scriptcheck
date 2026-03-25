@@ -12,6 +12,8 @@ path-clean = "1"
 dirs = "6"
 clap = { version = "4", features = ["derive", "string"] }
 yaml_serde = "0.10"
+rustpython-parser = "0.4.0"
+rustpython-ast = "0.4.0"
 skuld = { git = "https://github.com/bindreams/skuld.git" }
 pretty_assertions = "1"
 

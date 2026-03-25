@@ -7,4 +7,5 @@ pub mod hook;
 pub mod logging;
 pub mod path_util;
 pub mod permission;
+pub mod python_ast;
 pub mod settings;
