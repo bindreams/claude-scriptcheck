@@ -226,34 +226,36 @@ impl PermissionChecker<'_> {
         // Extract file accesses from well-known command semantics (clap-based parsers)
         let cmd_parse_result =
             cmd_parser::parse_file_accesses(&cmd_name, &arg_literals[1..], self.cwd);
-        let (cmd_accesses, parse_failed, inline_script_start) = match cmd_parse_result {
-            CmdParseResult::Parsed(cfa) => {
-                let script_start = cfa.inline_script_start;
-                let accesses = cfa
-                    .reads
-                    .into_iter()
-                    .map(|p| FileAccess {
-                        path: p,
-                        kind: AccessKind::Read,
-                    })
-                    .chain(cfa.writes.into_iter().map(|p| FileAccess {
-                        path: p,
-                        kind: AccessKind::Write,
-                    }))
-                    .collect::<Vec<_>>();
-                (accesses, false, script_start)
-            }
-            CmdParseResult::ParseFailed {
-                cmd_name: cn,
-                message,
-            } => {
-                let cmd_str = cmd_tokens.join(" ");
-                self.unmatched.push(format!(
-                    "Bash({cmd_str}) -- failed to parse arguments for `{cn}`: {message}"
-                ));
-                (vec![], true, None)
-            }
-        };
+        let (cmd_accesses, parse_failed, inline_script_start, file_only_override) =
+            match cmd_parse_result {
+                CmdParseResult::Parsed(cfa) => {
+                    let script_start = cfa.inline_script_start;
+                    let file_only = cfa.file_only;
+                    let accesses = cfa
+                        .reads
+                        .into_iter()
+                        .map(|p| FileAccess {
+                            path: p,
+                            kind: AccessKind::Read,
+                        })
+                        .chain(cfa.writes.into_iter().map(|p| FileAccess {
+                            path: p,
+                            kind: AccessKind::Write,
+                        }))
+                        .collect::<Vec<_>>();
+                    (accesses, false, script_start, file_only)
+                }
+                CmdParseResult::ParseFailed {
+                    cmd_name: cn,
+                    message,
+                } => {
+                    let cmd_str = cmd_tokens.join(" ");
+                    self.unmatched.push(format!(
+                        "Bash({cmd_str}) -- failed to parse arguments for `{cn}`: {message}"
+                    ));
+                    (vec![], true, None, None)
+                }
+            };
 
         // Attempt Python AST analysis for python -c inline scripts.
         // If the script can be fully analyzed, its file accesses are appended to
@@ -292,11 +294,22 @@ impl PermissionChecker<'_> {
         if !bash_allowed && !parse_failed {
             let has_file_accesses = !redirect_accesses.is_empty() || !cmd_accesses.is_empty();
             let has_dynamic_args = arg_literals[1..].iter().any(|a| a.is_none());
-            let can_skip = (file_access::is_file_only_command(&cmd_name)
-                && has_file_accesses
-                && !has_dynamic_args
-                && !bash_asked)
-                || (python_analyzed && !bash_asked);
+            let can_skip = match file_only_override {
+                // Parser explicitly declared this invocation's effects.
+                // Trust it even with zero file accesses (e.g. read-only git
+                // subcommands), but still require static args.
+                Some(true) => !has_dynamic_args && !bash_asked,
+                // Parser says there are non-file side effects (e.g. network).
+                Some(false) => false,
+                // Legacy path: use is_file_only_command() and require at
+                // least one file access as a guard.
+                None => {
+                    file_access::is_file_only_command(&cmd_name)
+                        && has_file_accesses
+                        && !has_dynamic_args
+                        && !bash_asked
+                }
+            } || (python_analyzed && !bash_asked);
 
             if !can_skip {
                 let rule = if let Some(idx) = inline_script_start {

@@ -31,6 +31,7 @@ fn sentinel_filtered_from_reads() {
         reads: vec!["/tmp/real.txt".into(), format!("/tmp/{SENTINEL}")],
         writes: vec![],
         inline_script_start: None,
+        file_only: None,
     };
     let filtered = cfa.filter_sentinel(SENTINEL);
     assert_eq!(filtered.reads, vec!["/tmp/real.txt"]);
@@ -42,6 +43,7 @@ fn sentinel_filtered_from_writes() {
         reads: vec![],
         writes: vec!["/tmp/real.txt".into(), format!("/tmp/{SENTINEL}")],
         inline_script_start: None,
+        file_only: None,
     };
     let filtered = cfa.filter_sentinel(SENTINEL);
     assert_eq!(filtered.writes, vec!["/tmp/real.txt"]);

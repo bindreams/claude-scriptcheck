@@ -44,6 +44,7 @@ fn parse_shell_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, S
                             reads: Vec::new(),
                             writes: Vec::new(),
                             inline_script_start,
+                            file_only: None,
                         });
                     }
                     's' => {
@@ -76,6 +77,7 @@ fn parse_shell_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, S
                 reads: vec![resolve(arg, cwd)],
                 writes: Vec::new(),
                 inline_script_start: None,
+                file_only: None,
             });
         }
 
@@ -87,6 +89,7 @@ fn parse_shell_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, S
         reads: Vec::new(),
         writes: Vec::new(),
         inline_script_start: None,
+        file_only: None,
     })
 }
 
@@ -123,6 +126,7 @@ fn parse_python_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, 
                 reads: Vec::new(),
                 writes: Vec::new(),
                 inline_script_start: None,
+                file_only: None,
             });
         }
 
@@ -137,6 +141,7 @@ fn parse_python_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, 
                             reads: Vec::new(),
                             writes: Vec::new(),
                             inline_script_start,
+                            file_only: None,
                         });
                     }
                     'm' => {
@@ -145,6 +150,7 @@ fn parse_python_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, 
                             reads: Vec::new(),
                             writes: Vec::new(),
                             inline_script_start: None,
+                            file_only: None,
                         });
                     }
                     'W' | 'X' => {
@@ -173,6 +179,7 @@ fn parse_python_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, 
             reads: vec![resolve(arg, cwd)],
             writes: Vec::new(),
             inline_script_start: None,
+            file_only: None,
         });
     }
 
@@ -181,6 +188,7 @@ fn parse_python_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, 
         reads: Vec::new(),
         writes: Vec::new(),
         inline_script_start: None,
+        file_only: None,
     })
 }
 
@@ -220,6 +228,7 @@ fn parse_ruby_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
                             reads: Vec::new(),
                             writes: Vec::new(),
                             inline_script_start,
+                            file_only: None,
                         });
                     }
                     'r' | 'I' | 'C' | 'F' | 'E' | 'K' => {
@@ -247,6 +256,7 @@ fn parse_ruby_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
             reads: vec![resolve(arg, cwd)],
             writes: Vec::new(),
             inline_script_start: None,
+            file_only: None,
         });
     }
 
@@ -254,6 +264,7 @@ fn parse_ruby_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
         reads: Vec::new(),
         writes: Vec::new(),
         inline_script_start: None,
+        file_only: None,
     })
 }
 
@@ -293,6 +304,7 @@ fn parse_node_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
                 reads: Vec::new(),
                 writes: Vec::new(),
                 inline_script_start,
+                file_only: None,
             });
         }
         // Long --eval=CODE / --print=CODE
@@ -301,6 +313,7 @@ fn parse_node_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
                 reads: Vec::new(),
                 writes: Vec::new(),
                 inline_script_start: Some(i),
+                file_only: None,
             });
         }
 
@@ -316,6 +329,7 @@ fn parse_node_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
                             reads: Vec::new(),
                             writes: Vec::new(),
                             inline_script_start,
+                            file_only: None,
                         });
                     }
                     'r' => {
@@ -367,6 +381,7 @@ fn parse_node_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
             reads: vec![resolve(arg, cwd)],
             writes: Vec::new(),
             inline_script_start: None,
+            file_only: None,
         });
     }
 
@@ -374,6 +389,7 @@ fn parse_node_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
         reads: Vec::new(),
         writes: Vec::new(),
         inline_script_start: None,
+        file_only: None,
     })
 }
 
@@ -415,6 +431,7 @@ fn parse_perl_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
                                 reads: Vec::new(),
                                 writes: Vec::new(),
                                 inline_script_start: Some(i),
+                                file_only: None,
                             });
                         }
                         i += 1;
@@ -423,6 +440,7 @@ fn parse_perl_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
                             reads: Vec::new(),
                             writes: Vec::new(),
                             inline_script_start,
+                            file_only: None,
                         });
                     }
                     'I' | 'F' | 'm' | 'M' => {
@@ -449,6 +467,7 @@ fn parse_perl_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
             reads: vec![resolve(arg, cwd)],
             writes: Vec::new(),
             inline_script_start: None,
+            file_only: None,
         });
     }
 
@@ -456,5 +475,6 @@ fn parse_perl_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
         reads: Vec::new(),
         writes: Vec::new(),
         inline_script_start: None,
+        file_only: None,
     })
 }

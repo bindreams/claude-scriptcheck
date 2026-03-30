@@ -1013,3 +1013,181 @@ fn python_c_multiple_accesses_all_checked() {
         panic!("expected Ask, got {d:?}");
     }
 }
+
+// Git subcommand file-only suppression =====
+
+#[skuld::test]
+fn git_restore_allowed_by_write_rule() {
+    // git restore . with Write rule covering cwd → should Allow without Bash rule
+    let d = check(
+        "git restore .",
+        &[&format!("Write({}/**)", c("/tmp"))],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn git_add_allowed_by_git_write_rule() {
+    // git add needs Write(.git) — allowed by Write(cwd/**)
+    let d = check(
+        "git add file.txt",
+        &[&format!("Write({}/**)", c("/tmp"))],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn git_commit_allowed_by_git_write_rule() {
+    let d = check(
+        "git commit -m 'msg'",
+        &[&format!("Write({}/**)", c("/tmp"))],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn git_status_no_rules_allowed() {
+    // git status is read-only and file_only=true with no accesses → no Bash rule needed
+    let d = check("git status", &[], &[]);
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn git_log_no_rules_allowed() {
+    let d = check("git log --oneline", &[], &[]);
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn git_diff_no_rules_allowed() {
+    let d = check("git diff", &[], &[]);
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn git_fetch_requires_bash_rule() {
+    // fetch is file_only=false → Write rule alone is not enough
+    let d = check(
+        "git fetch origin",
+        &[&format!("Write({}/**)", c("/tmp"))],
+        &[],
+    );
+    assert!(
+        matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))),
+        "expected Ask with Bash rule, got {d:?}",
+    );
+}
+
+#[skuld::test]
+fn git_push_requires_bash_rule() {
+    let d = check(
+        "git push origin main",
+        &[&format!("Read({}/**)", c("/tmp"))],
+        &[],
+    );
+    assert!(
+        matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))),
+        "expected Ask with Bash rule, got {d:?}",
+    );
+}
+
+#[skuld::test]
+fn git_fetch_allowed_with_bash_and_write_rules() {
+    let d = check(
+        "git fetch origin",
+        &[
+            "Bash(git fetch *)",
+            &format!("Write({}/**)", c("/tmp")),
+        ],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn git_unknown_subcommand_requires_bash_rule() {
+    // bisect is unknown → file_only=None → is_file_only_command("git")=false → needs Bash rule
+    let d = check(
+        "git bisect start",
+        &[&format!("Write({}/**)", c("/tmp"))],
+        &[],
+    );
+    assert!(
+        matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))),
+        "expected Ask with Bash rule, got {d:?}",
+    );
+}
+
+#[skuld::test]
+fn git_c_flag_path_resolution() {
+    // git -C /other restore . → writes to /other, not /tmp
+    let d = check_cwd(
+        "git -C /nonexistent_unique_path restore .",
+        &["Write(/nonexistent_unique_path/**)"],
+        &[],
+        "/tmp",
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn git_checkout_branch_needs_write() {
+    // checkout writes to working tree + .git
+    let d = check(
+        "git checkout main",
+        &[&format!("Write({}/**)", c("/tmp"))],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn git_merge_needs_write() {
+    let d = check(
+        "git merge feature",
+        &[&format!("Write({}/**)", c("/tmp"))],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn git_reset_hard_needs_write() {
+    let d = check(
+        "git reset --hard HEAD~1",
+        &[&format!("Write({}/**)", c("/tmp"))],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn git_restore_denied() {
+    let d = check(
+        "git restore .",
+        &[],
+        &[&format!("Write({}/**)", c("/tmp"))],
+    );
+    assert!(matches!(d, Decision::Deny(_)));
+}
+
+#[skuld::test]
+fn git_restore_missing_write_asks_for_write() {
+    let d = check("git restore .", &[], &[]);
+    if let Decision::Ask(ref rules) = d {
+        assert!(
+            rules.iter().any(|r| r.starts_with("Write(")),
+            "expected Write rule, got {rules:?}",
+        );
+        // Should NOT ask for Bash rule (file_only=true)
+        assert!(
+            !rules.iter().any(|r| r.starts_with("Bash(")),
+            "should not need Bash rule for file-only git subcommand, got {rules:?}",
+        );
+    } else {
+        panic!("expected Ask, got {d:?}");
+    }
+}

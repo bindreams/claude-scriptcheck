@@ -133,6 +133,7 @@ impl CommandParser for CurlParser {
             reads,
             writes,
             inline_script_start: None,
+            file_only: None,
         })
     }
 }
@@ -254,6 +255,7 @@ impl CommandParser for WgetParser {
             reads,
             writes,
             inline_script_start: None,
+            file_only: None,
         })
     }
 }

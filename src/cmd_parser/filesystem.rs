@@ -126,6 +126,7 @@ fn parse_copy_like(matches: &ArgMatches, cwd: &str) -> Result<CommandFileAccesse
         reads,
         writes,
         inline_script_start: None,
+        file_only: None,
     })
 }
 
@@ -186,6 +187,7 @@ impl CommandParser for InstallParser {
             reads,
             writes,
             inline_script_start: None,
+            file_only: None,
         })
     }
 }
@@ -350,6 +352,7 @@ impl CommandParser for SortParser {
             reads,
             writes,
             inline_script_start: None,
+            file_only: None,
         })
     }
 }
@@ -394,6 +397,7 @@ impl CommandParser for UniqParser {
             reads,
             writes,
             inline_script_start: None,
+            file_only: None,
         })
     }
 }
@@ -483,6 +487,7 @@ fn parse_permission_change(matches: &ArgMatches, cwd: &str) -> Result<CommandFil
         reads: Vec::new(),
         writes,
         inline_script_start: None,
+        file_only: None,
     })
 }
 
@@ -500,6 +505,7 @@ impl CommandParser for SourceParser {
             reads,
             writes: Vec::new(),
             inline_script_start: None,
+            file_only: None,
         })
     }
 }

@@ -3,6 +3,7 @@ mod compression;
 mod dd;
 mod filesystem;
 mod find;
+pub(crate) mod git;
 mod grep;
 mod helpers;
 mod network;
@@ -27,6 +28,13 @@ pub struct CommandFileAccesses {
     /// the logged rule to `Bash(cmd -c *)` instead of including the literal
     /// script text.
     pub inline_script_start: Option<usize>,
+    /// Parser-declared override for file-only status.
+    /// - `Some(true)`: file accesses fully characterize the command's effects
+    ///   (no `Bash()` rule needed when file accesses are present).
+    /// - `Some(false)`: command has side effects beyond file I/O (e.g. network).
+    /// - `None`: defer to `is_file_only_command()` lookup (default for all
+    ///   existing parsers).
+    pub file_only: Option<bool>,
 }
 
 impl CommandFileAccesses {
@@ -35,6 +43,7 @@ impl CommandFileAccesses {
             reads: Vec::new(),
             writes: Vec::new(),
             inline_script_start: None,
+            file_only: None,
         }
     }
 
@@ -98,6 +107,7 @@ pub fn get_parser(cmd_name: &str) -> Option<&'static dyn CommandParser> {
     use dd::*;
     use filesystem::*;
     use find::*;
+    use git::*;
     use grep::*;
     use network::*;
     use readers::*;
@@ -107,6 +117,9 @@ pub fn get_parser(cmd_name: &str) -> Option<&'static dyn CommandParser> {
     use writers::*;
 
     match cmd_name {
+        // Compound commands
+        "git" => Some(&GitParser),
+
         // Simple readers
         "cat" => Some(&CatParser),
         "head" => Some(&HeadParser),
@@ -243,6 +256,7 @@ mod compression_tests;
 mod dd_tests;
 mod filesystem_tests;
 mod find_tests;
+mod git_tests;
 mod grep_tests;
 mod helpers_tests;
 mod network_tests;

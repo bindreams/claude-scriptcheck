@@ -62,6 +62,7 @@ impl CommandParser for ZipParser {
             reads,
             writes,
             inline_script_start: None,
+            file_only: None,
         })
     }
 }
@@ -111,6 +112,7 @@ impl CommandParser for UnzipParser {
             reads,
             writes,
             inline_script_start: None,
+            file_only: None,
         })
     }
 }
@@ -180,6 +182,7 @@ impl CommandParser for PatchParser {
             reads,
             writes,
             inline_script_start: None,
+            file_only: None,
         })
     }
 }
@@ -220,6 +223,7 @@ impl CommandParser for SplitParser {
             reads,
             writes: Vec::new(),
             inline_script_start: None,
+            file_only: None,
         })
     }
 }
@@ -254,6 +258,7 @@ impl CommandParser for CsplitParser {
             reads,
             writes: Vec::new(),
             inline_script_start: None,
+            file_only: None,
         })
     }
 }

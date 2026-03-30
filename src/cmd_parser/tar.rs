@@ -192,6 +192,7 @@ impl CommandParser for TarParser {
             reads,
             writes,
             inline_script_start: None,
+            file_only: None,
         })
     }
 }

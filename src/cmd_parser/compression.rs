@@ -22,12 +22,14 @@ fn parse_compression(matches: &ArgMatches, cwd: &str) -> CommandFileAccesses {
             reads: paths,
             writes: Vec::new(),
             inline_script_start: None,
+            file_only: None,
         }
     } else {
         CommandFileAccesses {
             reads: Vec::new(),
             writes: paths,
             inline_script_start: None,
+            file_only: None,
         }
     }
 }

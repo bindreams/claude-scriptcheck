@@ -27,6 +27,7 @@ impl CommandParser for DdParser {
             reads,
             writes,
             inline_script_start: None,
+            file_only: None,
         })
     }
 }

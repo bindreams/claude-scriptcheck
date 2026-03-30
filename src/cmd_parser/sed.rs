@@ -189,6 +189,7 @@ impl CommandParser for SedParser {
             reads,
             writes,
             inline_script_start: None,
+            file_only: None,
         })
     }
 }

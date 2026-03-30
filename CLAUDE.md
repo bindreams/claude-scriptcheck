@@ -28,6 +28,7 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git  # insta
 | `src/path_util.rs`   | Cross-platform path helpers: `is_absolute()`, `normalize_separators()`.                                            |
 | `src/word_util.rs`   | Extracts static string literals from bash `Word` nodes; detects dynamic content.                                   |
 | `src/python_ast.rs`  | Python AST analysis for `python -c` inline scripts. Parses Python, extracts file accesses, detects unsafe patterns.|
+| `src/cmd_parser/git.rs` | Git subcommand parser. Dispatches on subcommand, emits Write(.git) for local ops, file_only=false for network ops.|
 | `tests/suite/`       | Integration tests: logic tests call the library API directly; binary I/O tests invoke the compiled binary.         |
 
 ## Key types
@@ -43,6 +44,8 @@ HookOutput       { hookEventName, permissionDecision, permissionDecisionReason }
 LoadedSettings   { permissions: Permissions, additional_directories: Vec<String> }
 VerdictFilter    { show_allow, show_ask, show_deny }  // log output filtering
 PythonAnalysis   = Analyzed { accesses } | Unanalyzable(reason)  // python -c analysis result
+CommandFileAccesses { reads, writes, inline_script_start, file_only: Option<bool> }
+    // file_only: Some(true) = file-only, Some(false) = has network side effects, None = use is_file_only_command()
 ```
 
 ## Decision flow
@@ -63,8 +66,13 @@ stdin JSON → parse permission_mode →
           parse Python AST → extract file accesses from open() calls
           success? → add accesses to file-access list, skip Bash rule
           failure (unsafe patterns, parse error)? → fall back to Bash(python3 -c *)
+      3c. if git: parse subcommand → emit Write(.git) for local ops, file_only per category
       4. check deny file rules  →  hit? → Deny
       5. check allow file rules →  miss? → collect as unmatched
+      6. decide if Bash rule needed:
+         file_only=Some(true) + static args + not bash_asked? → skip Bash rule
+         file_only=Some(false)? → require Bash rule
+         file_only=None? → use is_file_only_command() + has_file_accesses guard
     any deny? → Deny
     any unmatched? → Ask (+ log missing rules)
     all matched → Allow
@@ -86,4 +94,5 @@ stdin JSON → parse permission_mode →
 - When `permission_mode` is `"bypassPermissions"`, the hook unconditionally allows all tool calls (including unknown tools) without loading settings or running any checks. Decisions are still logged.
 - When `permission_mode` is `"acceptEdits"`, ephemeral Write/Edit allow rules are injected for workspace directories. Deny and ask rules still take priority. The `cli::check` subcommand does not support `--permission-mode`.
 - Workspace directories for `acceptEdits` are determined from `CLAUDE_PROJECT_DIR` + `additionalDirectories` in settings files. Directories added via `--add-dir` or `/add-dir` at runtime are not visible to the hook.
+- Git subcommands are parsed with limited coverage. Read-only subcommands (status, log, diff, show, etc.) are auto-allowed with no rules. Local-write subcommands (add, commit, restore, checkout, merge, etc.) emit `Write(.git)` and are file_only=true — only a Write rule is needed, not a Bash rule. Network subcommands (fetch, pull, push, clone) emit file accesses but are file_only=false — a Bash rule is always required. Unknown subcommands (config, bisect, worktree, submodule, format-patch, archive) require a Bash rule. Global options `-C`, `--git-dir`, `--work-tree` are parsed; `-c key=value` is consumed correctly.
 - `python -c` and `python3 -c` inline scripts are analyzed via Python AST (rustpython-parser). If the script only uses `open()` with static string paths and no unsafe patterns (exec, eval, subprocess, os file-mutation, shutil, etc.), file accesses are extracted and checked against Read/Write rules — no `Bash()` rule is needed. Unanalyzable scripts fall back to `Bash(python3 -c *)`. Phase 1 covers `open()` and `io.open()` only; `os.remove`/`os.rename`/etc. and `shutil.*` trigger fallback to Ask. `pathlib.Path` method chains are not yet detected (future Phase 2 work).

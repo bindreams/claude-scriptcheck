@@ -78,6 +78,7 @@ pub(super) fn extract_positional_reads(matches: &ArgMatches, cwd: &str) -> Comma
         reads,
         writes: Vec::new(),
         inline_script_start: None,
+        file_only: None,
     }
 }
 
@@ -91,6 +92,7 @@ pub(super) fn extract_positional_writes(matches: &ArgMatches, cwd: &str) -> Comm
         reads: Vec::new(),
         writes,
         inline_script_start: None,
+        file_only: None,
     }
 }
 

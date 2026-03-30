@@ -806,6 +806,7 @@ impl CommandParser for Base64Parser {
             reads,
             writes,
             inline_script_start: None,
+            file_only: None,
         })
     }
 }
