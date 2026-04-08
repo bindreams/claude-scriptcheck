@@ -727,35 +727,28 @@ fn unknown_subcommand_returns_empty() {
 }
 
 #[skuld::test]
-fn worktree_is_unknown() {
-    let result = GitParser.parse(&["worktree", "add", "/path"], "/repo").unwrap();
-    assert_eq!(result.file_only, None);
-}
-
-#[skuld::test]
 fn submodule_is_unknown() {
     let result = GitParser.parse(&["submodule", "update"], "/repo").unwrap();
-    assert_eq!(result.file_only, None);
-}
-
-#[skuld::test]
-fn config_is_unknown() {
-    let result = GitParser.parse(&["config", "user.name"], "/repo").unwrap();
     assert_eq!(result.file_only, None);
 }
 
 // Edge cases =====
 
 #[skuld::test]
-fn no_args_returns_empty() {
+fn no_args_is_informational() {
+    // Bare `git` prints help — read-only, no rules needed.
     let result = GitParser.parse(&[], "/repo").unwrap();
-    assert_eq!(result.file_only, None);
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.reads.is_empty());
+    assert!(result.writes.is_empty());
 }
 
 #[skuld::test]
-fn only_global_flags_no_subcommand() {
+fn only_global_flags_no_subcommand_is_informational() {
+    // `git --no-pager` with no subcommand prints help — read-only.
     let result = GitParser.parse(&["--no-pager"], "/repo").unwrap();
-    assert_eq!(result.file_only, None);
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
 }
 
 #[skuld::test]
@@ -801,4 +794,891 @@ fn remote_unknown_subcommand_is_network() {
     // Unknown remote sub-subcommands default to network
     let result = GitParser.parse(&["remote", "foobar"], "/repo").unwrap();
     assert_eq!(result.file_only, Some(false));
+}
+
+// Informational global flags =====
+
+#[skuld::test]
+fn version_flag_is_read_only() {
+    let result = GitParser.parse(&["--version"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn help_flag_is_read_only() {
+    let result = GitParser.parse(&["--help"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn exec_path_bare_is_read_only() {
+    let result = GitParser.parse(&["--exec-path"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn exec_path_with_value_falls_through_to_subcommand() {
+    // `git --exec-path=/foo status` — the `=` form is a setter, not
+    // informational, and must dispatch to `status` (which is read-only).
+    let result = GitParser
+        .parse(&["--exec-path=/foo", "status"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn html_path_is_read_only() {
+    let result = GitParser.parse(&["--html-path"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn man_path_is_read_only() {
+    let result = GitParser.parse(&["--man-path"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn info_path_is_read_only() {
+    let result = GitParser.parse(&["--info-path"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn dash_c_with_informational() {
+    // `git -C /other --version` — -C is parsed, then --version is informational.
+    let result = GitParser
+        .parse(&["-C", "/other", "--version"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn dash_lowercase_c_overrides_informational() {
+    // -c can register aliases that intercept even --version, so it must
+    // always force a Bash rule regardless of informational flags.
+    let result = GitParser
+        .parse(&["-c", "alias.v=version", "--version"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+// Worktree =====
+
+#[skuld::test]
+fn worktree_bare_is_read_only() {
+    let result = GitParser.parse(&["worktree"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn worktree_list_is_read_only() {
+    let result = GitParser.parse(&["worktree", "list"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn worktree_add_path_only() {
+    let result = GitParser
+        .parse(&["worktree", "add", ".worktrees/foo"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_add_absolute_path() {
+    let result = GitParser
+        .parse(&["worktree", "add", "/other/foo"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/other/foo", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_add_with_branch_flag() {
+    let result = GitParser
+        .parse(
+            &["worktree", "add", "-b", "branch", ".worktrees/foo"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_add_with_commit_ish() {
+    // `git worktree add <path> <commit-ish>` — HEAD~1 is a commit-ish,
+    // NOT a path. Must not be in writes. This is the critical regression
+    // test against mimicking parse_mv's `positionals[len-1]` pattern.
+    let result = GitParser
+        .parse(&["worktree", "add", ".worktrees/foo", "HEAD~1"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
+    assert!(!result.writes.iter().any(|p| p.contains("HEAD")));
+}
+
+#[skuld::test]
+fn worktree_add_detach_with_commit_ish() {
+    let result = GitParser
+        .parse(
+            &["worktree", "add", "--detach", ".worktrees/foo", "HEAD~1"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_add_with_branch_name_positional() {
+    let result = GitParser
+        .parse(&["worktree", "add", ".worktrees/foo", "main"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_remove() {
+    let result = GitParser
+        .parse(&["worktree", "remove", ".worktrees/foo"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_remove_force() {
+    let result = GitParser
+        .parse(&["worktree", "remove", "-f", ".worktrees/foo"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_move() {
+    let result = GitParser
+        .parse(
+            &["worktree", "move", ".worktrees/a", ".worktrees/b"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.reads, r(&["/repo/.worktrees/a"]));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/b", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_lock_is_write_git() {
+    let result = GitParser
+        .parse(&["worktree", "lock", ".worktrees/foo"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_prune_is_write_git() {
+    let result = GitParser.parse(&["worktree", "prune"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_unknown_sub_sub_requires_bash_rule() {
+    let result = GitParser
+        .parse(&["worktree", "frobnicate"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+// Config =====
+
+#[skuld::test]
+fn config_bare_key_is_read() {
+    // `git config core.symlinks` — 1 positional = read
+    let result = GitParser
+        .parse(&["config", "core.symlinks"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+    assert!(result.reads.is_empty());
+}
+
+#[skuld::test]
+fn config_get_flag_is_read() {
+    let result = GitParser
+        .parse(&["config", "--get", "foo.bar"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn config_list_is_read() {
+    let result = GitParser.parse(&["config", "--list"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn config_file_space_separated_emits_read() {
+    let result = GitParser
+        .parse(
+            &["config", "--file", ".gitmodules", "--get-regexp", "path"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.reads, r(&["/repo/.gitmodules"]));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn config_file_equals_form_emits_read() {
+    let result = GitParser
+        .parse(&["config", "--file=.gitmodules", "--get", "foo"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.reads, r(&["/repo/.gitmodules"]));
+}
+
+#[skuld::test]
+fn config_blob_is_not_a_file_path() {
+    // `--blob HEAD:config` is a git blob ref, not a filesystem path.
+    // Must NOT emit a Read.
+    let result = GitParser
+        .parse(&["config", "--blob", "HEAD:config", "--get", "foo"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.reads.is_empty());
+}
+
+#[skuld::test]
+fn config_global_read() {
+    let result = GitParser
+        .parse(&["config", "--global", "user.name"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn config_global_write_requires_bash_rule() {
+    let result = GitParser
+        .parse(&["config", "--global", "user.name", "Alice"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn config_unset_requires_bash_rule() {
+    let result = GitParser
+        .parse(&["config", "--unset", "foo.bar"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn config_key_value_requires_bash_rule() {
+    let result = GitParser
+        .parse(&["config", "foo.bar", "value"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn config_edit_requires_bash_rule() {
+    let result = GitParser.parse(&["config", "--edit"], "/repo").unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn config_new_subcommand_form_get_is_not_recognized() {
+    // git >= 2.46 subcommand form: `git config get foo.bar`. We deliberately
+    // do NOT recognize this (old git interprets it as a setter — semantic
+    // inversion risk). Falls through to flag-form scan: 2 positionals = write.
+    let result = GitParser
+        .parse(&["config", "get", "foo.bar"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn config_new_subcommand_form_set_requires_bash_rule() {
+    let result = GitParser
+        .parse(&["config", "set", "foo.bar", "value"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn config_bare_is_read_only() {
+    let result = GitParser.parse(&["config"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn config_with_dash_lowercase_c_override_requires_bash_rule() {
+    // `git -c foo=bar config --get baz` — the top-level -c short-circuit
+    // must fire before parse_config is called.
+    let result = GitParser
+        .parse(&["-c", "alias.foo=bar", "config", "--get", "x"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+// Symbolic-ref =====
+
+#[skuld::test]
+fn symbolic_ref_read_head() {
+    let result = GitParser
+        .parse(&["symbolic-ref", "HEAD"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn symbolic_ref_read_origin_head() {
+    let result = GitParser
+        .parse(&["symbolic-ref", "refs/remotes/origin/HEAD"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn symbolic_ref_short_read() {
+    let result = GitParser
+        .parse(&["symbolic-ref", "--short", "HEAD"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn symbolic_ref_set_is_write() {
+    let result = GitParser
+        .parse(&["symbolic-ref", "HEAD", "refs/heads/main"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.git"]));
+}
+
+#[skuld::test]
+fn symbolic_ref_set_with_reason() {
+    // -m <reason> is value-taking. After skipping, 2 positionals → write.
+    let result = GitParser
+        .parse(
+            &["symbolic-ref", "-m", "reason", "HEAD", "refs/heads/main"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.git"]));
+}
+
+#[skuld::test]
+fn symbolic_ref_delete() {
+    let result = GitParser
+        .parse(&["symbolic-ref", "-d", "HEAD"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.git"]));
+}
+
+#[skuld::test]
+fn symbolic_ref_delete_long() {
+    let result = GitParser
+        .parse(&["symbolic-ref", "--delete", "HEAD"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.git"]));
+}
+
+#[skuld::test]
+fn symbolic_ref_bare_is_read_only() {
+    // GAP 15: 0 positionals → read_only
+    let result = GitParser.parse(&["symbolic-ref"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn symbolic_ref_read_with_reason() {
+    // GAP 16: `-m <reason>` + 1 positional = read (not write).
+    // Verifies -m's value isn't miscounted as a positional.
+    let result = GitParser
+        .parse(&["symbolic-ref", "-m", "reason", "HEAD"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+// Bug regression tests =====
+
+#[skuld::test]
+fn config_get_with_value_pattern_is_read() {
+    // BUG 1 regression: `git config --get foo.bar pattern` is a READ
+    // (the 2nd positional is a value pattern to filter by), not a write.
+    let result = GitParser
+        .parse(&["config", "--get", "foo.bar", "pattern"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn config_get_regexp_with_value_pattern_is_read() {
+    // BUG 1 regression: same for --get-regexp
+    let result = GitParser
+        .parse(
+            &["config", "--get-regexp", "^remote\\.", "origin"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn config_get_urlmatch_is_read() {
+    // BUG 1 regression: --get-urlmatch requires 2 positionals.
+    let result = GitParser
+        .parse(
+            &["config", "--get-urlmatch", "http", "https://example.com"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn config_file_with_write_still_emits_read_for_deny_matching() {
+    // BUG 2 regression: `git config --file /etc/secret --unset foo.bar` —
+    // the --file read must still be plumbed through so Deny(Read) can match.
+    // Because the action is a write, file_only=false (Bash rule also required).
+    let result = GitParser
+        .parse(
+            &["config", "--file", "/etc/secret", "--unset", "foo.bar"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+    assert_eq!(result.reads, r(&["/etc/secret"]));
+}
+
+#[skuld::test]
+fn config_file_with_no_action_still_emits_read() {
+    // BUG 3 regression: `git config --file /etc/secret` alone has no explicit
+    // action and no positional, but the --file read must still be emitted.
+    let result = GitParser
+        .parse(&["config", "--file", "/etc/secret"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.reads, r(&["/etc/secret"]));
+}
+
+#[skuld::test]
+fn config_edit_subcommand_form_requires_bash_rule() {
+    // BUG 7 regression: `git config edit` (git >= 2.46 subcommand form)
+    // opens $EDITOR = arbitrary code execution. MUST NOT be classified as
+    // a read via the 1-positional heuristic.
+    let result = GitParser.parse(&["config", "edit"], "/repo").unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn config_unset_subcommand_form_requires_bash_rule() {
+    // BUG 7 regression: `git config unset foo.bar` (git >= 2.46). Also
+    // caught by positionals>=2, but the explicit top-of-function guard
+    // makes this immune to refactoring.
+    let result = GitParser
+        .parse(&["config", "unset", "foo.bar"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn config_add_subcommand_form_requires_bash_rule() {
+    let result = GitParser
+        .parse(&["config", "add", "foo.bar", "value"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn worktree_add_unknown_flag_requires_bash_rule() {
+    // BUG 4 regression: an unknown flag may be value-taking. We must not
+    // silently skip it and risk stealing positional[0] (the worktree path).
+    // Fall back to Bash rule.
+    let result = GitParser
+        .parse(
+            &["worktree", "add", "--future-flag", "value", ".worktrees/foo"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn worktree_add_no_lock_is_skipped() {
+    // Verifies --no-lock is recognized as a boolean (regression for the
+    // flag list fix).
+    let result = GitParser
+        .parse(
+            &["worktree", "add", "--no-lock", ".worktrees/foo"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_help_is_read_only() {
+    // BUG 5 regression: `git worktree --help` prints help.
+    let result = GitParser.parse(&["worktree", "--help"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn worktree_h_short_is_read_only() {
+    let result = GitParser.parse(&["worktree", "-h"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn worktree_add_help_is_read_only() {
+    // BUG 6 regression: `git worktree add --help` prints help — must not
+    // require a Write rule.
+    let result = GitParser
+        .parse(&["worktree", "add", "--help"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn worktree_remove_help_is_read_only() {
+    let result = GitParser
+        .parse(&["worktree", "remove", "--help"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn worktree_move_help_is_read_only() {
+    let result = GitParser
+        .parse(&["worktree", "move", "--help"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+// Test gap fills =====
+
+#[skuld::test]
+fn worktree_rm_alias() {
+    // GAP 5: `rm` is an alias for `remove`
+    let result = GitParser
+        .parse(&["worktree", "rm", ".worktrees/foo"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_mv_alias() {
+    // GAP 5: `mv` is an alias for `move`
+    let result = GitParser
+        .parse(
+            &["worktree", "mv", ".worktrees/a", ".worktrees/b"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/b", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_unlock_is_write_git() {
+    // GAP 6
+    let result = GitParser
+        .parse(&["worktree", "unlock", ".worktrees/foo"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_repair_is_write_git() {
+    // GAP 6
+    let result = GitParser.parse(&["worktree", "repair"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_add_separator_locks_in_path_semantics() {
+    // GAP 7: `--` separator, only positionals[0] is the path.
+    let result = GitParser
+        .parse(
+            &["worktree", "add", "--", ".worktrees/foo", "HEAD~1"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_add_no_positional_is_write_git() {
+    // GAP 8
+    let result = GitParser.parse(&["worktree", "add"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_remove_no_positional_is_write_git() {
+    // GAP 9
+    let result = GitParser.parse(&["worktree", "remove"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_move_one_positional_is_write_git() {
+    // GAP 10
+    let result = GitParser
+        .parse(&["worktree", "move", ".worktrees/a"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_add_with_capital_b_flag() {
+    // GAP 17: -B is value-taking too
+    let result = GitParser
+        .parse(
+            &["worktree", "add", "-B", "branch", ".worktrees/foo"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn config_dash_f_short_form_emits_read() {
+    // GAP 11: `-f <path>` is the short form of `--file`
+    let result = GitParser
+        .parse(&["config", "-f", ".gitmodules", "--get", "foo"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.reads, r(&["/repo/.gitmodules"]));
+}
+
+#[skuld::test]
+fn config_dash_l_short_form_is_read() {
+    // GAP 12: `-l` is the short form of `--list`
+    let result = GitParser.parse(&["config", "-l"], "/repo").unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn config_blob_equals_form() {
+    // GAP 13: `--blob=HEAD:config`
+    let result = GitParser
+        .parse(
+            &["config", "--blob=HEAD:config", "--get", "foo"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.reads.is_empty());
+}
+
+#[skuld::test]
+fn config_type_flag_skips_value() {
+    // GAP 14: `--type <type>` is value-taking; must not steal positional.
+    let result = GitParser
+        .parse(&["config", "--type", "bool", "foo.bar"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn config_default_flag_skips_value() {
+    // GAP 14: `--default <value>` is value-taking.
+    let result = GitParser
+        .parse(
+            &["config", "--default", "fallback", "--get", "foo.bar"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn informational_version_then_dash_c() {
+    // GAP 1 (from review): reverse order of -c and --version
+    let result = GitParser
+        .parse(&["--version", "-c", "alias.v=version"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+// Second-round bug regression tests =====
+
+#[skuld::test]
+fn config_global_edit_requires_bash_rule() {
+    // BUG 8 regression: `git config --global edit` — scope flag before
+    // subcommand-form `edit` must still be caught.
+    let result = GitParser
+        .parse(&["config", "--global", "edit"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn config_system_edit_requires_bash_rule() {
+    let result = GitParser
+        .parse(&["config", "--system", "edit"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn config_local_edit_requires_bash_rule() {
+    let result = GitParser
+        .parse(&["config", "--local", "edit"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn config_worktree_edit_requires_bash_rule() {
+    let result = GitParser
+        .parse(&["config", "--worktree", "edit"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn config_file_edit_is_write_with_path_emitted() {
+    // BUG 8 + BUG 11 regression: `git config --file /etc/secret edit`
+    // opens $EDITOR on /etc/secret. Must be a write AND emit the path
+    // as both read and write for deny matching.
+    let result = GitParser
+        .parse(&["config", "--file", "/etc/secret", "edit"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+    assert_eq!(result.reads, r(&["/etc/secret"]));
+    assert_eq!(result.writes, w(&["/etc/secret"]));
+}
+
+#[skuld::test]
+fn config_file_write_emits_path_as_write() {
+    // BUG 10 regression: `git config --file /etc/secret --unset foo.bar`
+    // is a write TO /etc/secret. Deny(Write(/etc/secret)) must be able
+    // to match, so the path must be in `writes`, not only `reads`.
+    let result = GitParser
+        .parse(
+            &["config", "--file", "/etc/secret", "--unset", "foo.bar"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+    assert_eq!(result.reads, r(&["/etc/secret"]));
+    assert_eq!(result.writes, w(&["/etc/secret"]));
+}
+
+#[skuld::test]
+fn worktree_add_reason_value_containing_dash_h_is_not_help() {
+    // BUG 9 regression: `-h` is the value of `--reason`, not a help flag.
+    // Must not falsely classify as read-only.
+    let result = GitParser
+        .parse(
+            &["worktree", "add", "--reason", "-h", ".worktrees/foo"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_add_b_flag_value_dash_h_is_not_help() {
+    // BUG 9 regression: `-h` as branch name via `-b -h`.
+    let result = GitParser
+        .parse(
+            &["worktree", "add", "-b", "-h", ".worktrees/foo"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_add_reason_dash_dash_help_as_value() {
+    // BUG 9 regression: `--reason --help /path` — --help is --reason's
+    // value. git might actually error on this, but our parser must be
+    // safe — treat as a normal add (write), not as help (read).
+    let result = GitParser
+        .parse(
+            &["worktree", "add", "--reason", "--help", ".worktrees/foo"],
+            "/repo",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_add_dash_dash_help_as_path() {
+    // BUG 9 regression: `git worktree add -- --help` creates a worktree
+    // at path `--help`. Not help. Must write.
+    let result = GitParser
+        .parse(&["worktree", "add", "--", "--help"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert_eq!(result.writes, w(&["/repo/--help", "/repo/.git"]));
+}
+
+#[skuld::test]
+fn worktree_list_help_is_read_only() {
+    // Sanity: `worktree list --help` is read_only (narrow scan still
+    // catches it because --help is at args[1]).
+    let result = GitParser
+        .parse(&["worktree", "list", "--help"], "/repo")
+        .unwrap();
+    assert_eq!(result.file_only, Some(true));
+    assert!(result.writes.is_empty());
 }
