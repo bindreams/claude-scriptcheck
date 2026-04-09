@@ -34,7 +34,11 @@ struct LogEntry<'a> {
     timestamp: String,
     session: &'a str,
     cwd: &'a str,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    project_dir: &'a str,
     command: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permission_mode: Option<&'a str>,
     verdict: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     deny_reason: Option<&'a str>,
@@ -50,7 +54,9 @@ struct LogEntry<'a> {
 pub fn log_decision(
     session: &str,
     cwd: &str,
+    project_dir: &str,
     command: &str,
+    permission_mode: Option<&str>,
     verdict: &str,
     deny_reason: Option<&str>,
     allow_rules: &[String],
@@ -76,7 +82,9 @@ pub fn log_decision(
         timestamp,
         session,
         cwd,
+        project_dir,
         command,
+        permission_mode,
         verdict,
         deny_reason,
         allow_rules: allow_rules.iter().map(|s| s.as_str()).collect(),
@@ -185,7 +193,9 @@ mod tests {
             timestamp: "2025-01-01T00:00:00Z".into(),
             session: "s1",
             cwd: "/tmp",
+            project_dir: "",
             command: "ls",
+            permission_mode: None,
             verdict: "allow",
             deny_reason: None,
             allow_rules: vec![],
@@ -201,6 +211,54 @@ mod tests {
             yaml.ends_with('\n'),
             "yaml_serde should produce trailing newline, got:\n{yaml:?}"
         );
+        // Lock in the `skip_serializing_if` contract: empty project_dir and
+        // None permission_mode must be omitted so legacy log entries stay clean.
+        assert!(
+            !yaml.contains("project_dir:"),
+            "empty project_dir must be omitted, got:\n{yaml}"
+        );
+        assert!(
+            !yaml.contains("permission_mode:"),
+            "None permission_mode must be omitted, got:\n{yaml}"
+        );
+    }
+
+    /// Populated project_dir and permission_mode must appear in the YAML output.
+    /// Note: both fields have `skip_serializing_if` — an empty `project_dir` or
+    /// `None` `permission_mode` will be omitted, so this test MUST use non-empty
+    /// / `Some(...)` literals or the assertion becomes silently meaningless.
+    #[test]
+    fn yaml_serde_output_includes_permission_mode_and_project_dir() {
+        let entry = LogEntry {
+            timestamp: "2025-01-01T00:00:00Z".into(),
+            session: "s1",
+            cwd: "/tmp",
+            project_dir: "/proj",
+            command: "ls",
+            permission_mode: Some("acceptEdits"),
+            verdict: "allow",
+            deny_reason: None,
+            allow_rules: vec![],
+            deny_rules: vec![],
+            missing_rules: vec![],
+        };
+        let yaml = yaml_serde::to_string(&entry).unwrap();
+        assert!(
+            yaml.contains("project_dir:"),
+            "serialized YAML should contain project_dir key, got:\n{yaml}"
+        );
+        assert!(
+            yaml.contains("/proj"),
+            "serialized YAML should contain project_dir value, got:\n{yaml}"
+        );
+        assert!(
+            yaml.contains("permission_mode:"),
+            "serialized YAML should contain permission_mode key, got:\n{yaml}"
+        );
+        assert!(
+            yaml.contains("acceptEdits"),
+            "serialized YAML should contain permission_mode value, got:\n{yaml}"
+        );
     }
 
     #[test]
@@ -209,7 +267,9 @@ mod tests {
             timestamp: "2025-01-01T00:00:00Z".into(),
             session: "s1",
             cwd: "/tmp",
+            project_dir: "",
             command: "Read(/some/path)",
+            permission_mode: None,
             verdict: "allow",
             deny_reason: None,
             allow_rules: vec!["Read(**)"],
@@ -230,7 +290,9 @@ mod tests {
             timestamp: "2025-01-01T00:00:00Z".into(),
             session: "s1",
             cwd: "/tmp",
+            project_dir: "",
             command: "ls",
+            permission_mode: None,
             verdict: "allow",
             deny_reason: None,
             allow_rules: vec![],
@@ -253,7 +315,9 @@ mod tests {
                 timestamp: "2025-01-01T00:00:00Z".into(),
                 session: "s1",
                 cwd: "/tmp",
+                project_dir: "",
                 command: "ls",
+                permission_mode: None,
                 verdict: v,
                 deny_reason: None,
                 allow_rules: vec![],

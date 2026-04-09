@@ -112,12 +112,23 @@ fn run_hook() {
         }
     };
 
+    // Normalize path separators (Windows backslashes → forward slashes).
+    // Computed up here (before the bypassPermissions branch) so every log_decision
+    // call site — including the early-exit one — sees the same resolved values.
+    let cwd = path_util::normalize_separators(&hook_input.cwd);
+    let project_root = std::env::var("CLAUDE_PROJECT_DIR")
+        .map(|s| path_util::normalize_separators(&s))
+        .unwrap_or_else(|_| cwd.clone());
+    let permission_mode = hook_input.permission_mode.as_deref();
+
     // Early exit for bypassPermissions mode — allow everything unconditionally.
-    if hook_input.permission_mode.as_deref() == Some("bypassPermissions") {
+    if permission_mode == Some("bypassPermissions") {
         logging::log_decision(
             &hook_input.session_id,
-            &hook_input.cwd,
+            &cwd,
+            &project_root,
             &format!("{}(bypassPermissions)", hook_input.tool_name),
+            permission_mode,
             "allow",
             None,
             &[],
@@ -128,17 +139,23 @@ fn run_hook() {
         return;
     }
 
-    // Normalize path separators (Windows backslashes → forward slashes)
-    let cwd = path_util::normalize_separators(&hook_input.cwd);
-    let project_root = std::env::var("CLAUDE_PROJECT_DIR")
-        .map(|s| path_util::normalize_separators(&s))
-        .unwrap_or_else(|_| cwd.clone());
-
     match hook_input.tool_name.as_str() {
-        "Bash" => handle_bash(&hook_input, &cwd, &project_root),
-        "Grep" | "Glob" => handle_file_search(&hook_input, &cwd, &project_root),
-        "Read" => handle_file_tool(&hook_input, &cwd, &project_root, AccessKind::Read),
-        "Write" | "Edit" => handle_file_tool(&hook_input, &cwd, &project_root, AccessKind::Write),
+        "Bash" => handle_bash(&hook_input, &cwd, &project_root, permission_mode),
+        "Grep" | "Glob" => handle_file_search(&hook_input, &cwd, &project_root, permission_mode),
+        "Read" => handle_file_tool(
+            &hook_input,
+            &cwd,
+            &project_root,
+            permission_mode,
+            AccessKind::Read,
+        ),
+        "Write" | "Edit" => handle_file_tool(
+            &hook_input,
+            &cwd,
+            &project_root,
+            permission_mode,
+            AccessKind::Write,
+        ),
         _ => process::exit(0),
     }
 }
@@ -173,13 +190,18 @@ fn load_perms(
 }
 
 /// Handle the Bash tool: parse the command with thaum and walk the AST.
-fn handle_bash(hook_input: &hook::HookInput, cwd: &str, project_root: &str) {
+fn handle_bash(
+    hook_input: &hook::HookInput,
+    cwd: &str,
+    project_root: &str,
+    permission_mode: Option<&str>,
+) {
     let command = match &hook_input.tool_input.command {
         Some(cmd) if !cmd.is_empty() => cmd.clone(),
         _ => process::exit(0),
     };
 
-    let parsed_perms = load_perms(cwd, project_root, hook_input.permission_mode.as_deref());
+    let parsed_perms = load_perms(cwd, project_root, permission_mode);
 
     // Parse the bash command with thaum
     let program = match thaum::parse_with(&command, thaum::Dialect::Bash) {
@@ -188,7 +210,9 @@ fn handle_bash(hook_input: &hook::HookInput, cwd: &str, project_root: &str) {
             logging::log_decision(
                 &hook_input.session_id,
                 cwd,
+                project_root,
                 &command,
+                permission_mode,
                 "ask",
                 None,
                 &[],
@@ -201,11 +225,23 @@ fn handle_bash(hook_input: &hook::HookInput, cwd: &str, project_root: &str) {
     };
 
     let result = checker::check_program(&program, &parsed_perms, cwd);
-    log_and_output(&result, &hook_input.session_id, cwd, &command);
+    log_and_output(
+        &result,
+        &hook_input.session_id,
+        cwd,
+        project_root,
+        permission_mode,
+        &command,
+    );
 }
 
 /// Handle Grep and Glob tools: check the search path against Read rules.
-fn handle_file_search(hook_input: &hook::HookInput, cwd: &str, project_root: &str) {
+fn handle_file_search(
+    hook_input: &hook::HookInput,
+    cwd: &str,
+    project_root: &str,
+    permission_mode: Option<&str>,
+) {
     let raw_path = match &hook_input.tool_input.path {
         Some(p) if !p.is_empty() => p.clone(),
         _ => cwd.to_string(),
@@ -213,7 +249,7 @@ fn handle_file_search(hook_input: &hook::HookInput, cwd: &str, project_root: &st
     let normalized = path_util::normalize_separators(&raw_path);
     let resolved = file_access::resolve_path(&normalized, cwd);
 
-    let parsed_perms = load_perms(cwd, project_root, hook_input.permission_mode.as_deref());
+    let parsed_perms = load_perms(cwd, project_root, permission_mode);
     let accesses = [FileAccess {
         path: resolved.clone(),
         kind: AccessKind::Read,
@@ -221,7 +257,14 @@ fn handle_file_search(hook_input: &hook::HookInput, cwd: &str, project_root: &st
     let result = checker::check_file_accesses(&accesses, &parsed_perms, cwd);
 
     let log_label = format!("{}({})", hook_input.tool_name, resolved);
-    log_and_output(&result, &hook_input.session_id, cwd, &log_label);
+    log_and_output(
+        &result,
+        &hook_input.session_id,
+        cwd,
+        project_root,
+        permission_mode,
+        &log_label,
+    );
 }
 
 /// Handle Read, Write, and Edit tools: check the file path against file rules.
@@ -229,6 +272,7 @@ fn handle_file_tool(
     hook_input: &hook::HookInput,
     cwd: &str,
     project_root: &str,
+    permission_mode: Option<&str>,
     access_kind: AccessKind,
 ) {
     let raw_path = match &hook_input.tool_input.file_path {
@@ -239,7 +283,9 @@ fn handle_file_tool(
             logging::log_decision(
                 &hook_input.session_id,
                 cwd,
+                project_root,
                 &log_label,
+                permission_mode,
                 "ask",
                 None,
                 &[],
@@ -253,7 +299,7 @@ fn handle_file_tool(
     let normalized = path_util::normalize_separators(&raw_path);
     let resolved = file_access::resolve_path(&normalized, cwd);
 
-    let parsed_perms = load_perms(cwd, project_root, hook_input.permission_mode.as_deref());
+    let parsed_perms = load_perms(cwd, project_root, permission_mode);
     let accesses = [FileAccess {
         path: resolved.clone(),
         kind: access_kind,
@@ -261,17 +307,36 @@ fn handle_file_tool(
     let result = checker::check_file_accesses(&accesses, &parsed_perms, cwd);
 
     let log_label = format!("{}({})", hook_input.tool_name, resolved);
-    log_and_output(&result, &hook_input.session_id, cwd, &log_label);
+    log_and_output(
+        &result,
+        &hook_input.session_id,
+        cwd,
+        project_root,
+        permission_mode,
+        &log_label,
+    );
 }
 
 /// Log the decision and write the JSON output to stdout.
-fn log_and_output(result: &checker::CheckResult, session_id: &str, cwd: &str, command: &str) {
+/// `project_root` and `permission_mode` are recorded on every log entry so
+/// silent misconfigurations (wrong `CLAUDE_PROJECT_DIR`, missing mode field)
+/// are diagnosable from `log.yaml` alone.
+fn log_and_output(
+    result: &checker::CheckResult,
+    session_id: &str,
+    cwd: &str,
+    project_root: &str,
+    permission_mode: Option<&str>,
+    command: &str,
+) {
     match &result.decision {
         checker::Decision::Allow => {
             logging::log_decision(
                 session_id,
                 cwd,
+                project_root,
                 command,
+                permission_mode,
                 "allow",
                 None,
                 &result.matched_allow,
@@ -284,7 +349,9 @@ fn log_and_output(result: &checker::CheckResult, session_id: &str, cwd: &str, co
             logging::log_decision(
                 session_id,
                 cwd,
+                project_root,
                 command,
+                permission_mode,
                 "deny",
                 Some(reason),
                 &result.matched_allow,
@@ -298,7 +365,9 @@ fn log_and_output(result: &checker::CheckResult, session_id: &str, cwd: &str, co
             logging::log_decision(
                 session_id,
                 cwd,
+                project_root,
                 command,
+                permission_mode,
                 "ask",
                 None,
                 &result.matched_allow,
