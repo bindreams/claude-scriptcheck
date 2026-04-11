@@ -4,8 +4,6 @@ use std::path::Path;
 #[derive(Deserialize)]
 pub struct Settings {
     pub permissions: Option<PermissionsJson>,
-    #[serde(default, rename = "additionalDirectories")]
-    pub additional_directories: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -99,10 +97,6 @@ pub fn load_settings_from_contents(
 
     for content in settings_contents {
         if let Ok(settings) = serde_json::from_str::<Settings>(content) {
-            // Top-level additionalDirectories (backward compat)
-            result
-                .additional_directories
-                .extend(settings.additional_directories);
             if let Some(mut perms) = settings.permissions {
                 let nested_dirs = std::mem::take(&mut perms.additional_directories);
                 merge_permissions(&mut result.permissions, perms);
@@ -155,10 +149,6 @@ fn merge_from_with_base(
     let Ok(settings) = serde_json::from_str::<Settings>(&content) else {
         return;
     };
-    // Top-level additionalDirectories (backward compat)
-    result
-        .additional_directories
-        .extend(settings.additional_directories);
     if let Some(mut perms) = settings.permissions {
         // Extract nested additionalDirectories before consuming perms.
         // merge_permissions only moves allow/deny/ask — any other field on

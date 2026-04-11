@@ -126,40 +126,6 @@ fn managed_none_still_loads_user_rules() {
 // ─── additionalDirectories ───────────────────────────────────────────────────
 
 #[skuld::test]
-fn parse_additional_directories() {
-    let json = r#"{"additionalDirectories": ["/home/user/other", "~/Desktop"]}"#;
-    let settings: Settings = serde_json::from_str(json).unwrap();
-    assert_eq!(
-        settings.additional_directories,
-        vec!["/home/user/other", "~/Desktop"]
-    );
-}
-
-#[skuld::test]
-fn additional_directories_defaults_empty() {
-    let json = r#"{"permissions": {"allow": [], "deny": []}}"#;
-    let settings: Settings = serde_json::from_str(json).unwrap();
-    assert!(settings.additional_directories.is_empty());
-}
-
-#[skuld::test]
-fn additional_directories_merged_from_contents() {
-    let loaded = load_settings_from_contents(
-        None,
-        &[
-            r#"{"additionalDirectories": ["/dir1"]}"#,
-            r#"{"additionalDirectories": ["/dir2", "/dir3"]}"#,
-        ],
-    );
-    assert_eq!(
-        loaded.additional_directories,
-        vec!["/dir1", "/dir2", "/dir3"]
-    );
-}
-
-// ─── additionalDirectories nested inside permissions ────────────────────────
-
-#[skuld::test]
 fn additional_directories_nested_in_permissions() {
     let json = r#"{"permissions": {"allow": [], "additionalDirectories": ["/extra"]}}"#;
     let loaded = load_settings_from_contents(None, &[json]);
@@ -167,17 +133,14 @@ fn additional_directories_nested_in_permissions() {
 }
 
 #[skuld::test]
-fn additional_directories_both_nested_and_top_level_merged() {
-    let json = r#"{
-        "additionalDirectories": ["/top"],
-        "permissions": {"allow": [], "additionalDirectories": ["/nested"]}
-    }"#;
+fn additional_directories_defaults_empty() {
+    let json = r#"{"permissions": {"allow": [], "deny": []}}"#;
     let loaded = load_settings_from_contents(None, &[json]);
-    assert_eq!(loaded.additional_directories, vec!["/top", "/nested"]);
+    assert!(loaded.additional_directories.is_empty());
 }
 
 #[skuld::test]
-fn additional_directories_nested_merged_across_files() {
+fn additional_directories_merged_across_files() {
     let loaded = load_settings_from_contents(
         None,
         &[
@@ -189,7 +152,7 @@ fn additional_directories_nested_merged_across_files() {
 }
 
 #[skuld::test]
-fn managed_only_discards_nested_additional_directories() {
+fn managed_only_discards_additional_directories() {
     let loaded = load_settings_from_contents(
         Some(r#"{"permissions": {"allow": ["Bash(*)"]}, "allowManagedPermissionRulesOnly": true}"#),
         &[r#"{"permissions": {"allow": [], "additionalDirectories": ["/user/dir"]}}"#],
@@ -198,7 +161,7 @@ fn managed_only_discards_nested_additional_directories() {
 }
 
 #[skuld::test]
-fn managed_settings_nested_additional_directories_not_propagated() {
+fn managed_settings_additional_directories_not_propagated() {
     let loaded = load_settings_from_contents(
         Some(r#"{"permissions": {"allow": ["Bash(*)"], "additionalDirectories": ["/managed/dir"]}}"#),
         &[],
@@ -207,14 +170,13 @@ fn managed_settings_nested_additional_directories_not_propagated() {
 }
 
 #[skuld::test]
-fn additional_directories_duplicates_preserved() {
-    let json = r#"{
-        "additionalDirectories": ["/same"],
-        "permissions": {"allow": [], "additionalDirectories": ["/same"]}
-    }"#;
+fn top_level_additional_directories_ignored() {
+    let json = r#"{"additionalDirectories": ["/wrong-place"]}"#;
     let loaded = load_settings_from_contents(None, &[json]);
-    // No deduplication — both copies are preserved (existing behavior)
-    assert_eq!(loaded.additional_directories, vec!["/same", "/same"]);
+    assert!(
+        loaded.additional_directories.is_empty(),
+        "top-level additionalDirectories should be ignored (must be inside permissions)"
+    );
 }
 
 // ─── Schema-conformance fixture ─────────────────────────────────────────────
