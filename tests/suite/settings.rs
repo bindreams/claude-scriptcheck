@@ -129,14 +129,14 @@ fn managed_none_still_loads_user_rules() {
 fn additional_directories_nested_in_permissions() {
     let json = r#"{"permissions": {"allow": [], "additionalDirectories": ["/extra"]}}"#;
     let loaded = load_settings_from_contents(None, &[json]);
-    assert_eq!(loaded.additional_directories, vec!["/extra"]);
+    assert_eq!(loaded.permissions.additional_directories, vec!["/extra"]);
 }
 
 #[skuld::test]
 fn additional_directories_defaults_empty() {
     let json = r#"{"permissions": {"allow": [], "deny": []}}"#;
     let loaded = load_settings_from_contents(None, &[json]);
-    assert!(loaded.additional_directories.is_empty());
+    assert!(loaded.permissions.additional_directories.is_empty());
 }
 
 #[skuld::test]
@@ -148,7 +148,7 @@ fn additional_directories_merged_across_files() {
             r#"{"permissions": {"allow": [], "additionalDirectories": ["/dir2"]}}"#,
         ],
     );
-    assert_eq!(loaded.additional_directories, vec!["/dir1", "/dir2"]);
+    assert_eq!(loaded.permissions.additional_directories, vec!["/dir1", "/dir2"]);
 }
 
 #[skuld::test]
@@ -157,16 +157,16 @@ fn managed_only_discards_additional_directories() {
         Some(r#"{"permissions": {"allow": ["Bash(*)"]}, "allowManagedPermissionRulesOnly": true}"#),
         &[r#"{"permissions": {"allow": [], "additionalDirectories": ["/user/dir"]}}"#],
     );
-    assert!(loaded.additional_directories.is_empty());
+    assert!(loaded.permissions.additional_directories.is_empty());
 }
 
 #[skuld::test]
-fn managed_settings_additional_directories_not_propagated() {
+fn managed_settings_additional_directories_propagated() {
     let loaded = load_settings_from_contents(
         Some(r#"{"permissions": {"allow": ["Bash(*)"], "additionalDirectories": ["/managed/dir"]}}"#),
         &[],
     );
-    assert!(loaded.additional_directories.is_empty());
+    assert_eq!(loaded.permissions.additional_directories, vec!["/managed/dir"]);
 }
 
 #[skuld::test]
@@ -174,7 +174,7 @@ fn top_level_additional_directories_ignored() {
     let json = r#"{"additionalDirectories": ["/wrong-place"]}"#;
     let loaded = load_settings_from_contents(None, &[json]);
     assert!(
-        loaded.additional_directories.is_empty(),
+        loaded.permissions.additional_directories.is_empty(),
         "top-level additionalDirectories should be ignored (must be inside permissions)"
     );
 }
@@ -216,7 +216,7 @@ fn settings_struct_matches_claude_code_schema() {
 
     // Read-side: our structs must capture all fields
     let loaded = load_settings_from_contents(None, &[json]);
-    assert_eq!(loaded.additional_directories, vec!["~/src", "~/Desktop"]);
+    assert_eq!(loaded.permissions.additional_directories, vec!["~/src", "~/Desktop"]);
     assert_eq!(loaded.permissions.allow, vec!["Read", "Bash(ls *)"]);
     assert_eq!(loaded.permissions.deny, vec!["Read(~/.secrets)"]);
     assert!(loaded.permissions.ask.is_empty());

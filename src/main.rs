@@ -171,7 +171,7 @@ fn load_perms(
     if permission_mode == Some("acceptEdits") {
         let mut workspace_dirs = vec![project_root.to_string()];
         // Resolve additional directories: relative paths → relative to project_root
-        for dir in loaded.additional_directories {
+        for dir in loaded.permissions.additional_directories {
             let normalized = path_util::normalize_separators(&dir);
             if normalized.starts_with('~')
                 || normalized.starts_with('/')

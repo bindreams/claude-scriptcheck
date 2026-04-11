@@ -10,6 +10,7 @@ fn make_perms_full(allow: &[&str], deny: &[&str], ask: &[&str]) -> ParsedPermiss
         allow: allow.iter().map(|s| s.to_string()).collect(),
         deny: deny.iter().map(|s| s.to_string()).collect(),
         ask: ask.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
     })
 }
 

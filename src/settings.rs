@@ -30,13 +30,13 @@ pub struct Permissions {
     pub allow: Vec<String>,
     pub deny: Vec<String>,
     pub ask: Vec<String>,
+    pub additional_directories: Vec<String>,
 }
 
-/// Result of loading settings: merged permissions + workspace configuration.
+/// Result of loading settings: merged permissions.
 #[derive(Default)]
 pub struct LoadedSettings {
     pub permissions: Permissions,
-    pub additional_directories: Vec<String>,
 }
 
 /// Load and merge permission rules from all settings files.
@@ -84,8 +84,6 @@ pub fn load_settings_from_contents(
         if let Ok(ms) = serde_json::from_str::<ManagedSettings>(content) {
             managed_only = ms.allow_managed_permission_rules_only;
             if let Some(perms) = ms.permissions {
-                // Intentionally not extracting additional_directories: managed
-                // settings provide policy rules, not workspace extensions.
                 merge_permissions(&mut result.permissions, perms);
             }
         }
@@ -97,10 +95,8 @@ pub fn load_settings_from_contents(
 
     for content in settings_contents {
         if let Ok(settings) = serde_json::from_str::<Settings>(content) {
-            if let Some(mut perms) = settings.permissions {
-                let nested_dirs = std::mem::take(&mut perms.additional_directories);
+            if let Some(perms) = settings.permissions {
                 merge_permissions(&mut result.permissions, perms);
-                result.additional_directories.extend(nested_dirs);
             }
         }
     }
@@ -150,26 +146,20 @@ fn merge_from_with_base(
         return;
     };
     if let Some(mut perms) = settings.permissions {
-        // Extract nested additionalDirectories before consuming perms.
-        // merge_permissions only moves allow/deny/ask — any other field on
-        // PermissionsJson is silently dropped, so callers must extract first.
-        let nested_dirs = std::mem::take(&mut perms.additional_directories);
         resolve_rule_relative_paths(&mut perms.allow, cwd, project_root);
         resolve_rule_relative_paths(&mut perms.deny, cwd, project_root);
         resolve_rule_relative_paths(&mut perms.ask, cwd, project_root);
         merge_permissions(&mut result.permissions, perms);
-        result.additional_directories.extend(nested_dirs);
     }
 }
 
-/// Merge permission rules from a settings file into the accumulated result.
-/// Only `allow`, `deny`, `ask` are forwarded. Any other field on
-/// `PermissionsJson` (e.g. `additional_directories`) is silently dropped.
-/// Callers must extract such fields before calling this function.
 fn merge_permissions(merged: &mut Permissions, perms: PermissionsJson) {
     merged.allow.extend(perms.allow);
     merged.deny.extend(perms.deny);
     merged.ask.extend(perms.ask);
+    merged
+        .additional_directories
+        .extend(perms.additional_directories);
 }
 
 /// Resolve paths in file rules (Read/Write/Edit) following Claude Code's 4-tier scheme:

@@ -349,6 +349,7 @@ fn parse_rules_with_ask_bash() {
         allow: vec![],
         deny: vec![],
         ask: vec!["Bash(rm *)".into()],
+        ..Default::default()
     };
     let parsed = parse_rules(&perms);
     assert_eq!(parsed.ask_bash.len(), 1);
@@ -366,6 +367,7 @@ fn parse_rules_with_ask_read(#[fixture(temp_dir)] dir: &Path) {
         allow: vec![],
         deny: vec![],
         ask: vec![format!("Read({base}/**)")],
+        ..Default::default()
     };
     let parsed = parse_rules(&perms);
     assert_eq!(parsed.ask_read, vec![format!("{base}/**")]);
@@ -382,6 +384,7 @@ fn parse_rules_with_ask_write_and_edit(#[fixture(temp_dir)] dir: &Path) {
         allow: vec![],
         deny: vec![],
         ask: vec![format!("Write({base}/**)"), format!("Edit({base}/src/**)")],
+        ..Default::default()
     };
     let parsed = parse_rules(&perms);
     assert_eq!(parsed.ask_write, vec![format!("{base}/**")]);
