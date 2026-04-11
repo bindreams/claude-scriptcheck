@@ -157,6 +157,109 @@ fn additional_directories_merged_from_contents() {
     );
 }
 
+// ─── additionalDirectories nested inside permissions ────────────────────────
+
+#[skuld::test]
+fn additional_directories_nested_in_permissions() {
+    let json = r#"{"permissions": {"allow": [], "additionalDirectories": ["/extra"]}}"#;
+    let loaded = load_settings_from_contents(None, &[json]);
+    assert_eq!(loaded.additional_directories, vec!["/extra"]);
+}
+
+#[skuld::test]
+fn additional_directories_both_nested_and_top_level_merged() {
+    let json = r#"{
+        "additionalDirectories": ["/top"],
+        "permissions": {"allow": [], "additionalDirectories": ["/nested"]}
+    }"#;
+    let loaded = load_settings_from_contents(None, &[json]);
+    assert_eq!(loaded.additional_directories, vec!["/top", "/nested"]);
+}
+
+#[skuld::test]
+fn additional_directories_nested_merged_across_files() {
+    let loaded = load_settings_from_contents(
+        None,
+        &[
+            r#"{"permissions": {"allow": [], "additionalDirectories": ["/dir1"]}}"#,
+            r#"{"permissions": {"allow": [], "additionalDirectories": ["/dir2"]}}"#,
+        ],
+    );
+    assert_eq!(loaded.additional_directories, vec!["/dir1", "/dir2"]);
+}
+
+#[skuld::test]
+fn managed_only_discards_nested_additional_directories() {
+    let loaded = load_settings_from_contents(
+        Some(r#"{"permissions": {"allow": ["Bash(*)"]}, "allowManagedPermissionRulesOnly": true}"#),
+        &[r#"{"permissions": {"allow": [], "additionalDirectories": ["/user/dir"]}}"#],
+    );
+    assert!(loaded.additional_directories.is_empty());
+}
+
+#[skuld::test]
+fn managed_settings_nested_additional_directories_not_propagated() {
+    let loaded = load_settings_from_contents(
+        Some(r#"{"permissions": {"allow": ["Bash(*)"], "additionalDirectories": ["/managed/dir"]}}"#),
+        &[],
+    );
+    assert!(loaded.additional_directories.is_empty());
+}
+
+#[skuld::test]
+fn additional_directories_duplicates_preserved() {
+    let json = r#"{
+        "additionalDirectories": ["/same"],
+        "permissions": {"allow": [], "additionalDirectories": ["/same"]}
+    }"#;
+    let loaded = load_settings_from_contents(None, &[json]);
+    // No deduplication — both copies are preserved (existing behavior)
+    assert_eq!(loaded.additional_directories, vec!["/same", "/same"]);
+}
+
+// ─── Schema-conformance fixture ─────────────────────────────────────────────
+
+fn validate_settings_against_schema(json: &str) {
+    let schema_str = include_str!("../schemas/claude-code-settings.schema.json");
+    let schema: serde_json::Value = serde_json::from_str(schema_str).unwrap();
+    let instance: serde_json::Value = serde_json::from_str(json).unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let errors: Vec<_> = validator.iter_errors(&instance).collect();
+    assert!(
+        errors.is_empty(),
+        "settings fixture does not pass Claude Code schema:\n{}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+}
+
+#[skuld::test]
+fn settings_struct_matches_claude_code_schema() {
+    // Fixture mirrors Claude Code's actual settings.json format.
+    // Source of truth: https://json.schemastore.org/claude-code-settings.json
+    let json = r#"{
+        "permissions": {
+            "additionalDirectories": ["~/src", "~/Desktop"],
+            "allow": ["Read", "Bash(ls *)"],
+            "deny": ["Read(~/.secrets)"],
+            "ask": []
+        }
+    }"#;
+
+    // Write-side: fixture must be valid per the official schema
+    validate_settings_against_schema(json);
+
+    // Read-side: our structs must capture all fields
+    let loaded = load_settings_from_contents(None, &[json]);
+    assert_eq!(loaded.additional_directories, vec!["~/src", "~/Desktop"]);
+    assert_eq!(loaded.permissions.allow, vec!["Read", "Bash(ls *)"]);
+    assert_eq!(loaded.permissions.deny, vec!["Read(~/.secrets)"]);
+    assert!(loaded.permissions.ask.is_empty());
+}
+
 // ─── resolve_rule_relative_paths (cwd == project_root) ──────────────────────
 
 #[skuld::test]

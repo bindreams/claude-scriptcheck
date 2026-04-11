@@ -18,6 +18,7 @@ skuld = { git = "https://github.com/bindreams/skuld.git" }
 pretty_assertions = "1"
 
 [dev-dependencies]
+jsonschema = "0.46"
 
 [[test]]
 name = "suite"

@@ -16,6 +16,8 @@ pub struct PermissionsJson {
     pub deny: Vec<String>,
     #[serde(default)]
     pub ask: Vec<String>,
+    #[serde(default, rename = "additionalDirectories")]
+    pub additional_directories: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -84,6 +86,8 @@ pub fn load_settings_from_contents(
         if let Ok(ms) = serde_json::from_str::<ManagedSettings>(content) {
             managed_only = ms.allow_managed_permission_rules_only;
             if let Some(perms) = ms.permissions {
+                // Intentionally not extracting additional_directories: managed
+                // settings provide policy rules, not workspace extensions.
                 merge_permissions(&mut result.permissions, perms);
             }
         }
@@ -95,12 +99,15 @@ pub fn load_settings_from_contents(
 
     for content in settings_contents {
         if let Ok(settings) = serde_json::from_str::<Settings>(content) {
-            if let Some(perms) = settings.permissions {
-                merge_permissions(&mut result.permissions, perms);
-            }
+            // Top-level additionalDirectories (backward compat)
             result
                 .additional_directories
                 .extend(settings.additional_directories);
+            if let Some(mut perms) = settings.permissions {
+                let nested_dirs = std::mem::take(&mut perms.additional_directories);
+                merge_permissions(&mut result.permissions, perms);
+                result.additional_directories.extend(nested_dirs);
+            }
         }
     }
 
@@ -120,6 +127,8 @@ fn load_managed() -> (Permissions, bool) {
 
     let managed_only = ms.allow_managed_permission_rules_only;
     if let Some(perms) = ms.permissions {
+        // Intentionally not extracting additional_directories: managed
+        // settings provide policy rules, not workspace extensions.
         merge_permissions(&mut merged, perms);
     }
 
@@ -146,17 +155,27 @@ fn merge_from_with_base(
     let Ok(settings) = serde_json::from_str::<Settings>(&content) else {
         return;
     };
+    // Top-level additionalDirectories (backward compat)
+    result
+        .additional_directories
+        .extend(settings.additional_directories);
     if let Some(mut perms) = settings.permissions {
+        // Extract nested additionalDirectories before consuming perms.
+        // merge_permissions only moves allow/deny/ask — any other field on
+        // PermissionsJson is silently dropped, so callers must extract first.
+        let nested_dirs = std::mem::take(&mut perms.additional_directories);
         resolve_rule_relative_paths(&mut perms.allow, cwd, project_root);
         resolve_rule_relative_paths(&mut perms.deny, cwd, project_root);
         resolve_rule_relative_paths(&mut perms.ask, cwd, project_root);
         merge_permissions(&mut result.permissions, perms);
+        result.additional_directories.extend(nested_dirs);
     }
-    result
-        .additional_directories
-        .extend(settings.additional_directories);
 }
 
+/// Merge permission rules from a settings file into the accumulated result.
+/// Only `allow`, `deny`, `ask` are forwarded. Any other field on
+/// `PermissionsJson` (e.g. `additional_directories`) is silently dropped.
+/// Callers must extract such fields before calling this function.
 fn merge_permissions(merged: &mut Permissions, perms: PermissionsJson) {
     merged.allow.extend(perms.allow);
     merged.deny.extend(perms.deny);
