@@ -194,6 +194,7 @@ fn parse_grep_like(matches: &ArgMatches, cwd: &str) -> Result<CommandFileAccesse
         writes: Vec::new(),
         inline_script_start: None,
         file_only: None,
+        ..Default::default()
     })
 }
 
@@ -245,6 +246,7 @@ impl CommandParser for AwkParser {
             writes: Vec::new(),
             inline_script_start: None,
             file_only: None,
+            ..Default::default()
         })
     }
 }
@@ -345,6 +347,7 @@ impl CommandParser for JqParser {
             writes: Vec::new(),
             inline_script_start: None,
             file_only: None,
+            ..Default::default()
         })
     }
 }

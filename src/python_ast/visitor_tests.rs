@@ -501,28 +501,43 @@ mod tests {
     // os file-mutating functions =====
 
     #[test]
-    fn os_remove_is_unanalyzable() {
-        unanalyzable("import os\nos.remove('/tmp/x')");
+    fn os_remove_extracts_write() {
+        assert_eq!(
+            analyzed("import os\nos.remove('/tmp/x')", "/tmp"),
+            vec![write("/tmp/x")]
+        );
     }
 
     #[test]
-    fn os_unlink_is_unanalyzable() {
-        unanalyzable("import os\nos.unlink('/tmp/x')");
+    fn os_unlink_extracts_write() {
+        assert_eq!(
+            analyzed("import os\nos.unlink('/tmp/x')", "/tmp"),
+            vec![write("/tmp/x")]
+        );
     }
 
     #[test]
-    fn os_rename_is_unanalyzable() {
-        unanalyzable("import os\nos.rename('/tmp/a', '/tmp/b')");
+    fn os_rename_extracts_read_and_write() {
+        assert_eq!(
+            analyzed("import os\nos.rename('/tmp/a', '/tmp/b')", "/tmp"),
+            vec![read("/tmp/a"), write("/tmp/b")]
+        );
     }
 
     #[test]
-    fn os_makedirs_is_unanalyzable() {
-        unanalyzable("import os\nos.makedirs('/tmp/dir')");
+    fn os_makedirs_extracts_write() {
+        assert_eq!(
+            analyzed("import os\nos.makedirs('/tmp/dir')", "/tmp"),
+            vec![write("/tmp/dir")]
+        );
     }
 
     #[test]
-    fn os_mkdir_is_unanalyzable() {
-        unanalyzable("import os\nos.mkdir('/tmp/dir')");
+    fn os_mkdir_extracts_write() {
+        assert_eq!(
+            analyzed("import os\nos.mkdir('/tmp/dir')", "/tmp"),
+            vec![write("/tmp/dir")]
+        );
     }
 
     #[test]
@@ -531,8 +546,48 @@ mod tests {
     }
 
     #[test]
-    fn from_os_import_remove_is_unanalyzable() {
-        unanalyzable("from os import remove\nremove('/tmp/x')");
+    fn from_os_import_remove_extracts_write() {
+        assert_eq!(
+            analyzed("from os import remove\nremove('/tmp/x')", "/tmp"),
+            vec![write("/tmp/x")]
+        );
+    }
+
+    #[test]
+    fn os_makedirs_dynamic_path_is_unanalyzable() {
+        unanalyzable("import os\nos.makedirs(some_var)");
+    }
+
+    #[test]
+    fn os_truncate_extracts_write() {
+        assert_eq!(
+            analyzed("import os\nos.truncate('/tmp/f', 100)", "/tmp"),
+            vec![write("/tmp/f")]
+        );
+    }
+
+    #[test]
+    fn os_symlink_extracts_read_and_write() {
+        assert_eq!(
+            analyzed("import os\nos.symlink('/tmp/target', '/tmp/link')", "/tmp"),
+            vec![read("/tmp/target"), write("/tmp/link")]
+        );
+    }
+
+    #[test]
+    fn os_makedirs_keyword_arg() {
+        assert_eq!(
+            analyzed("import os\nos.makedirs(name='/tmp/dir', exist_ok=True)", "/tmp"),
+            vec![write("/tmp/dir")]
+        );
+    }
+
+    #[test]
+    fn os_rename_keyword_args() {
+        assert_eq!(
+            analyzed("import os\nos.rename(src='/tmp/a', dst='/tmp/b')", "/tmp"),
+            vec![read("/tmp/a"), write("/tmp/b")]
+        );
     }
 
     // shutil is unsafe module =====
@@ -545,6 +600,36 @@ mod tests {
     #[test]
     fn from_shutil_import_copy() {
         unanalyzable("from shutil import copy");
+    }
+
+    // urllib.request is unsafe submodule =====
+
+    #[test]
+    fn import_urllib_request_is_unanalyzable() {
+        unanalyzable("import urllib.request");
+    }
+
+    #[test]
+    fn import_urllib_parse_is_safe() {
+        assert_eq!(analyzed("import urllib.parse", "/tmp"), vec![]);
+    }
+
+    #[test]
+    fn from_urllib_request_import_is_unanalyzable() {
+        unanalyzable("from urllib.request import urlopen");
+    }
+
+    #[test]
+    fn from_urllib_parse_import_is_safe() {
+        assert_eq!(
+            analyzed("from urllib.parse import urlparse", "/tmp"),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn from_urllib_import_request_then_urlopen_is_unanalyzable() {
+        unanalyzable("from urllib import request\nrequest.urlopen('http://x')");
     }
 
     // open() with splat args =====

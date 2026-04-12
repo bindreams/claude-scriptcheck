@@ -45,6 +45,7 @@ fn parse_shell_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, S
                             writes: Vec::new(),
                             inline_script_start,
                             file_only: None,
+                            ..Default::default()
                         });
                     }
                     's' => {
@@ -78,6 +79,7 @@ fn parse_shell_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, S
                 writes: Vec::new(),
                 inline_script_start: None,
                 file_only: None,
+                ..Default::default()
             });
         }
 
@@ -90,6 +92,7 @@ fn parse_shell_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, S
         writes: Vec::new(),
         inline_script_start: None,
         file_only: None,
+        ..Default::default()
     })
 }
 
@@ -127,6 +130,7 @@ fn parse_python_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, 
                 writes: Vec::new(),
                 inline_script_start: None,
                 file_only: None,
+                ..Default::default()
             });
         }
 
@@ -142,6 +146,7 @@ fn parse_python_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, 
                             writes: Vec::new(),
                             inline_script_start,
                             file_only: None,
+                            ..Default::default()
                         });
                     }
                     'm' => {
@@ -151,6 +156,7 @@ fn parse_python_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, 
                             writes: Vec::new(),
                             inline_script_start: None,
                             file_only: None,
+                            ..Default::default()
                         });
                     }
                     'W' | 'X' => {
@@ -180,6 +186,7 @@ fn parse_python_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, 
             writes: Vec::new(),
             inline_script_start: None,
             file_only: None,
+            ..Default::default()
         });
     }
 
@@ -189,6 +196,7 @@ fn parse_python_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, 
         writes: Vec::new(),
         inline_script_start: None,
         file_only: None,
+        ..Default::default()
     })
 }
 
@@ -229,6 +237,7 @@ fn parse_ruby_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
                             writes: Vec::new(),
                             inline_script_start,
                             file_only: None,
+                            ..Default::default()
                         });
                     }
                     'r' | 'I' | 'C' | 'F' | 'E' | 'K' => {
@@ -257,6 +266,7 @@ fn parse_ruby_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
             writes: Vec::new(),
             inline_script_start: None,
             file_only: None,
+            ..Default::default()
         });
     }
 
@@ -265,6 +275,7 @@ fn parse_ruby_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
         writes: Vec::new(),
         inline_script_start: None,
         file_only: None,
+        ..Default::default()
     })
 }
 
@@ -305,6 +316,7 @@ fn parse_node_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
                 writes: Vec::new(),
                 inline_script_start,
                 file_only: None,
+                ..Default::default()
             });
         }
         // Long --eval=CODE / --print=CODE
@@ -314,6 +326,7 @@ fn parse_node_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
                 writes: Vec::new(),
                 inline_script_start: Some(i),
                 file_only: None,
+                ..Default::default()
             });
         }
 
@@ -330,6 +343,7 @@ fn parse_node_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
                             writes: Vec::new(),
                             inline_script_start,
                             file_only: None,
+                            ..Default::default()
                         });
                     }
                     'r' => {
@@ -382,6 +396,7 @@ fn parse_node_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
             writes: Vec::new(),
             inline_script_start: None,
             file_only: None,
+            ..Default::default()
         });
     }
 
@@ -390,6 +405,7 @@ fn parse_node_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
         writes: Vec::new(),
         inline_script_start: None,
         file_only: None,
+        ..Default::default()
     })
 }
 
@@ -432,6 +448,7 @@ fn parse_perl_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
                                 writes: Vec::new(),
                                 inline_script_start: Some(i),
                                 file_only: None,
+                                ..Default::default()
                             });
                         }
                         i += 1;
@@ -441,6 +458,7 @@ fn parse_perl_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
                             writes: Vec::new(),
                             inline_script_start,
                             file_only: None,
+                            ..Default::default()
                         });
                     }
                     'I' | 'F' | 'm' | 'M' => {
@@ -468,6 +486,7 @@ fn parse_perl_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
             writes: Vec::new(),
             inline_script_start: None,
             file_only: None,
+            ..Default::default()
         });
     }
 
@@ -476,5 +495,6 @@ fn parse_perl_runner(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, St
         writes: Vec::new(),
         inline_script_start: None,
         file_only: None,
+        ..Default::default()
     })
 }

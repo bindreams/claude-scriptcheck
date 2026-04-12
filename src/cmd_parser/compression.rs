@@ -23,6 +23,7 @@ fn parse_compression(matches: &ArgMatches, cwd: &str) -> CommandFileAccesses {
             writes: Vec::new(),
             inline_script_start: None,
             file_only: None,
+            ..Default::default()
         }
     } else {
         CommandFileAccesses {
@@ -30,6 +31,7 @@ fn parse_compression(matches: &ArgMatches, cwd: &str) -> CommandFileAccesses {
             writes: paths,
             inline_script_start: None,
             file_only: None,
+            ..Default::default()
         }
     }
 }

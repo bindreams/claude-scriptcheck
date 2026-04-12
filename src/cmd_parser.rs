@@ -11,12 +11,13 @@ mod readers;
 mod script_runners;
 mod sed;
 mod tar;
+mod wrappers;
 mod writers;
 
 use crate::file_access;
 
 /// Resolved file paths a command will access.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CommandFileAccesses {
     /// Absolute paths the command reads from.
     pub reads: Vec<String>,
@@ -35,22 +36,21 @@ pub struct CommandFileAccesses {
     /// - `None`: defer to `is_file_only_command()` lookup (default for all
     ///   existing parsers).
     pub file_only: Option<bool>,
+    /// Normalized name of the "real" command when a wrapper (e.g. `uv run`)
+    /// delegates to an inner command. The checker uses this to decide whether
+    /// to invoke Python AST analysis and for `is_file_only_command()` checks.
+    pub effective_cmd_name: Option<String>,
 }
 
 impl CommandFileAccesses {
     pub fn empty() -> Self {
-        Self {
-            reads: Vec::new(),
-            writes: Vec::new(),
-            inline_script_start: None,
-            file_only: None,
-        }
+        Self::default()
     }
 
     pub fn filter_sentinel(mut self, sentinel: &str) -> Self {
         self.reads.retain(|p| !p.contains(sentinel));
         self.writes.retain(|p| !p.contains(sentinel));
-        self // inline_script_start is preserved as-is
+        self // inline_script_start and effective_cmd_name preserved as-is
     }
 }
 
@@ -78,7 +78,7 @@ pub const SENTINEL: &str = "__CLAUDE_DYNAMIC__";
 /// `args` — arguments after the command name. `None` = dynamic/unresolvable.
 /// `cwd` — working directory for resolving relative paths.
 pub fn parse_file_accesses(cmd_name: &str, args: &[Option<String>], cwd: &str) -> CmdParseResult {
-    let parser = match get_parser(cmd_name) {
+    let parser = match get_parser(normalize_cmd_name(cmd_name)) {
         Some(p) => p,
         None => return CmdParseResult::Parsed(CommandFileAccesses::empty()),
     };
@@ -114,11 +114,13 @@ pub fn get_parser(cmd_name: &str) -> Option<&'static dyn CommandParser> {
     use script_runners::*;
     use sed::*;
     use tar::*;
+    use wrappers::*;
     use writers::*;
 
     match cmd_name {
         // Compound commands
         "git" => Some(&GitParser),
+        "uv" => Some(&UvParser),
 
         // Simple readers
         "cat" => Some(&CatParser),
@@ -222,6 +224,7 @@ pub fn get_parser(cmd_name: &str) -> Option<&'static dyn CommandParser> {
         // Script runners — detect inline scripts and script-file reads
         "bash" | "sh" | "zsh" | "dash" => Some(&ShellParser),
         "python" | "python3" => Some(&PythonParser),
+        _ if is_python_cmd(cmd_name) => Some(&PythonParser),
         "ruby" => Some(&RubyParser),
         "node" | "nodejs" => Some(&NodeParser),
         "perl" => Some(&PerlParser),
@@ -246,6 +249,26 @@ pub fn get_parser(cmd_name: &str) -> Option<&'static dyn CommandParser> {
     }
 }
 
+/// Normalize a command name by extracting its basename and stripping `.exe`.
+///
+/// `/usr/bin/python3` → `python3`, `C:\Python312\python.exe` → `python`,
+/// `bash.exe` → `bash`, `cat` → `cat`.
+pub fn normalize_cmd_name(name: &str) -> &str {
+    // Extract basename (after last path separator)
+    let basename = match name.rfind('/').or_else(|| name.rfind('\\')) {
+        Some(i) => &name[i + 1..],
+        None => name,
+    };
+    // Strip .exe suffix
+    basename.strip_suffix(".exe").unwrap_or(basename)
+}
+
+/// Returns true if `name` (already normalized) looks like a Python interpreter.
+/// Matches `python`, `python3`, `python3.12`, `python3.13t`, etc.
+pub fn is_python_cmd(name: &str) -> bool {
+    name == "python" || name.starts_with("python3")
+}
+
 /// Resolve a path relative to cwd. Re-exports from file_access for use by parsers.
 pub fn resolve(path: &str, cwd: &str) -> String {
     file_access::resolve_path(path, cwd)
@@ -264,4 +287,92 @@ mod readers_tests;
 mod script_runners_tests;
 mod sed_tests;
 mod tar_tests;
+mod wrappers_tests;
 mod writers_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // normalize_cmd_name tests =====
+
+    #[test]
+    fn normalize_bare_name() {
+        assert_eq!(normalize_cmd_name("python"), "python");
+    }
+
+    #[test]
+    fn normalize_exe_suffix() {
+        assert_eq!(normalize_cmd_name("python.exe"), "python");
+    }
+
+    #[test]
+    fn normalize_unix_absolute_path() {
+        assert_eq!(normalize_cmd_name("/usr/bin/python3"), "python3");
+    }
+
+    #[test]
+    fn normalize_windows_absolute_path() {
+        assert_eq!(normalize_cmd_name("C:\\Python312\\python.exe"), "python");
+    }
+
+    #[test]
+    fn normalize_forward_slash_path() {
+        assert_eq!(normalize_cmd_name("C:/Python312/python.exe"), "python");
+    }
+
+    #[test]
+    fn normalize_venv_path() {
+        assert_eq!(
+            normalize_cmd_name(".venv/Scripts/python.exe"),
+            "python"
+        );
+    }
+
+    #[test]
+    fn normalize_versioned_python() {
+        assert_eq!(normalize_cmd_name("python3.12"), "python3.12");
+    }
+
+    #[test]
+    fn normalize_bash_exe() {
+        assert_eq!(normalize_cmd_name("bash.exe"), "bash");
+    }
+
+    #[test]
+    fn normalize_just_exe() {
+        assert_eq!(normalize_cmd_name(".exe"), "");
+    }
+
+    // is_python_cmd tests =====
+
+    #[test]
+    fn is_python_cmd_bare() {
+        assert!(is_python_cmd("python"));
+    }
+
+    #[test]
+    fn is_python_cmd_python3() {
+        assert!(is_python_cmd("python3"));
+    }
+
+    #[test]
+    fn is_python_cmd_versioned() {
+        assert!(is_python_cmd("python3.12"));
+    }
+
+    #[test]
+    fn is_python_cmd_free_threaded() {
+        assert!(is_python_cmd("python3.13t"));
+    }
+
+    #[test]
+    fn is_python_cmd_not_ruby() {
+        assert!(!is_python_cmd("ruby"));
+    }
+
+    #[test]
+    fn is_python_cmd_not_python2() {
+        assert!(!is_python_cmd("python2"));
+    }
+}

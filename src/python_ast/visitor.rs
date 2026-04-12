@@ -16,6 +16,10 @@ const UNSAFE_IMPORT_MODULES: &[&str] = &[
     "shutil",
 ];
 
+// Submodules whose import makes the script unanalyzable.
+// Checked against the full dotted module name (with dot-boundary matching).
+const UNSAFE_IMPORT_SUBMODULES: &[&str] = &["urllib.request"];
+
 pub(super) struct PythonVisitor {
     cwd: String,
     /// Maps local names to qualified module paths.
@@ -351,6 +355,12 @@ impl PythonVisitor {
                 return;
             }
 
+            // Check for unsafe submodule imports (e.g. urllib.request)
+            if is_unsafe_submodule(module_name) {
+                self.mark_unanalyzable(format!("import of unsafe module '{module_name}'"));
+                return;
+            }
+
             let local_name = alias
                 .asname
                 .as_ref()
@@ -375,6 +385,12 @@ impl PythonVisitor {
         // Check for unsafe module import
         let top_level = module_name.split('.').next().unwrap_or(module_name);
         if UNSAFE_IMPORT_MODULES.contains(&top_level) {
+            self.mark_unanalyzable(format!("import from unsafe module '{module_name}'"));
+            return;
+        }
+
+        // Check for unsafe submodule imports (e.g. from urllib.request import urlopen)
+        if is_unsafe_submodule(module_name) {
             self.mark_unanalyzable(format!("import from unsafe module '{module_name}'"));
             return;
         }
@@ -537,9 +553,92 @@ impl PythonVisitor {
             return;
         }
 
+        // Extract file accesses from os.* file-mutation functions
+        if let Some(kind) = builtins::classify_os_call(qualified) {
+            match kind {
+                builtins::OsCallKind::WriteSinglePath => {
+                    self.analyze_single_path_write(call, qualified);
+                }
+                builtins::OsCallKind::WriteSrcDst => {
+                    self.analyze_src_dst_write(call, qualified);
+                }
+            }
+            return;
+        }
+
         // Check io.open / builtins.open (aliases for builtin open)
         if qualified == "io.open" || qualified == "builtins.open" {
             self.analyze_open_call(call);
+        }
+    }
+
+    /// Extract a static path from a positional arg or a keyword arg.
+    /// `keywords` specifies which keyword names are acceptable for this position.
+    fn extract_path_arg(
+        &mut self,
+        call: &ExprCall,
+        func_name: &str,
+        positional_idx: usize,
+        keywords: &[&str],
+    ) -> Option<String> {
+        // Reject *args / **kwargs
+        if call.args.iter().any(|a| matches!(a, Expr::Starred(_)))
+            || call.keywords.iter().any(|k| k.arg.is_none())
+        {
+            self.mark_unanalyzable(format!("{func_name}() with *args or **kwargs"));
+            return None;
+        }
+
+        // Try positional arg first
+        if let Some(expr) = call.args.get(positional_idx) {
+            return match try_extract_string(expr) {
+                Some(s) => Some(s),
+                None => {
+                    self.mark_unanalyzable(format!("{func_name}() with dynamic path"));
+                    None
+                }
+            };
+        }
+
+        // Fall back to keyword args
+        for kw in &call.keywords {
+            if let Some(ref id) = kw.arg {
+                if keywords.contains(&id.as_str()) {
+                    return match try_extract_string(&kw.value) {
+                        Some(s) => Some(s),
+                        None => {
+                            self.mark_unanalyzable(format!("{func_name}() with dynamic path"));
+                            None
+                        }
+                    };
+                }
+            }
+        }
+
+        self.mark_unanalyzable(format!("{func_name}() with no path argument"));
+        None
+    }
+
+    /// Analyze `os.remove(path)`, `os.makedirs(path)`, etc. → Write(path).
+    fn analyze_single_path_write(&mut self, call: &ExprCall, qualified: &str) {
+        if let Some(path) = self.extract_path_arg(call, qualified, 0, &["path", "name"]) {
+            self.add_access(&path, AccessKind::Write);
+        }
+    }
+
+    /// Analyze `os.rename(src, dst)`, `os.link(src, dst)`, etc. → Read(src) + Write(dst).
+    fn analyze_src_dst_write(&mut self, call: &ExprCall, qualified: &str) {
+        let src = self.extract_path_arg(call, qualified, 0, &["src"]);
+        if self.is_unanalyzable() {
+            return;
+        }
+        let dst = self.extract_path_arg(call, qualified, 1, &["dst"]);
+        if self.is_unanalyzable() {
+            return;
+        }
+        if let (Some(s), Some(d)) = (src, dst) {
+            self.add_access(&s, AccessKind::Read);
+            self.add_access(&d, AccessKind::Write);
         }
     }
 
@@ -604,4 +703,11 @@ fn try_extract_string(expr: &Expr) -> Option<String> {
         }
     }
     None
+}
+
+/// Check if a module name matches an unsafe submodule (dot-boundary matching).
+fn is_unsafe_submodule(module_name: &str) -> bool {
+    UNSAFE_IMPORT_SUBMODULES.iter().any(|prefix| {
+        module_name == *prefix || module_name.starts_with(&format!("{prefix}."))
+    })
 }

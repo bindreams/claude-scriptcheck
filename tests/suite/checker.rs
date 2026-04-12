@@ -1015,6 +1015,85 @@ fn python_c_multiple_accesses_all_checked() {
     }
 }
 
+// Command name normalization =====
+
+#[skuld::test]
+fn python_exe_normalized_for_analysis() {
+    let d = check(r#"python.exe -c "print(1)""#, &[], &[]);
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn absolute_path_python_normalized() {
+    let d = check(r#"/usr/bin/python3 -c "print(1)""#, &[], &[]);
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn versioned_python_normalized() {
+    let d = check(r#"python3.12 -c "print(1)""#, &[], &[]);
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn deny_rule_matches_normalized_name() {
+    let d = check(
+        r#"/usr/bin/python3 -c "print(1)""#,
+        &[],
+        &["Bash(python3 *)"],
+    );
+    assert!(matches!(d, Decision::Deny(_)));
+}
+
+// uv run wrapper =====
+
+#[skuld::test]
+fn uv_run_python_c_allows() {
+    let d = check(
+        r#"uv run python -c "import json; print(1)""#,
+        &[],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn uv_run_with_flag_python_c_allows() {
+    let d = check(
+        r#"uv run --with requests python -c "import json; print(1)""#,
+        &[],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
+#[skuld::test]
+fn uv_run_python_c_unanalyzable_asks_for_bash() {
+    let d = check(
+        r#"uv run python -c "import subprocess""#,
+        &[],
+        &[],
+    );
+    if let Decision::Ask(ref rules) = d {
+        assert!(
+            rules.iter().any(|r| r == "Bash(uv run python -c *)"),
+            "expected 'Bash(uv run python -c *)', got {rules:?}",
+        );
+    } else {
+        panic!("expected Ask, got {d:?}");
+    }
+}
+
+#[skuld::test]
+fn uv_run_python_versioned_allows() {
+    let d = check(
+        r#"uv run python3.12 -c "print(1)""#,
+        &[],
+        &[],
+    );
+    assert_eq!(d, Decision::Allow);
+}
+
 // Git subcommand file-only suppression =====
 
 #[skuld::test]

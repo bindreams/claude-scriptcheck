@@ -22,6 +22,7 @@ impl CommandParser for FindParser {
             writes: Vec::new(),
             inline_script_start: None,
             file_only: None,
+            ..Default::default()
         })
     }
 }

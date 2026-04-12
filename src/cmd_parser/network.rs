@@ -134,6 +134,7 @@ impl CommandParser for CurlParser {
             writes,
             inline_script_start: None,
             file_only: None,
+            ..Default::default()
         })
     }
 }
@@ -256,6 +257,7 @@ impl CommandParser for WgetParser {
             writes,
             inline_script_start: None,
             file_only: None,
+            ..Default::default()
         })
     }
 }

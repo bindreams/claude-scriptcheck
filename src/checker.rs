@@ -161,9 +161,9 @@ impl PermissionChecker<'_> {
             .map(|a| a.try_to_static_string())
             .collect();
 
-        // Get command name
+        // Get command name (normalized: basename, no .exe suffix)
         let cmd_name = match &arg_literals[0] {
-            Some(name) => name.clone(),
+            Some(name) => cmd_parser::normalize_cmd_name(name).to_string(),
             None => {
                 // Dynamic command name — can't determine identity
                 self.unmatched.push("Bash(<dynamic command>)".to_string());
@@ -184,11 +184,16 @@ impl PermissionChecker<'_> {
             return;
         }
 
-        // Build token list for Bash() rule matching — only static tokens
-        let cmd_tokens: Vec<String> = arg_literals
-            .iter()
-            .take_while(|a| a.is_some())
-            .map(|a| a.clone().unwrap())
+        // Build token list for Bash() rule matching — only static tokens.
+        // The first token uses the normalized command name so rules like
+        // `Bash(python3 *)` match `/usr/bin/python3 script.py`.
+        let cmd_tokens: Vec<String> = std::iter::once(cmd_name.clone())
+            .chain(
+                arg_literals[1..]
+                    .iter()
+                    .take_while(|a| a.is_some())
+                    .map(|a| a.clone().unwrap()),
+            )
             .collect();
 
         // Check against Bash() deny rules first
@@ -226,11 +231,12 @@ impl PermissionChecker<'_> {
         // Extract file accesses from well-known command semantics (clap-based parsers)
         let cmd_parse_result =
             cmd_parser::parse_file_accesses(&cmd_name, &arg_literals[1..], self.cwd);
-        let (cmd_accesses, parse_failed, inline_script_start, file_only_override) =
+        let (cmd_accesses, parse_failed, inline_script_start, file_only_override, effective_cmd) =
             match cmd_parse_result {
                 CmdParseResult::Parsed(cfa) => {
                     let script_start = cfa.inline_script_start;
                     let file_only = cfa.file_only;
+                    let eff = cfa.effective_cmd_name;
                     let accesses = cfa
                         .reads
                         .into_iter()
@@ -243,7 +249,7 @@ impl PermissionChecker<'_> {
                             kind: AccessKind::Write,
                         }))
                         .collect::<Vec<_>>();
-                    (accesses, false, script_start, file_only)
+                    (accesses, false, script_start, file_only, eff)
                 }
                 CmdParseResult::ParseFailed {
                     cmd_name: cn,
@@ -253,16 +259,20 @@ impl PermissionChecker<'_> {
                     self.unmatched.push(format!(
                         "Bash({cmd_str}) -- failed to parse arguments for `{cn}`: {message}"
                     ));
-                    (vec![], true, None, None)
+                    (vec![], true, None, None, None)
                 }
             };
+
+        // The effective command name for Python analysis and is_file_only_command.
+        // For wrapper commands like `uv run python -c ...`, this is `python`.
+        let effective = effective_cmd.as_deref().unwrap_or(&cmd_name);
 
         // Attempt Python AST analysis for python -c inline scripts.
         // If the script can be fully analyzed, its file accesses are appended to
         // cmd_accesses and the Bash() rule requirement is suppressed.
         let mut python_analyzed = false;
         let mut cmd_accesses = cmd_accesses;
-        if matches!(cmd_name.as_str(), "python" | "python3") && !bash_asked {
+        if cmd_parser::is_python_cmd(effective) && !bash_asked {
             if let Some(script_idx) = inline_script_start {
                 // inline_script_start is 0-based into args-after-cmd-name.
                 // arg_literals[0] is the cmd name, so script text is at [script_idx + 1].
@@ -304,7 +314,7 @@ impl PermissionChecker<'_> {
                 // Legacy path: use is_file_only_command() and require at
                 // least one file access as a guard.
                 None => {
-                    file_access::is_file_only_command(&cmd_name)
+                    file_access::is_file_only_command(effective)
                         && has_file_accesses
                         && !has_dynamic_args
                         && !bash_asked

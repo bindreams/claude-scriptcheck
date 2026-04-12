@@ -26,9 +26,9 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git  # insta
 | `src/settings.rs`    | Loads and merges permission rules + `additionalDirectories` (both nested inside `permissions` and top-level) from settings files. Returns `LoadedSettings`. |
 | `src/logging.rs`     | Appends decisions to platform-specific log file. Read-back helpers: `split_documents()`, `extract_verdict()`.       |
 | `src/path_util.rs`   | Cross-platform path helpers: `is_absolute()`, `normalize_separators()`.                                            |
-| `src/word_util.rs`   | Extracts static string literals from bash `Word` nodes; detects dynamic content.                                   |
 | `src/python_ast.rs`  | Python AST analysis for `python -c` inline scripts. Parses Python, extracts file accesses, detects unsafe patterns.|
 | `src/cmd_parser/git.rs` | Git subcommand parser. Dispatches on subcommand, emits Write(.git) for local ops, file_only=false for network ops.|
+| `src/cmd_parser/wrappers.rs` | Wrapper command parsers (e.g. `uv run`). Strips wrapper flags, dispatches to inner command's parser.         |
 | `tests/suite/`       | Integration tests: logic tests call the library API directly; binary I/O tests invoke the compiled binary.         |
 
 ## Key types
@@ -44,8 +44,9 @@ HookOutput       { hookEventName, permissionDecision, permissionDecisionReason }
 LoadedSettings   { permissions: Permissions, additional_directories: Vec<String> }
 VerdictFilter    { show_allow, show_ask, show_deny }  // log output filtering
 PythonAnalysis   = Analyzed { accesses } | Unanalyzable(reason)  // python -c analysis result
-CommandFileAccesses { reads, writes, inline_script_start, file_only: Option<bool> }
+CommandFileAccesses { reads, writes, inline_script_start, file_only: Option<bool>, effective_cmd_name: Option<String> }
     // file_only: Some(true) = file-only, Some(false) = has network side effects, None = use is_file_only_command()
+    // effective_cmd_name: set by wrapper parsers (e.g. uv run) to the inner command's normalized name
 ```
 
 ## Decision flow
@@ -59,11 +60,13 @@ stdin JSON → parse permission_mode →
   match tool_name:
   "Bash" → parse command (thaum) → walk AST:
     for each command:
+      0. normalize command name (basename, strip .exe)
       1. check deny Bash rules  →  hit? → Deny
       2. check allow Bash rules →  miss? → collect as unmatched
       3. extract file accesses (redirects + well-known command semantics)
-      3b. if python/python3 -c with static script text:
-          parse Python AST → extract file accesses from open() calls
+         if uv run: strip wrapper flags, dispatch to inner command's parser
+      3b. if python/python3 -c (or effective_cmd_name is python) with static script text:
+          parse Python AST → extract file accesses from open() calls and os.* file mutations
           success? → add accesses to file-access list, skip Bash rule
           failure (unsafe patterns, parse error)? → fall back to Bash(python3 -c *)
       3c. if git: parse subcommand → emit Write(.git) for local ops, file_only per category
@@ -99,4 +102,9 @@ stdin JSON → parse permission_mode →
 - `git config` reads (`--get`/`--get-all`/`--get-regexp`/`--get-urlmatch`/`--get-color`/`--get-colorbool`/`--list`, `-l`, and bare `git config <key>`) are auto-allowed. Reads with value-pattern positionals like `--get foo.bar pattern` or `--get-urlmatch http https://x` are still reads (2+ positionals don't make them writes). `--file <path>` / `-f <path>` is recorded as a file access and then emitted as either Read or Write depending on the inferred action: for reads, `Read(<path>)` is emitted; for writes, BOTH `Read(<path>)` and `Write(<path>)` are emitted (git parses the file to modify it), so either `Deny(Read(<path>))` or `Deny(Write(<path>))` fires. `--blob <ref>` / `--blob=<ref>` is not a filesystem path and emits no file access. Writes (`--unset`/`--unset-all`/`--add`/`--replace-all`/`--rename-section`/`--remove-section`/`-e`/`--edit`, 2-positional key+value form, and the git ≥ 2.46 subcommand forms `set`/`set-all`/`unset`/`unset-all`/`add`/`replace-all`/`rename-section`/`remove-section`/`edit`) still require a Bash rule because config keys like `core.hooksPath`, `core.pager`, `alias.*`, `diff.external`, and `credential.helper` can register arbitrary code execution on subsequent git commands. The subcommand-form `edit` is detected in any positional (not just `args[0]`), so `git config --global edit` or `git config --file <path> edit` are correctly classified as writes. The git ≥ 2.46 `config get`/`list`/`get-regexp`/etc. subcommand forms are intentionally not recognized as reads — they're parsed as positionals via the flag-form scanner to avoid a semantic inversion on older git (where `config get foo.bar` is a setter).
 - `git symbolic-ref <name>` reads are auto-allowed; setting (2 positionals) or deleting (`-d`/`--delete`) a ref emits `Write(.git)`. `-m <reason>` is value-taking and doesn't count as a positional.
 - Informational invocations (`git` alone, `git --version`, `--help`, bare `--exec-path`/`--html-path`/`--man-path`/`--info-path`) are auto-allowed as read-only. `--help` is only recognized at the global level; `git <subcmd> --help` is not generally detected except for `git worktree [sub] --help`. The `--exec-path=<path>` form (with value) is a setter and falls through to the subcommand.
-- `python -c` and `python3 -c` inline scripts are analyzed via Python AST (rustpython-parser). If the script only uses `open()` with static string paths and no unsafe patterns (exec, eval, subprocess, os file-mutation, shutil, etc.), file accesses are extracted and checked against Read/Write rules — no `Bash()` rule is needed. Unanalyzable scripts fall back to `Bash(python3 -c *)`. Phase 1 covers `open()` and `io.open()` only; `os.remove`/`os.rename`/etc. and `shutil.*` trigger fallback to Ask. `pathlib.Path` method chains are not yet detected (future Phase 2 work).
+- Command names are normalized before parser dispatch and rule matching: `/usr/bin/python3` → `python3`, `python.exe` → `python`, `bash.exe` → `bash`. This means `Bash(python3 *)` rules match absolute-path invocations. Versioned Python interpreters (`python3.12`, `python3.13t`) are also recognized.
+- `uv run` is a transparent wrapper: `uv run python -c "..."` is analyzed as if `python -c "..."` were the command. The wrapper's flags (`--with`, `--directory`, etc.) are consumed; unrecognized flags force a Bash rule. The logged rule is `Bash(uv run python -c *)`, matching the actual command.
+- `python -c` and `python3 -c` inline scripts are analyzed via Python AST (rustpython-parser). If the script only uses `open()` with static string paths and no unsafe patterns (exec, eval, subprocess, shutil, etc.), file accesses are extracted and checked against Read/Write rules — no `Bash()` rule is needed. Unanalyzable scripts fall back to `Bash(python3 -c *)`.
+- Python AST analysis covers: `open()` and `io.open()` for file reads/writes; `os.remove`/`os.unlink`/`os.rmdir`/`os.removedirs`/`os.makedirs`/`os.mkdir`/`os.truncate`/`os.chmod`/`os.chown` etc. as Write(path); `os.rename`/`os.replace`/`os.link`/`os.symlink` as Read(src)+Write(dst). All require static string paths; dynamic paths fall back to Ask. `shutil.*` still triggers fallback. `pathlib.Path` method chains are not yet detected.
+- `rustpython-parser` 0.4.0 does not support Python 3.12 relaxed f-string quoting (PEP 701). Scripts with `f"{d["key"]}"` (same quote type inside and outside f-string braces) fail to parse. The workaround is to use different quote types: `f'{d["key"]}'`.
+- Backticks in Python comments inside double-quoted `-c` scripts (e.g. `` python -c "# see `code` here" ``) cause thaum to see command substitution, making the word dynamic and the script unanalyzable. This is a bash semantics issue, not a parser bug. Use single-quoted scripts to avoid.

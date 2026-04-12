@@ -8,8 +8,7 @@ const TRACKED_BUILTINS: &[&str] = &["open", "exec", "eval", "compile", "__import
 const UNSAFE_BUILTINS: &[&str] = &["exec", "eval", "compile", "__import__"];
 
 /// Unsafe qualified function calls (module.function patterns).
-/// Includes both process-execution functions and file-mutating functions
-/// that we cannot yet extract proper file accesses from.
+/// These have side effects that cannot be expressed as file accesses.
 const UNSAFE_QUALIFIED: &[&str] = &[
     // Process execution
     "os.system",
@@ -30,16 +29,19 @@ const UNSAFE_QUALIFIED: &[&str] = &[
     "os.spawnve",
     "os.spawnvp",
     "os.spawnvpe",
-    // File-mutating operations (not yet analyzed for file accesses)
+    // Low-level file descriptor open (uses flag constants, not mode strings)
+    "os.open",
+    // Network I/O
+    "urllib.request.urlopen",
+];
+
+/// `os.*` functions that take a single path argument and write to it.
+/// First positional (or keyword `path`/`name`) → Write.
+const OS_WRITE_SINGLE_PATH: &[&str] = &[
     "os.remove",
     "os.unlink",
     "os.rmdir",
     "os.removedirs",
-    "os.rename",
-    "os.renames",
-    "os.replace",
-    "os.link",
-    "os.symlink",
     "os.makedirs",
     "os.mkdir",
     "os.truncate",
@@ -49,9 +51,28 @@ const UNSAFE_QUALIFIED: &[&str] = &[
     "os.lchflags",
     "os.lchmod",
     "os.lchown",
-    // Low-level file descriptor open (uses flag constants, not mode strings)
-    "os.open",
 ];
+
+/// `os.*` functions that take two path arguments (source, destination).
+/// First positional (or keyword `src`) → Read, second (or keyword `dst`) → Write.
+/// Note: `os.symlink(src, dst)` doesn't actually read `src` (it stores the string
+/// as the link target), but we emit Read(src) as a conservative over-approximation.
+const OS_WRITE_SRC_DST: &[&str] = &[
+    "os.rename",
+    "os.renames",
+    "os.replace",
+    "os.link",
+    "os.symlink",
+];
+
+/// Classification of `os.*` file-mutation calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OsCallKind {
+    /// Single path → Write (e.g. `os.remove(path)`)
+    WriteSinglePath,
+    /// Two paths → Read(src) + Write(dst) (e.g. `os.rename(src, dst)`)
+    WriteSrcDst,
+}
 
 pub fn is_tracked_builtin(name: &str) -> bool {
     TRACKED_BUILTINS.contains(&name)
@@ -63,6 +84,17 @@ pub fn is_unsafe_builtin(name: &str) -> bool {
 
 pub fn is_unsafe_qualified(qualified: &str) -> bool {
     UNSAFE_QUALIFIED.contains(&qualified)
+}
+
+/// Classify an `os.*` file-mutation call, if recognized.
+pub fn classify_os_call(qualified: &str) -> Option<OsCallKind> {
+    if OS_WRITE_SINGLE_PATH.contains(&qualified) {
+        Some(OsCallKind::WriteSinglePath)
+    } else if OS_WRITE_SRC_DST.contains(&qualified) {
+        Some(OsCallKind::WriteSrcDst)
+    } else {
+        None
+    }
 }
 
 /// Classify an `open()` mode string into Read or Write access.

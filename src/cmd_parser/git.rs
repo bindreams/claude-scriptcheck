@@ -17,6 +17,7 @@ impl GitContext {
             writes: vec![],
             inline_script_start: None,
             file_only: Some(true),
+            ..Default::default()
         }
     }
 
@@ -26,6 +27,7 @@ impl GitContext {
             writes: vec![self.git_dir.clone()],
             inline_script_start: None,
             file_only: Some(true),
+            ..Default::default()
         }
     }
 
@@ -43,6 +45,7 @@ impl GitContext {
             writes: vec![self.git_dir.clone()],
             inline_script_start: None,
             file_only: Some(false),
+            ..Default::default()
         }
     }
 
@@ -126,6 +129,7 @@ impl CommandParser for GitParser {
                 writes: vec![],
                 inline_script_start: None,
                 file_only: Some(false),
+                ..Default::default()
             }),
             "clone" => parse_clone(&ctx, sub_args),
 
@@ -313,6 +317,7 @@ fn parse_diff(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, St
                 writes: vec![ctx.resolve(val)],
                 inline_script_start: None,
                 file_only: Some(true),
+                ..Default::default()
             });
         }
         if arg == "--output" {
@@ -323,6 +328,7 @@ fn parse_diff(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, St
                     writes: vec![ctx.resolve(args[i])],
                     inline_script_start: None,
                     file_only: Some(true),
+                    ..Default::default()
                 });
             }
         }
@@ -469,6 +475,7 @@ fn parse_rm(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, Stri
             writes,
             inline_script_start: None,
             file_only: Some(true),
+            ..Default::default()
         })
     }
 }
@@ -492,6 +499,7 @@ fn parse_checkout(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses
             writes,
             inline_script_start: None,
             file_only: Some(true),
+            ..Default::default()
         });
     }
 
@@ -522,6 +530,7 @@ fn parse_mv(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, Stri
             writes: vec![dst, ctx.git_dir.clone()],
             inline_script_start: None,
             file_only: Some(true),
+            ..Default::default()
         })
     } else {
         // Incomplete args → just write .git
@@ -576,6 +585,7 @@ fn parse_init(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
         writes: vec![target],
         inline_script_start: None,
         file_only: Some(true),
+        ..Default::default()
     })
 }
 
@@ -627,6 +637,7 @@ fn parse_clone(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, S
         writes: vec![target],
         inline_script_start: None,
         file_only: Some(false),
+        ..Default::default()
     })
 }
 
@@ -735,6 +746,7 @@ fn parse_worktree_add(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAcce
         writes: vec![ctx.resolve(positionals[0]), ctx.git_dir.clone()],
         inline_script_start: None,
         file_only: Some(true),
+        ..Default::default()
     })
 }
 
@@ -778,6 +790,7 @@ fn parse_worktree_remove(ctx: &GitContext, args: &[&str]) -> Result<CommandFileA
             writes: vec![ctx.resolve(p), ctx.git_dir.clone()],
             inline_script_start: None,
             file_only: Some(true),
+            ..Default::default()
         }),
         None => Ok(ctx.write_git()),
     }
@@ -796,6 +809,7 @@ fn parse_worktree_move(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAcc
             writes: vec![ctx.resolve(positionals[1]), ctx.git_dir.clone()],
             inline_script_start: None,
             file_only: Some(true),
+            ..Default::default()
         })
     } else {
         Ok(ctx.write_git())
@@ -966,12 +980,14 @@ fn parse_config(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, 
                 writes: vec![],
                 inline_script_start: None,
                 file_only: Some(true),
+                ..Default::default()
             },
             AccessIntent::Write => CommandFileAccesses {
                 reads: file_paths.clone(),
                 writes: file_paths.clone(),
                 inline_script_start: None,
                 file_only: Some(false),
+                ..Default::default()
             },
         }
     };

@@ -807,6 +807,7 @@ impl CommandParser for Base64Parser {
             writes,
             inline_script_start: None,
             file_only: None,
+            ..Default::default()
         })
     }
 }
