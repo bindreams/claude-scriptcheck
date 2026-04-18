@@ -119,7 +119,7 @@ fn git_source_without_commit_hash() {
 
 #[skuld::test]
 fn supported_matchers_includes_all_tools() {
-    for tool in ["Bash", "Grep", "Glob", "Read", "Write", "Edit"] {
+    for tool in ["Bash", "Monitor", "Grep", "Glob", "Read", "Write", "Edit"] {
         assert!(
             SUPPORTED_MATCHERS.contains(&tool),
             "SUPPORTED_MATCHERS should include {tool}",

@@ -24,7 +24,7 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git
 # Register the hook in your Claude settings
 claude-scriptcheck install
 
-# That's it — the hook runs automatically on every Bash tool call.
+# That's it — the hook runs automatically on every Bash, Monitor, Read, Write, Edit, Grep, and Glob tool call.
 ```
 
 To update later, run the same `cargo install` command again. To remove:
@@ -38,8 +38,11 @@ cargo uninstall claude-scriptcheck
 
 claude-scriptcheck registers itself as a
 [pre-tool-use hook](https://docs.anthropic.com/en/docs/claude-code/hooks)
-for the `Bash` tool. Claude Code invokes it before every shell command,
-passing JSON on stdin and reading a permission decision from stdout.
+for the `Bash`, `Monitor`, `Read`, `Write`, `Edit`, `Grep`, and `Glob` tools.
+Claude Code invokes it before every matching tool call, passing JSON on stdin
+and reading a permission decision from stdout. The `Monitor` tool's `command`
+field is parsed and analyzed identically to `Bash` — the same `Bash(...)` rules
+govern both.
 
 ```
 ┌─────────────┐  JSON stdin    ┌─────────────────────┐  JSON stdout   ┌─────────────┐

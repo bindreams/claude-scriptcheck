@@ -17,7 +17,7 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git  # insta
 | File                 | Role                                                                                                               |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `src/lib.rs`         | Library crate root. Re-exports all modules so they are usable without spawning the binary.                         |
-| `src/main.rs`        | Binary: CLI routing (clap), hook-mode dispatch (Bash/Grep/Glob/Read/Write/Edit), I/O (stdin JSON → decision JSON). |
+| `src/main.rs`        | Binary: CLI routing (clap), hook-mode dispatch (Bash/Monitor/Grep/Glob/Read/Write/Edit), I/O (stdin JSON → decision JSON). |
 | `src/cli.rs`         | Subcommand implementations: `install`, `uninstall`, `check`, `log`, `log-path`, `upgrade`. `VerdictFilter` type.   |
 | `src/checker.rs`     | Core logic. `check_program()` for Bash AST, `check_file_accesses()` for non-Bash tools. Returns `Decision`.        |
 | `src/permission.rs`  | Parses rule strings (`Bash(cmd *)`, `Read(glob)`, etc.) into `ParsedPermissions`. Matching logic. ~20 unit tests.  |
@@ -58,7 +58,7 @@ stdin JSON → parse permission_mode →
   if permission_mode == "acceptEdits":
     inject Write/Edit allow rules for workspace dirs (CLAUDE_PROJECT_DIR + additionalDirectories)
   match tool_name:
-  "Bash" → parse command (thaum) → walk AST:
+  "Bash" | "Monitor" → parse command (thaum) → walk AST:
     for each command:
       0. normalize command name (basename, strip .exe)
       1. check deny Bash rules  →  hit? → Deny
@@ -104,6 +104,7 @@ stdin JSON → parse permission_mode →
 - Informational invocations (`git` alone, `git --version`, `--help`, bare `--exec-path`/`--html-path`/`--man-path`/`--info-path`) are auto-allowed as read-only. `--help` is only recognized at the global level; `git <subcmd> --help` is not generally detected except for `git worktree [sub] --help`. The `--exec-path=<path>` form (with value) is a setter and falls through to the subcommand.
 - Command names are normalized before parser dispatch and rule matching: `/usr/bin/python3` → `python3`, `python.exe` → `python`, `bash.exe` → `bash`. This means `Bash(python3 *)` rules match absolute-path invocations. Versioned Python interpreters (`python3.12`, `python3.13t`) are also recognized.
 - `uv run` is a transparent wrapper: `uv run python -c "..."` is analyzed as if `python -c "..."` were the command. The wrapper's flags (`--with`, `--directory`, etc.) are consumed; unrecognized flags force a Bash rule. The logged rule is `Bash(uv run python -c *)`, matching the actual command.
+- The `Monitor` tool is treated as a transparent wrapper around `Bash`: its `command` field is parsed and analyzed identically, and the same `Bash(...)` allow/deny rules apply. The `description`, `persistent`, and `timeout_ms` fields are ignored — they affect runtime lifetime and presentation, not what the command does. So `Monitor("tail -f /tmp/x")` is auto-allowed under `Bash(tail -f *)` exactly like a direct Bash call. A `Monitor` invocation in `bypassPermissions` mode is logged as `Monitor(bypassPermissions)`; in normal mode it's logged as the raw command (indistinguishable from a Bash call).
 - `python -c` and `python3 -c` inline scripts are analyzed via Python AST (rustpython-parser). If the script only uses `open()` with static string paths and no unsafe patterns (exec, eval, subprocess, shutil, etc.), file accesses are extracted and checked against Read/Write rules — no `Bash()` rule is needed. Unanalyzable scripts fall back to `Bash(python3 -c *)`.
 - Python AST analysis covers: `open()` and `io.open()` for file reads/writes; `os.remove`/`os.unlink`/`os.rmdir`/`os.removedirs`/`os.makedirs`/`os.mkdir`/`os.truncate`/`os.chmod`/`os.chown` etc. as Write(path); `os.rename`/`os.replace`/`os.link`/`os.symlink` as Read(src)+Write(dst). All require static string paths; dynamic paths fall back to Ask. `shutil.*` still triggers fallback. `pathlib.Path` method chains are not yet detected.
 - `rustpython-parser` 0.4.0 does not support Python 3.12 relaxed f-string quoting (PEP 701). Scripts with `f"{d["key"]}"` (same quote type inside and outside f-string braces) fail to parse. The workaround is to use different quote types: `f'{d["key"]}'`.

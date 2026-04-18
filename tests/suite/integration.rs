@@ -554,3 +554,142 @@ fn bypass_missing_tool_input_fields() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(parse_decision(&output), "allow");
 }
+
+// ── Monitor tool tests ──────────────────────────────────────────────────────
+
+/// Build a JSON payload that mirrors the real Monitor tool_input schema
+/// (`command`, `description`, `persistent`, `timeout_ms`).
+fn monitor_hook_json(command: &str, persistent: bool, timeout_ms: u64) -> Vec<u8> {
+    serde_json::json!({
+        "session_id": "test-session",
+        "cwd": "/tmp",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Monitor",
+        "tool_input": {
+            "command": command,
+            "description": "test monitor",
+            "persistent": persistent,
+            "timeout_ms": timeout_ms
+        },
+        "tool_use_id": "toolu_test"
+    })
+    .to_string()
+    .into_bytes()
+}
+
+#[skuld::test]
+fn monitor_dispatched_to_bash_handler() {
+    // Parity contract: Monitor and Bash with the same command produce identical decisions.
+    let cmd = "ls -la /tmp";
+    let bash_out = run_binary(&hook_json("Bash", cmd));
+    let monitor_out = run_binary(&hook_json("Monitor", cmd));
+
+    assert_eq!(bash_out.status.code(), Some(0));
+    assert_eq!(monitor_out.status.code(), Some(0));
+    assert_eq!(
+        parse_decision(&bash_out),
+        parse_decision(&monitor_out),
+        "Monitor and Bash with the same command must produce the same decision"
+    );
+}
+
+#[skuld::test]
+fn monitor_unknown_command_asks() {
+    let output = run_binary(&hook_json("Monitor", "my-totally-unknown-command --flag"));
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "ask");
+}
+
+#[skuld::test]
+fn monitor_full_schema_tolerated() {
+    // Full schema with all four required fields (command, description, persistent, timeout_ms).
+    // Unknown command → deterministic `ask` regardless of host settings.
+    let output = run_binary(&monitor_hook_json(
+        "my-totally-unknown-command --flag",
+        true,
+        600_000,
+    ));
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "ask");
+}
+
+#[skuld::test]
+fn monitor_unparseable_shell_asks() {
+    let output = run_binary(&hook_json("Monitor", "if then fi else"));
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "ask");
+    let reason = parse_reason(&output);
+    assert!(
+        reason.to_lowercase().contains("parse"),
+        "reason should mention parse failure, got: {reason}"
+    );
+}
+
+#[skuld::test]
+fn monitor_empty_command_exits_cleanly() {
+    let output = run_binary(&hook_json("Monitor", ""));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+}
+
+#[skuld::test]
+fn monitor_missing_command_field_exits_cleanly() {
+    let input = serde_json::json!({
+        "session_id": "test-session",
+        "cwd": "/tmp",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Monitor",
+        "tool_input": {},
+        "tool_use_id": "toolu_test"
+    })
+    .to_string()
+    .into_bytes();
+    let output = run_binary(&input);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+}
+
+#[skuld::test]
+fn bypass_allows_monitor() {
+    let input = hook_json_with_mode(
+        "Monitor",
+        serde_json::json!({
+            "command": "unknown-cmd --flag",
+            "description": "x",
+            "persistent": false,
+            "timeout_ms": 300000
+        }),
+        "/tmp",
+        Some("bypassPermissions"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+}
+
+#[skuld::test]
+fn accept_edits_allows_monitor_workspace_write(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let project_root = dir.to_string_lossy().to_string();
+    let file_in_workspace = format!("{}/output.txt", project_root);
+
+    let input = hook_json_with_mode(
+        "Monitor",
+        serde_json::json!({
+            "command": format!("touch {file_in_workspace}"),
+            "description": "x",
+            "persistent": false,
+            "timeout_ms": 300000
+        }),
+        &project_root,
+        Some("acceptEdits"),
+    );
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
+
+    assert_eq!(output.status.code(), Some(0));
+    let decision = parse_decision(&output);
+    assert_eq!(
+        decision, "allow",
+        "acceptEdits + Monitor workspace write should auto-allow"
+    );
+}

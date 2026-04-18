@@ -6,7 +6,7 @@ use crate::{checker, logging, path_util, permission, settings};
 const HOOK_ENTRY_MARKER: &str = "claude-scriptcheck";
 
 /// Tool matchers that claude-scriptcheck handles. Each gets its own hook entry.
-pub const SUPPORTED_MATCHERS: &[&str] = &["Bash", "Grep", "Glob", "Read", "Write", "Edit"];
+pub const SUPPORTED_MATCHERS: &[&str] = &["Bash", "Monitor", "Grep", "Glob", "Read", "Write", "Edit"];
 
 /// Install the hook into Claude settings.
 pub fn install(project: bool) {

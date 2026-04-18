@@ -140,7 +140,7 @@ fn run_hook() {
     }
 
     match hook_input.tool_name.as_str() {
-        "Bash" => handle_bash(&hook_input, &cwd, &project_root, permission_mode),
+        "Bash" | "Monitor" => handle_bash(&hook_input, &cwd, &project_root, permission_mode),
         "Grep" | "Glob" => handle_file_search(&hook_input, &cwd, &project_root, permission_mode),
         "Read" => handle_file_tool(
             &hook_input,
@@ -217,7 +217,7 @@ fn handle_bash(
                 None,
                 &[],
                 &[],
-                &["Bash(<parse error>)".to_string()],
+                &[format!("{}(<parse error>)", hook_input.tool_name)],
             );
             output_decision("ask", "Shell command could not be parsed");
             process::exit(0);
