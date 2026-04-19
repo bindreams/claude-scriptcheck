@@ -14,10 +14,16 @@ const APP_DIR: &str = "claude-scriptcheck";
 ///   (defaults to `~/.local/state/claude-scriptcheck/log.yaml`)
 /// - macOS: `~/Library/Logs/claude-scriptcheck/log.yaml`
 /// - Fallback: `~/.local/share/claude-scriptcheck/log.yaml`
+///
+/// `CLAUDE_SCRIPTCHECK_LOG_PATH` overrides the result when set (test isolation).
 pub fn log_path() -> PathBuf {
+    if let Some(override_path) = crate::env_hooks::log_path_override() {
+        return override_path;
+    }
+
     let base = if cfg!(target_os = "macos") {
         // macOS convention: ~/Library/Logs/
-        dirs::home_dir().map(|h| h.join("Library/Logs"))
+        crate::env_hooks::hook_home().map(|h| h.join("Library/Logs"))
     } else {
         // Linux/other: $XDG_STATE_HOME or ~/.local/state
         dirs::state_dir()

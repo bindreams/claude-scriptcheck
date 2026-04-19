@@ -2,6 +2,7 @@ pub mod canonicalize;
 pub mod checker;
 pub mod cli;
 pub mod cmd_parser;
+pub mod env_hooks;
 pub mod file_access;
 pub mod hook;
 pub mod logging;

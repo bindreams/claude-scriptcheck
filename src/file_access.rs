@@ -105,14 +105,14 @@ pub fn resolve_path(path: &str, cwd: &str) -> String {
     if crate::path_util::is_absolute(path) {
         path.to_string()
     } else if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::env_hooks::hook_home() {
             let home = crate::path_util::normalize_separators(&home.to_string_lossy());
             format!("{home}/{rest}")
         } else {
             path.to_string()
         }
     } else if path == "~" {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::env_hooks::hook_home() {
             crate::path_util::normalize_separators(&home.to_string_lossy())
         } else {
             path.to_string()

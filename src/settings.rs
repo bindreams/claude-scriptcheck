@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Deserialize)]
 pub struct Settings {
@@ -56,7 +56,7 @@ pub fn load_settings(cwd: &str, project_root: &str) -> LoadedSettings {
     }
 
     // 2. Global settings
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = crate::env_hooks::hook_home() {
         let global = home.join(".claude/settings.json");
         merge_from_with_base(&global, cwd, project_root, &mut result);
     }
@@ -125,11 +125,27 @@ fn load_managed() -> (Permissions, bool) {
     (merged, managed_only)
 }
 
-fn managed_settings_path() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "/Library/Application Support/ClaudeCode/managed-settings.json"
-    } else {
-        "/etc/claude-code/managed-settings.json"
+fn managed_settings_path() -> PathBuf {
+    compute_managed_settings_path(std::env::consts::OS, std::env::var_os("ProgramData"))
+}
+
+/// Pure helper exposed for cross-platform unit testing. On Windows, `program_data`
+/// is the `%ProgramData%` env var value (falls back to `C:/ProgramData` when absent).
+fn compute_managed_settings_path(
+    target_os: &str,
+    program_data: Option<std::ffi::OsString>,
+) -> PathBuf {
+    match target_os {
+        "macos" => {
+            PathBuf::from("/Library/Application Support/ClaudeCode/managed-settings.json")
+        }
+        "windows" => {
+            let base = program_data
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("C:/ProgramData"));
+            base.join("ClaudeCode").join("managed-settings.json")
+        }
+        _ => PathBuf::from("/etc/claude-code/managed-settings.json"),
     }
 }
 
@@ -206,4 +222,45 @@ fn resolve_one_rule(rule: &str, cwd: &str, project_root: &str) -> String {
         }
     }
     rule.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn managed_path_macos() {
+        let p = compute_managed_settings_path("macos", None);
+        assert_eq!(
+            p.to_string_lossy(),
+            "/Library/Application Support/ClaudeCode/managed-settings.json"
+        );
+    }
+
+    #[test]
+    fn managed_path_windows_with_program_data() {
+        let p = compute_managed_settings_path(
+            "windows",
+            Some(OsString::from("D:/CustomProgramData")),
+        );
+        let s = p.to_string_lossy().replace('\\', "/");
+        assert_eq!(s, "D:/CustomProgramData/ClaudeCode/managed-settings.json");
+    }
+
+    #[test]
+    fn managed_path_windows_fallback_when_env_unset() {
+        let p = compute_managed_settings_path("windows", None);
+        let s = p.to_string_lossy().replace('\\', "/");
+        assert_eq!(s, "C:/ProgramData/ClaudeCode/managed-settings.json");
+    }
+
+    #[test]
+    fn managed_path_linux() {
+        let p = compute_managed_settings_path("linux", None);
+        assert_eq!(
+            p.to_string_lossy(),
+            "/etc/claude-code/managed-settings.json"
+        );
+    }
 }

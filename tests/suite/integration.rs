@@ -74,11 +74,52 @@ fn unparseable_shell_is_error() {
 // ── Binary I/O tests (must invoke the actual binary) ────────────────────────
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Monotonic counter for allocating unique ephemeral log paths per subprocess call.
+static TEST_LOG_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// RAII cleanup for the ephemeral log file written by an isolated subprocess.
+struct IsolatedLog(PathBuf);
+
+impl Drop for IsolatedLog {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Point the child binary at a nonexistent home and an ephemeral log file so it
+/// cannot read the developer's real `~/.claude/settings.json` nor pollute their
+/// real `log.yaml`. Returns an `IsolatedLog` guard that removes the ephemeral
+/// log file when dropped.
+///
+/// `HOME` isolation works on Unix (via `dirs::home_dir()`). On Windows, `dirs`
+/// uses `SHGetKnownFolderPath(FOLDERID_Profile)` and ignores `HOME`, so the hook
+/// also consults `CLAUDE_SCRIPTCHECK_HOOK_HOME` — which we set here. Callers may
+/// set `CLAUDE_PROJECT_DIR` themselves; this helper never touches it.
+fn apply_test_isolation(cmd: &mut Command) -> IsolatedLog {
+    let pid = std::process::id();
+    let counter = TEST_LOG_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let base = std::env::temp_dir();
+    let isolated_home = base.join(format!(
+        "claude-scriptcheck-test-home-{pid}-{counter}-nonexistent"
+    ));
+    let log_path = base.join(format!(
+        "claude-scriptcheck-test-log-{pid}-{counter}.yaml"
+    ));
+    cmd.env("HOME", &isolated_home);
+    cmd.env("CLAUDE_SCRIPTCHECK_HOOK_HOME", &isolated_home);
+    cmd.env("CLAUDE_SCRIPTCHECK_LOG_PATH", &log_path);
+    IsolatedLog(log_path)
+}
 
 fn run_binary(stdin_bytes: &[u8]) -> std::process::Output {
     let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
-    let mut child = Command::new(binary)
+    let mut cmd = Command::new(binary);
+    let _log_guard = apply_test_isolation(&mut cmd);
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -174,10 +215,10 @@ fn grep_tool_produces_decision() {
     assert_eq!(output.status.code(), Some(0));
     assert!(!output.stdout.is_empty(), "Grep should produce JSON output");
     let decision = parse_decision(&output);
-    assert!(
-        decision == "allow" || decision == "ask",
-        "expected allow or ask, got {decision}",
-    );
+    // With test isolation (no host settings leaked in), there is no Read rule
+    // matching /tmp, so the verdict must be deterministic "ask". If this turns
+    // back into "allow", the isolation is broken.
+    assert_eq!(decision, "ask");
 }
 
 #[skuld::test]
@@ -251,8 +292,9 @@ fn file_tool_missing_path_asks() {
 fn run_binary_with_env(stdin_bytes: &[u8], env: &[(&str, &str)]) -> std::process::Output {
     let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
     let mut cmd = Command::new(binary);
-    // Isolate from developer's real settings by pointing HOME to a temp dir
-    cmd.env("HOME", "/tmp/claude-scriptcheck-test-nonexistent");
+    let _log_guard = apply_test_isolation(&mut cmd);
+    // Caller-provided env vars are applied last so they can override isolation
+    // (e.g. CLAUDE_PROJECT_DIR).
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -338,6 +380,47 @@ fn accept_edits_does_not_override_read(#[fixture(temp_dir)] dir: &std::path::Pat
     assert_eq!(output.status.code(), Some(0));
     let decision = parse_decision(&output);
     assert_eq!(decision, "ask", "acceptEdits should not auto-allow reads");
+}
+
+/// Positive test for `CLAUDE_SCRIPTCHECK_HOOK_HOME` — proves that settings
+/// actually get loaded from the override location. The mock settings contain a
+/// bare `"Read"` allow rule (which expands to `Read(**)`). If the override
+/// silently fell back to `dirs::home_dir()` (the original Windows bug), no
+/// such rule would match and the verdict would be `ask` instead of `allow`.
+#[skuld::test]
+fn hook_home_override_redirects_settings_loading(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let mock_home = dir;
+    std::fs::create_dir_all(mock_home.join(".claude")).unwrap();
+    std::fs::write(
+        mock_home.join(".claude/settings.json"),
+        r#"{"permissions":{"allow":["Read"]}}"#,
+    )
+    .unwrap();
+
+    // Use an unrelated project_root so project-level settings don't interfere.
+    let project_root = std::env::temp_dir()
+        .join(format!(
+            "claude-scriptcheck-hook-home-override-pr-{}",
+            std::process::id()
+        ))
+        .to_string_lossy()
+        .to_string();
+
+    let input = file_tool_json_with_mode("Read", "/etc/passwd", &project_root, None);
+    let output = run_binary_with_env(
+        &input,
+        &[(
+            "CLAUDE_SCRIPTCHECK_HOOK_HOME",
+            &mock_home.to_string_lossy(),
+        )],
+    );
+
+    assert_eq!(output.status.code(), Some(0));
+    let decision = parse_decision(&output);
+    assert_eq!(
+        decision, "allow",
+        "CLAUDE_SCRIPTCHECK_HOOK_HOME must redirect settings loading"
+    );
 }
 
 #[skuld::test]
@@ -671,12 +754,15 @@ fn bypass_allows_monitor() {
 #[skuld::test]
 fn accept_edits_allows_monitor_workspace_write(#[fixture(temp_dir)] dir: &std::path::Path) {
     let project_root = dir.to_string_lossy().to_string();
-    let file_in_workspace = format!("{}/output.txt", project_root);
+    // Normalize to forward slashes AND single-quote the path. Windows temp-dir
+    // paths contain backslashes (bash escape character) and may contain spaces
+    // (word-splitting) — single quotes disable both.
+    let file_in_workspace = format!("{}/output.txt", project_root.replace('\\', "/"));
 
     let input = hook_json_with_mode(
         "Monitor",
         serde_json::json!({
-            "command": format!("touch {file_in_workspace}"),
+            "command": format!("touch '{file_in_workspace}'"),
             "description": "x",
             "persistent": false,
             "timeout_ms": 300000

@@ -34,7 +34,7 @@ pub enum ParsedRule {
 }
 
 pub fn parse_rules(perms: &Permissions) -> ParsedPermissions {
-    let home = dirs::home_dir()
+    let home = crate::env_hooks::hook_home()
         .map(|h| crate::path_util::normalize_separators(&h.to_string_lossy()))
         .unwrap_or_default();
 
@@ -205,7 +205,7 @@ fn token_matches(pattern: &str, actual: &str) -> bool {
 /// Each workspace directory gets `Write(dir/**)` and `Edit(dir/**)` allow rules,
 /// parsed through the standard `parse_single_rule` pipeline.
 pub fn inject_accept_edits_rules(perms: &mut ParsedPermissions, workspace_dirs: &[String]) {
-    let home = dirs::home_dir()
+    let home = crate::env_hooks::hook_home()
         .map(|h| crate::path_util::normalize_separators(&h.to_string_lossy()))
         .unwrap_or_default();
 
