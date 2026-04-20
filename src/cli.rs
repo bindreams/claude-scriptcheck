@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process;
 
-use crate::{checker, logging, path_util, permission, settings};
+use crate::permission_mode::PermissionMode;
+use crate::{checker, logging, path_util, permission};
 
 const HOOK_ENTRY_MARKER: &str = "claude-scriptcheck";
 
@@ -100,7 +101,12 @@ pub fn uninstall(project: bool) {
 }
 
 /// Manually check a command against permission rules.
-pub fn check(command: &str, cwd: &str) {
+///
+/// `permission_mode` simulates Claude Code's mode for the dry run: the same
+/// synthetic-rule injection and end-stage `apply_permission_mode` transform
+/// run as in the hook path, so the dry run's verdict matches what the hook
+/// would emit for the same input.
+pub fn check(command: &str, cwd: &str, permission_mode: Option<PermissionMode>) {
     let resolved_cwd = if cwd == "." {
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("/"))
@@ -114,30 +120,42 @@ pub fn check(command: &str, cwd: &str) {
     let project_root = std::env::var("CLAUDE_PROJECT_DIR")
         .map(|s| path_util::normalize_separators(&s))
         .unwrap_or_else(|_| resolved_cwd.clone());
-    let loaded = settings::load_settings(&resolved_cwd, &project_root);
-    let parsed_perms = permission::parse_rules(&loaded.permissions);
+    let parsed_perms = permission::load_perms(&resolved_cwd, &project_root, permission_mode);
 
-    let program = match thaum::parse_with(command, thaum::Dialect::Bash) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Parse error: {e}");
-            process::exit(1);
-        }
+    // Match the hook path: on parse failure, construct a synthetic Ask with
+    // `custom_reason` and run it through `apply_permission_mode`, so the CLI
+    // dry run's verdict matches the hook for unparseable input.
+    let result = match thaum::parse_with(command, thaum::Dialect::Bash) {
+        Ok(program) => checker::check_program(&program, &parsed_perms, &resolved_cwd),
+        Err(_) => checker::CheckResult {
+            decision: checker::Decision::Ask,
+            matched_allow: vec![],
+            matched_deny: vec![],
+            missing_rules: vec!["Bash(<parse error>)".into()],
+            custom_reason: Some("Shell command could not be parsed".into()),
+        },
     };
-
-    let result = checker::check_program(&program, &parsed_perms, &resolved_cwd);
+    let result = checker::apply_permission_mode(result, permission_mode);
 
     match result.decision {
         checker::Decision::Allow => {
-            println!("ALLOW: All commands and file accesses are permitted");
+            let reason = result
+                .custom_reason
+                .as_deref()
+                .unwrap_or("All commands and file accesses are permitted");
+            println!("ALLOW: {reason}");
         }
         checker::Decision::Deny(reason) => {
             println!("DENY: {reason}");
             process::exit(1);
         }
-        checker::Decision::Ask(missing) => {
-            println!("ASK: Missing permission rules:");
-            for rule in &missing {
+        checker::Decision::Ask => {
+            let header = result
+                .custom_reason
+                .as_deref()
+                .unwrap_or("Missing permission rules");
+            println!("ASK: {header}:");
+            for rule in &result.missing_rules {
                 println!("  - {rule}");
             }
         }

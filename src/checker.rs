@@ -4,6 +4,7 @@ use thaum::visit::Visit;
 use crate::cmd_parser::{self, CmdParseResult};
 use crate::file_access::{self, AccessKind, FileAccess};
 use crate::permission::{self, ParsedPermissions};
+use crate::permission_mode::PermissionMode;
 use crate::python_ast::{self, PythonAnalysis};
 
 /// Final decision for a command.
@@ -11,16 +12,68 @@ use crate::python_ast::{self, PythonAnalysis};
 pub enum Decision {
     Allow,
     Deny(String),
-    Ask(Vec<String>),
+    Ask,
 }
 
 /// Full result of checking a program, including which rules matched.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckResult {
     pub decision: Decision,
     /// Allow rules that matched (Bash, Read, Write, Edit).
     pub matched_allow: Vec<String>,
     /// Deny rules that matched (at most one in practice).
     pub matched_deny: Vec<String>,
+    /// Rules that would need to be allowed for the decision to be Allow.
+    /// Populated whenever at least one rule went unmatched, regardless of the final
+    /// decision. Surviving the `apply_permission_mode` transform is the point:
+    /// after Ask → Allow in bypass/auto, the log can still show what was missing.
+    pub missing_rules: Vec<String>,
+    /// Optional override for the user-facing reason text in `log_and_output`.
+    /// Used by synthetic Ask sites (parse failures, missing file paths) to preserve
+    /// their informative reason across the `apply_permission_mode` transform.
+    pub custom_reason: Option<String>,
+}
+
+/// Transform a `CheckResult`'s decision based on the active permission mode.
+///
+/// Applied at the **end** of the decision pipeline. Only `Decision::Ask` is
+/// transformed: in `BypassPermissions` / `Auto` it becomes `Allow`; in `DontAsk`
+/// it becomes `Deny`. `Allow` and `Deny` pass through unchanged in every mode —
+/// a deny rule is authoritative everywhere, including bypass, matching Claude
+/// Code's own documented behavior for hook-deny.
+///
+/// `missing_rules` on the result is preserved regardless of outcome, so the log
+/// can still record what was unmatched even when the final verdict is Allow.
+pub fn apply_permission_mode(mut result: CheckResult, mode: Option<PermissionMode>) -> CheckResult {
+    use PermissionMode::*;
+    let decision = std::mem::replace(&mut result.decision, Decision::Allow);
+    result.decision = match (decision, mode) {
+        (Decision::Ask, Some(BypassPermissions | Auto)) => Decision::Allow,
+        (Decision::Ask, Some(DontAsk)) => {
+            let missing = if result.missing_rules.is_empty() {
+                // Invariant ordinarily holds via `finalize()`, but guard anyway so
+                // release builds emit a coherent reason if a synthetic `CheckResult`
+                // is ever constructed with an empty `missing_rules`.
+                "<unspecified rule>".to_string()
+            } else {
+                result.missing_rules.join(", ")
+            };
+            let base = format!(
+                "dontAsk mode: command requires rule(s) not in settings: {missing}. \
+                 Add the listed rule(s) to permissions.allow to run this.",
+            );
+            // Preserve custom_reason context (e.g. "Shell command could not be parsed")
+            // by prefixing it — the deny payload becomes the source of truth for the
+            // final reason, since Decision::Deny's reason is always shown to the user.
+            let reason = match &result.custom_reason {
+                Some(ctx) if !ctx.is_empty() => format!("{ctx}. {base}"),
+                _ => base,
+            };
+            Decision::Deny(reason)
+        }
+        (other, _) => other,
+    };
+    result
 }
 
 /// Top-level entry point: check a parsed program against permission rules.
@@ -120,14 +173,14 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
 
 impl PermissionChecker<'_> {
     fn finalize(mut self) -> CheckResult {
+        self.unmatched.sort();
+        self.unmatched.dedup();
         let decision = if let Some(reason) = self.denied {
             Decision::Deny(reason)
         } else if self.unmatched.is_empty() {
             Decision::Allow
         } else {
-            self.unmatched.sort();
-            self.unmatched.dedup();
-            Decision::Ask(self.unmatched)
+            Decision::Ask
         };
 
         self.matched_allow.sort();
@@ -137,6 +190,8 @@ impl PermissionChecker<'_> {
 
         CheckResult {
             decision,
+            missing_rules: self.unmatched,
+            custom_reason: None,
             matched_allow: self.matched_allow,
             matched_deny: self.matched_deny,
         }
@@ -492,4 +547,146 @@ fn extract_redirect_accesses(redirects: &[Redirect], cwd: &str) -> Vec<FileAcces
         .iter()
         .filter_map(|r| extract_redirect_access(r, cwd))
         .collect()
+}
+
+#[cfg(test)]
+mod apply_mode_tests {
+    use super::*;
+
+    fn ask_result() -> CheckResult {
+        CheckResult {
+            decision: Decision::Ask,
+            matched_allow: vec![],
+            matched_deny: vec![],
+            missing_rules: vec!["Bash(foo)".into(), "Bash(bar)".into()],
+            custom_reason: None,
+        }
+    }
+
+    fn allow_result() -> CheckResult {
+        CheckResult {
+            decision: Decision::Allow,
+            matched_allow: vec!["Bash(ls *)".into()],
+            matched_deny: vec![],
+            missing_rules: vec![],
+            custom_reason: None,
+        }
+    }
+
+    fn deny_result(reason: &str) -> CheckResult {
+        CheckResult {
+            decision: Decision::Deny(reason.into()),
+            matched_allow: vec![],
+            matched_deny: vec!["Bash(rm *)".into()],
+            missing_rules: vec![],
+            custom_reason: None,
+        }
+    }
+
+    #[test]
+    fn ask_to_allow_in_bypass() {
+        let out = apply_permission_mode(ask_result(), Some(PermissionMode::BypassPermissions));
+        assert_eq!(out.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn ask_to_allow_in_auto() {
+        let out = apply_permission_mode(ask_result(), Some(PermissionMode::Auto));
+        assert_eq!(out.decision, Decision::Allow);
+    }
+
+    #[test]
+    fn ask_to_deny_in_dont_ask() {
+        let out = apply_permission_mode(ask_result(), Some(PermissionMode::DontAsk));
+        match out.decision {
+            Decision::Deny(reason) => {
+                assert!(
+                    reason.starts_with("dontAsk mode: command requires rule(s)"),
+                    "unexpected reason: {reason}",
+                );
+                assert!(reason.contains("Bash(foo)"));
+                assert!(reason.contains("Bash(bar)"));
+            }
+            other => panic!("expected Deny, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ask_preserved_in_default_modes() {
+        for mode in [
+            None,
+            Some(PermissionMode::Default),
+            Some(PermissionMode::Plan),
+            Some(PermissionMode::AcceptEdits),
+        ] {
+            let out = apply_permission_mode(ask_result(), mode);
+            assert_eq!(out.decision, Decision::Ask, "mode: {mode:?}");
+        }
+    }
+
+    #[test]
+    fn allow_preserved_in_every_mode() {
+        for mode in [
+            None,
+            Some(PermissionMode::Default),
+            Some(PermissionMode::Plan),
+            Some(PermissionMode::AcceptEdits),
+            Some(PermissionMode::Auto),
+            Some(PermissionMode::BypassPermissions),
+            Some(PermissionMode::DontAsk),
+        ] {
+            let out = apply_permission_mode(allow_result(), mode);
+            assert_eq!(out.decision, Decision::Allow, "mode: {mode:?}");
+        }
+    }
+
+    #[test]
+    fn deny_preserved_in_every_mode_including_bypass() {
+        for mode in [
+            None,
+            Some(PermissionMode::Default),
+            Some(PermissionMode::Plan),
+            Some(PermissionMode::AcceptEdits),
+            Some(PermissionMode::Auto),
+            Some(PermissionMode::BypassPermissions),
+            Some(PermissionMode::DontAsk),
+        ] {
+            let out = apply_permission_mode(deny_result("no"), mode);
+            assert!(matches!(out.decision, Decision::Deny(_)), "mode: {mode:?}");
+        }
+    }
+
+    #[test]
+    fn missing_rules_preserved_after_ask_to_allow_transform() {
+        let out = apply_permission_mode(ask_result(), Some(PermissionMode::BypassPermissions));
+        assert_eq!(out.decision, Decision::Allow);
+        assert_eq!(out.missing_rules, vec!["Bash(foo)", "Bash(bar)"]);
+    }
+
+    #[test]
+    fn custom_reason_preserved_through_transform() {
+        let mut r = ask_result();
+        r.custom_reason = Some("Shell command could not be parsed".into());
+        let out = apply_permission_mode(r, Some(PermissionMode::BypassPermissions));
+        assert_eq!(out.decision, Decision::Allow);
+        assert_eq!(
+            out.custom_reason.as_deref(),
+            Some("Shell command could not be parsed"),
+        );
+    }
+
+    #[test]
+    fn idempotent_in_bypass() {
+        let once = apply_permission_mode(ask_result(), Some(PermissionMode::BypassPermissions));
+        let twice =
+            apply_permission_mode(once.clone(), Some(PermissionMode::BypassPermissions));
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn idempotent_in_dont_ask() {
+        let once = apply_permission_mode(ask_result(), Some(PermissionMode::DontAsk));
+        let twice = apply_permission_mode(once.clone(), Some(PermissionMode::DontAsk));
+        assert_eq!(once, twice);
+    }
 }

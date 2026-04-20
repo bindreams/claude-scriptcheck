@@ -2,8 +2,10 @@ use std::io::{self, Read};
 use std::process;
 
 use clap::{Parser, Subcommand};
+use claude_scriptcheck::checker::{CheckResult, Decision};
 use claude_scriptcheck::file_access::{self, AccessKind, FileAccess};
-use claude_scriptcheck::{checker, cli, hook, logging, path_util, permission, settings};
+use claude_scriptcheck::permission_mode::PermissionMode;
+use claude_scriptcheck::{checker, cli, hook, logging, path_util, permission};
 
 #[derive(Parser)]
 #[command(
@@ -36,6 +38,9 @@ enum Commands {
         /// Working directory context (defaults to current dir)
         #[arg(long, default_value = ".")]
         cwd: String,
+        /// Simulate a specific permission mode
+        #[arg(long, value_enum)]
+        permission_mode: Option<PermissionMode>,
     },
     /// Print the decision log
     Log {
@@ -76,7 +81,11 @@ fn main() {
     match cli.command {
         Some(Commands::Install { project }) => cli::install(project),
         Some(Commands::Uninstall { project }) => cli::uninstall(project),
-        Some(Commands::Check { command, cwd }) => cli::check(&command, &cwd),
+        Some(Commands::Check {
+            command,
+            cwd,
+            permission_mode,
+        }) => cli::check(&command, &cwd, permission_mode),
         Some(Commands::Log {
             clear, follow, tail, allow, no_allow, ask, no_ask, deny, no_deny,
         }) => {
@@ -113,31 +122,11 @@ fn run_hook() {
     };
 
     // Normalize path separators (Windows backslashes → forward slashes).
-    // Computed up here (before the bypassPermissions branch) so every log_decision
-    // call site — including the early-exit one — sees the same resolved values.
     let cwd = path_util::normalize_separators(&hook_input.cwd);
     let project_root = std::env::var("CLAUDE_PROJECT_DIR")
         .map(|s| path_util::normalize_separators(&s))
         .unwrap_or_else(|_| cwd.clone());
-    let permission_mode = hook_input.permission_mode.as_deref();
-
-    // Early exit for bypassPermissions mode — allow everything unconditionally.
-    if permission_mode == Some("bypassPermissions") {
-        logging::log_decision(
-            &hook_input.session_id,
-            &cwd,
-            &project_root,
-            &format!("{}(bypassPermissions)", hook_input.tool_name),
-            permission_mode,
-            "allow",
-            None,
-            &[],
-            &[],
-            &[],
-        );
-        output_decision("allow", "bypassPermissions mode: all tool calls permitted");
-        return;
-    }
+    let permission_mode = PermissionMode::from_hook_str(hook_input.permission_mode.as_deref());
 
     match hook_input.tool_name.as_str() {
         "Bash" | "Monitor" => handle_bash(&hook_input, &cwd, &project_root, permission_mode),
@@ -160,71 +149,35 @@ fn run_hook() {
     }
 }
 
-fn load_perms(
-    cwd: &str,
-    project_root: &str,
-    permission_mode: Option<&str>,
-) -> permission::ParsedPermissions {
-    let loaded = settings::load_settings(cwd, project_root);
-    let mut parsed_perms = permission::parse_rules(&loaded.permissions);
-
-    if permission_mode == Some("acceptEdits") {
-        let mut workspace_dirs = vec![project_root.to_string()];
-        // Resolve additional directories: relative paths → relative to project_root
-        for dir in loaded.permissions.additional_directories {
-            let normalized = path_util::normalize_separators(&dir);
-            if normalized.starts_with('~')
-                || normalized.starts_with('/')
-                || path_util::is_absolute(&normalized)
-            {
-                workspace_dirs.push(normalized);
-            } else {
-                // Relative path → resolve against project root
-                workspace_dirs.push(format!("{project_root}/{normalized}"));
-            }
-        }
-        permission::inject_accept_edits_rules(&mut parsed_perms, &workspace_dirs);
-    }
-
-    parsed_perms
-}
-
 /// Handle the Bash tool: parse the command with thaum and walk the AST.
 fn handle_bash(
     hook_input: &hook::HookInput,
     cwd: &str,
     project_root: &str,
-    permission_mode: Option<&str>,
+    permission_mode: Option<PermissionMode>,
 ) {
     let command = match &hook_input.tool_input.command {
         Some(cmd) if !cmd.is_empty() => cmd.clone(),
         _ => process::exit(0),
     };
 
-    let parsed_perms = load_perms(cwd, project_root, permission_mode);
+    let parsed_perms = permission::load_perms(cwd, project_root, permission_mode);
 
-    // Parse the bash command with thaum
-    let program = match thaum::parse_with(&command, thaum::Dialect::Bash) {
-        Ok(p) => p,
-        Err(_) => {
-            logging::log_decision(
-                &hook_input.session_id,
-                cwd,
-                project_root,
-                &command,
-                permission_mode,
-                "ask",
-                None,
-                &[],
-                &[],
-                &[format!("{}(<parse error>)", hook_input.tool_name)],
-            );
-            output_decision("ask", "Shell command could not be parsed");
-            process::exit(0);
-        }
+    // Parse the bash command with thaum. On parse failure, construct a synthetic
+    // Ask result with custom_reason so the original error message is preserved
+    // through the apply_permission_mode transform.
+    let result = match thaum::parse_with(&command, thaum::Dialect::Bash) {
+        Ok(program) => checker::check_program(&program, &parsed_perms, cwd),
+        Err(_) => CheckResult {
+            decision: Decision::Ask,
+            matched_allow: vec![],
+            matched_deny: vec![],
+            missing_rules: vec![format!("{}(<parse error>)", hook_input.tool_name)],
+            custom_reason: Some("Shell command could not be parsed".into()),
+        },
     };
 
-    let result = checker::check_program(&program, &parsed_perms, cwd);
+    let result = checker::apply_permission_mode(result, permission_mode);
     log_and_output(
         &result,
         &hook_input.session_id,
@@ -240,7 +193,7 @@ fn handle_file_search(
     hook_input: &hook::HookInput,
     cwd: &str,
     project_root: &str,
-    permission_mode: Option<&str>,
+    permission_mode: Option<PermissionMode>,
 ) {
     let raw_path = match &hook_input.tool_input.path {
         Some(p) if !p.is_empty() => p.clone(),
@@ -249,12 +202,13 @@ fn handle_file_search(
     let normalized = path_util::normalize_separators(&raw_path);
     let resolved = file_access::resolve_path(&normalized, cwd);
 
-    let parsed_perms = load_perms(cwd, project_root, permission_mode);
+    let parsed_perms = permission::load_perms(cwd, project_root, permission_mode);
     let accesses = [FileAccess {
         path: resolved.clone(),
         kind: AccessKind::Read,
     }];
     let result = checker::check_file_accesses(&accesses, &parsed_perms, cwd);
+    let result = checker::apply_permission_mode(result, permission_mode);
 
     let log_label = format!("{}({})", hook_input.tool_name, resolved);
     log_and_output(
@@ -272,39 +226,47 @@ fn handle_file_tool(
     hook_input: &hook::HookInput,
     cwd: &str,
     project_root: &str,
-    permission_mode: Option<&str>,
+    permission_mode: Option<PermissionMode>,
     access_kind: AccessKind,
 ) {
     let raw_path = match &hook_input.tool_input.file_path {
         Some(p) if !p.is_empty() => p.clone(),
         _ => {
-            let reason = format!("Missing file path in {} tool input", hook_input.tool_name);
+            // Synthetic Ask with custom_reason preserves the specific error text
+            // through apply_permission_mode (→ allow in bypass/auto, deny in dontAsk).
             let log_label = format!("{}(<missing path>)", hook_input.tool_name);
-            logging::log_decision(
+            let result = CheckResult {
+                decision: Decision::Ask,
+                matched_allow: vec![],
+                matched_deny: vec![],
+                missing_rules: vec![log_label.clone()],
+                custom_reason: Some(format!(
+                    "Missing file path in {} tool input",
+                    hook_input.tool_name,
+                )),
+            };
+            let result = checker::apply_permission_mode(result, permission_mode);
+            log_and_output(
+                &result,
                 &hook_input.session_id,
                 cwd,
                 project_root,
-                &log_label,
                 permission_mode,
-                "ask",
-                None,
-                &[],
-                &[],
-                &[],
+                &log_label,
             );
-            output_decision("ask", &reason);
             return;
         }
     };
     let normalized = path_util::normalize_separators(&raw_path);
     let resolved = file_access::resolve_path(&normalized, cwd);
 
-    let parsed_perms = load_perms(cwd, project_root, permission_mode);
+    let parsed_perms = permission::load_perms(cwd, project_root, permission_mode);
     let accesses = [FileAccess {
         path: resolved.clone(),
         kind: access_kind,
     }];
     let result = checker::check_file_accesses(&accesses, &parsed_perms, cwd);
+    let result = checker::apply_permission_mode(result, permission_mode);
 
     let log_label = format!("{}({})", hook_input.tool_name, resolved);
     log_and_output(
@@ -326,24 +288,29 @@ fn log_and_output(
     session_id: &str,
     cwd: &str,
     project_root: &str,
-    permission_mode: Option<&str>,
+    permission_mode: Option<PermissionMode>,
     command: &str,
 ) {
+    let mode_str = permission_mode.map(PermissionMode::as_str);
     match &result.decision {
         checker::Decision::Allow => {
+            let reason = result
+                .custom_reason
+                .clone()
+                .unwrap_or_else(|| "All commands and file accesses are permitted".to_string());
             logging::log_decision(
                 session_id,
                 cwd,
                 project_root,
                 command,
-                permission_mode,
+                mode_str,
                 "allow",
                 None,
                 &result.matched_allow,
                 &[],
-                &[],
+                &result.missing_rules,
             );
-            output_decision("allow", "All commands and file accesses are permitted");
+            output_decision("allow", &reason);
         }
         checker::Decision::Deny(reason) => {
             logging::log_decision(
@@ -351,28 +318,34 @@ fn log_and_output(
                 cwd,
                 project_root,
                 command,
-                permission_mode,
+                mode_str,
                 "deny",
                 Some(reason),
                 &result.matched_allow,
                 &result.matched_deny,
-                &[],
+                // Preserve missing_rules in the log for dontAsk's synthesized Deny
+                // (from Ask → Deny transform) so the structured list is grep-friendly.
+                // Native denies (a deny rule fired) carry an empty missing_rules, so
+                // this is a no-op in that case.
+                &result.missing_rules,
             );
             output_decision("deny", reason);
         }
-        checker::Decision::Ask(missing) => {
-            let reason = format!("Missing permission rules: {}", missing.join(", "));
+        checker::Decision::Ask => {
+            let reason = result.custom_reason.clone().unwrap_or_else(|| {
+                format!("Missing permission rules: {}", result.missing_rules.join(", "))
+            });
             logging::log_decision(
                 session_id,
                 cwd,
                 project_root,
                 command,
-                permission_mode,
+                mode_str,
                 "ask",
                 None,
                 &result.matched_allow,
                 &[],
-                missing,
+                &result.missing_rules,
             );
             output_decision("ask", &reason);
         }

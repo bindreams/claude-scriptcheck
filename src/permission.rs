@@ -1,4 +1,5 @@
-use crate::settings::Permissions;
+use crate::permission_mode::PermissionMode;
+use crate::settings::{self, Permissions};
 
 /// A parsed Bash command permission rule.
 #[derive(Debug, Clone)]
@@ -199,6 +200,40 @@ fn token_matches(pattern: &str, actual: &str) -> bool {
     } else {
         pattern == actual
     }
+}
+
+/// Load settings from disk and parse them into `ParsedPermissions`, injecting
+/// synthetic allow rules for the current permission mode (currently only
+/// `AcceptEdits`).
+///
+/// Shared between the hook dispatch path (`main.rs`) and the `cli::check` dry
+/// run so both produce identical decisions for the same input.
+pub fn load_perms(
+    cwd: &str,
+    project_root: &str,
+    permission_mode: Option<PermissionMode>,
+) -> ParsedPermissions {
+    let loaded = settings::load_settings(cwd, project_root);
+    let mut parsed = parse_rules(&loaded.permissions);
+
+    if permission_mode == Some(PermissionMode::AcceptEdits) {
+        let mut workspace_dirs = vec![project_root.to_string()];
+        for dir in loaded.permissions.additional_directories {
+            let normalized = crate::path_util::normalize_separators(&dir);
+            if normalized.starts_with('~')
+                || normalized.starts_with('/')
+                || crate::path_util::is_absolute(&normalized)
+            {
+                workspace_dirs.push(normalized);
+            } else {
+                // Relative path → resolve against project root
+                workspace_dirs.push(format!("{project_root}/{normalized}"));
+            }
+        }
+        inject_accept_edits_rules(&mut parsed, &workspace_dirs);
+    }
+
+    parsed
 }
 
 /// Inject ephemeral allow rules for `acceptEdits` mode.

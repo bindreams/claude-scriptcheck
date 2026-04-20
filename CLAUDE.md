@@ -19,8 +19,9 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git  # insta
 | `src/lib.rs`         | Library crate root. Re-exports all modules so they are usable without spawning the binary.                         |
 | `src/main.rs`        | Binary: CLI routing (clap), hook-mode dispatch (Bash/Monitor/Grep/Glob/Read/Write/Edit), I/O (stdin JSON → decision JSON). |
 | `src/cli.rs`         | Subcommand implementations: `install`, `uninstall`, `check`, `log`, `log-path`, `upgrade`. `VerdictFilter` type.   |
-| `src/checker.rs`     | Core logic. `check_program()` for Bash AST, `check_file_accesses()` for non-Bash tools. Returns `Decision`.        |
-| `src/permission.rs`  | Parses rule strings (`Bash(cmd *)`, `Read(glob)`, etc.) into `ParsedPermissions`. Matching logic. ~20 unit tests.  |
+| `src/checker.rs`     | Core logic. `check_program()` for Bash AST, `check_file_accesses()` for non-Bash tools. Returns `CheckResult`. End-stage `apply_permission_mode()` transforms verdicts per mode. |
+| `src/permission.rs`  | Parses rule strings (`Bash(cmd *)`, `Read(glob)`, etc.) into `ParsedPermissions`. Matching logic. `load_perms()` composes `settings::load_settings` + parse + mode-specific synthetic rule injection. ~20 unit tests. |
+| `src/permission_mode.rs` | `PermissionMode` enum with `ValueEnum` (clap) and `from_hook_str` for the hook JSON field.                     |
 | `src/file_access.rs` | Maps well-known commands to file-access semantics (read/write args, redirects). ~25 unit tests.                    |
 | `src/hook.rs`        | `HookInput` / `HookOutput` serde structs for JSON protocol with Claude Code.                                       |
 | `src/settings.rs`    | Loads and merges permission rules + `additionalDirectories` (both nested inside `permissions` and top-level) from settings files. Returns `LoadedSettings`. |
@@ -35,8 +36,12 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git  # insta
 ## Key types
 
 ```
-Decision        = Allow | Deny(reason) | Ask(Vec<missing_rules>)
-ParsedPermissions  { allow_bash, deny_bash, allow_read, deny_read, allow_write, deny_write, allow_edit, deny_edit }
+Decision        = Allow | Deny(reason) | Ask
+CheckResult     { decision, matched_allow, matched_deny, missing_rules: Vec<String>, custom_reason: Option<String> }
+    // missing_rules survives the apply_permission_mode transform so the log shows what was unmatched even after Ask→Allow.
+    // custom_reason overrides the generic per-verdict reason (used by synthetic Ask sites: parse failure, missing file_path).
+PermissionMode  = Default | Plan | AcceptEdits | Auto | DontAsk | BypassPermissions
+ParsedPermissions  { allow_bash, deny_bash, allow_read, deny_read, allow_write, deny_write, allow_edit, deny_edit, ask_* variants }
 BashRule         { prefix_tokens: Vec<String>, wildcard: bool }
 FileAccess       { path: String, kind: AccessKind }   // AccessKind = Read | Write
 HookInput        { session_id, cwd, tool_name, tool_input, permission_mode? }
@@ -53,11 +58,10 @@ CommandFileAccesses { reads, writes, inline_script_start, file_only: Option<bool
 ## Decision flow
 
 ```
-stdin JSON → parse permission_mode →
-  if permission_mode == "bypassPermissions":
-    log + output allow immediately (no further processing)
-  if permission_mode == "acceptEdits":
-    inject Write/Edit allow rules for workspace dirs (CLAUDE_PROJECT_DIR + additionalDirectories)
+stdin JSON → parse permission_mode (PermissionMode::from_hook_str) →
+  if permission_mode == acceptEdits:
+    [BEGINNING STAGE] inject Write/Edit allow rules for workspace dirs
+    (CLAUDE_PROJECT_DIR + additionalDirectories) via permission::load_perms
   match tool_name:
   "Bash" | "Monitor" → parse command (thaum) → walk AST:
     for each command:
@@ -78,12 +82,18 @@ stdin JSON → parse permission_mode →
          file_only=Some(false)? → require Bash rule
          file_only=None? → use is_file_only_command() + has_file_accesses guard
     any deny? → Deny
-    any unmatched? → Ask (+ log missing rules)
+    any unmatched? → Ask (+ populate missing_rules, preserve custom_reason)
     all matched → Allow
   "Grep" | "Glob" → extract path (default cwd) → check against Read rules
   "Read"          → extract file_path → check against Read rules
   "Write" | "Edit"→ extract file_path → check against Write/Edit rules
-  other           → silent exit (code 0)
+  other           → silent exit (code 0, regardless of mode)
+
+  [END STAGE] apply_permission_mode(result, mode):
+    Ask   → Allow  in auto / bypassPermissions
+    Ask   → Deny   in dontAsk (reason lists missing rules)
+    Deny  passes through in every mode (authoritative)
+    Allow passes through in every mode
 ```
 
 ## Conventions
@@ -92,11 +102,18 @@ stdin JSON → parse permission_mode →
 - Integration tests call the library API directly; only binary I/O tests spawn the compiled binary.
 - `pretty_assertions` is used in dev for readable test diffs.
 - No CI/CD configured yet.
-- Conservative defaults: `eval`, dynamic command names, dynamic file paths, and parse failures all result in `ask`.
+- Conservative defaults: `eval`, dynamic command names, dynamic file paths, and parse failures all result in `ask` under `default` / `plan` / `acceptEdits`. Under `auto` / `bypassPermissions` the end-stage transform converts to `allow`; under `dontAsk` it converts to `deny` with a reason listing the missing rules.
+- `custom_reason` preservation: parse failure and missing-file-path paths set `CheckResult::custom_reason` with a specific error message (e.g. `"Shell command could not be parsed"`). That text survives `apply_permission_mode` and is shown to the user regardless of final verdict — in `Allow` it replaces the generic allow message, in `Deny` under dontAsk it's prefixed onto the deny reason. Normal rule-miss Asks don't set `custom_reason` and fall back to the generic "Missing permission rules: …" text.
 - The Edit and Write tools are checked identically (`AccessKind::Write`): `Write(pat)` allows both, `Edit(pat)` also allows both (fallback). There is no way to allow Edit-only while denying Write on the same path.
 - Pattern/program arguments in `awk`, `grep`, `rg`, `sed` are skipped during file-access analysis.
-- When `permission_mode` is `"bypassPermissions"`, the hook unconditionally allows all tool calls (including unknown tools) without loading settings or running any checks. Decisions are still logged.
-- When `permission_mode` is `"acceptEdits"`, ephemeral Write/Edit allow rules are injected for workspace directories. Deny and ask rules still take priority. The `cli::check` subcommand does not support `--permission-mode`.
+- **Permission modes** (`PermissionMode` enum, wire format camelCase): handling lives at two pipeline edges only:
+  - **Beginning** (synthetic rule injection, via `permission::load_perms`): `acceptEdits` injects `Write`/`Edit` allow rules for workspace directories.
+  - **End** (verdict transform, via `checker::apply_permission_mode`): `auto` and `bypassPermissions` convert `Ask → Allow`; `dontAsk` converts `Ask → Deny` with a reason naming the missing rules; `Allow` and `Deny` pass through unchanged in every mode.
+  - The middle layer (parse → extract accesses → match rules) is mode-agnostic. Do not normalize the two-stage split without understanding the tradeoffs.
+  - `bypassPermissions` still checks deny rules — a `Deny(Bash(rm *))` rule blocks the command even in bypass mode, matching Claude Code's own documented behavior for hook-deny in bypass. The pre-2026-04 behavior (unconditional allow in bypass) is gone.
+  - Unknown tools and empty/unparseable Bash commands continue to silent-exit (`process::exit(0)` with no stdout) in every mode — scriptcheck does not interfere with inputs it wasn't designed to handle. Claude Code applies its own per-mode default for silent-exit cases.
+  - `dontAsk` is intended for CI pipelines and non-interactive sessions where prompting is not viable.
+  - The `cli::check` subcommand accepts `--permission-mode <mode>` to simulate any mode offline; invalid mode strings are rejected by clap's `ValueEnum`.
 - Workspace directories for `acceptEdits` are determined from `CLAUDE_PROJECT_DIR` + `permissions.additionalDirectories` in settings files (matching the official JSON schema at `https://json.schemastore.org/claude-code-settings.json`). A top-level `additionalDirectories` outside `permissions` is ignored. Directories added via `--add-dir` or `/add-dir` at runtime are not visible to the hook.
 - Git subcommands are parsed with limited coverage. Read-only subcommands (status, log, diff, show, etc.) are auto-allowed with no rules. Local-write subcommands (add, commit, restore, checkout, merge, etc.) emit `Write(.git)` and are file_only=true — only a Write rule is needed, not a Bash rule. Network subcommands (fetch, pull, push, clone) emit file accesses but are file_only=false — a Bash rule is always required. Unknown subcommands (bisect, submodule, format-patch, archive, subrepo) require a Bash rule. Global options `-C`, `--git-dir`, `--work-tree` are parsed; `-c key=value` is consumed correctly and always forces a Bash rule (it can register aliases that intercept any subcommand).
 - `git worktree list` is auto-allowed; `add`/`remove`/`move` emit `Write(<path>)` + `Write(.git)` and are file_only=true (for `add <path> <commit-ish>`, only the first positional is treated as a path — the second is a commit-ish); `lock`/`unlock`/`repair`/`prune` emit `Write(.git)`. Unknown `worktree` sub-subcommands require a Bash rule. `git worktree --help` and `git worktree <sub> --help` (with `--help` as the first arg after the sub-subcommand) are auto-allowed as read-only; later-position `--help`/`-h` is NOT short-circuited because it may be a value for a value-taking flag like `--reason`. An unknown flag in `worktree add` falls through to a Bash rule (an unrecognized value-taking flag could otherwise silently steal the path positional).
@@ -105,7 +122,7 @@ stdin JSON → parse permission_mode →
 - Informational invocations (`git` alone, `git --version`, `--help`, bare `--exec-path`/`--html-path`/`--man-path`/`--info-path`) are auto-allowed as read-only. `--help` is only recognized at the global level; `git <subcmd> --help` is not generally detected except for `git worktree [sub] --help`. The `--exec-path=<path>` form (with value) is a setter and falls through to the subcommand.
 - Command names are normalized before parser dispatch and rule matching: `/usr/bin/python3` → `python3`, `python.exe` → `python`, `bash.exe` → `bash`. This means `Bash(python3 *)` rules match absolute-path invocations. Versioned Python interpreters (`python3.12`, `python3.13t`) are also recognized.
 - `uv run` is a transparent wrapper: `uv run python -c "..."` is analyzed as if `python -c "..."` were the command. The wrapper's flags (`--with`, `--directory`, etc.) are consumed; unrecognized flags force a Bash rule. The logged rule is `Bash(uv run python -c *)`, matching the actual command.
-- The `Monitor` tool is treated as a transparent wrapper around `Bash`: its `command` field is parsed and analyzed identically, and the same `Bash(...)` allow/deny rules apply. The `description`, `persistent`, and `timeout_ms` fields are ignored — they affect runtime lifetime and presentation, not what the command does. So `Monitor("tail -f /tmp/x")` is auto-allowed under `Bash(tail -f *)` exactly like a direct Bash call. A `Monitor` invocation in `bypassPermissions` mode is logged as `Monitor(bypassPermissions)`; in normal mode it's logged as the raw command (indistinguishable from a Bash call).
+- The `Monitor` tool is treated as a transparent wrapper around `Bash`: its `command` field is parsed and analyzed identically, and the same `Bash(...)` allow/deny rules apply. The `description`, `persistent`, and `timeout_ms` fields are ignored — they affect runtime lifetime and presentation, not what the command does. So `Monitor("tail -f /tmp/x")` is auto-allowed under `Bash(tail -f *)` exactly like a direct Bash call. Monitor is logged identically to Bash in every mode (the prior `Monitor(bypassPermissions)` special-case log label is gone with the end-stage transform).
 - `python -c` and `python3 -c` inline scripts are analyzed via Python AST (rustpython-parser). If the script only uses `open()` with static string paths and no unsafe patterns (exec, eval, subprocess, shutil, etc.), file accesses are extracted and checked against Read/Write rules — no `Bash()` rule is needed. Unanalyzable scripts fall back to `Bash(python3 -c *)`.
 - Python AST analysis covers: `open()` and `io.open()` for file reads/writes; `os.remove`/`os.unlink`/`os.rmdir`/`os.removedirs`/`os.makedirs`/`os.mkdir`/`os.truncate`/`os.chmod`/`os.chown` etc. as Write(path); `os.rename`/`os.replace`/`os.link`/`os.symlink` as Read(src)+Write(dst). All require static string paths; dynamic paths fall back to Ask. `shutil.*` still triggers fallback. `pathlib.Path` method chains are not yet detected.
 - `rustpython-parser` 0.4.0 does not support Python 3.12 relaxed f-string quoting (PEP 701). Scripts with `f"{d["key"]}"` (same quote type inside and outside f-string braces) fail to parse. The workaround is to use different quote types: `f'{d["key"]}'`.

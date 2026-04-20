@@ -1,67 +1,79 @@
-use claude_scriptcheck::checker::Decision;
+use claude_scriptcheck::checker::{CheckResult, Decision};
 use claude_scriptcheck::{checker, permission, settings};
 
 /// Parse and check a command against the user's actual settings.
-fn check_command(command: &str, cwd: &str) -> Decision {
+fn check_command(command: &str, cwd: &str) -> CheckResult {
     let loaded = settings::load_settings(cwd, cwd);
     let parsed_perms = permission::parse_rules(&loaded.permissions);
     let program = thaum::parse_with(command, thaum::Dialect::Bash).unwrap();
-    checker::check_program(&program, &parsed_perms, cwd).decision
+    checker::check_program(&program, &parsed_perms, cwd)
 }
 
 // ── Logic tests (via library API) ───────────────────────────────────────────
 
 #[skuld::test]
 fn allowed_command_from_settings() {
-    assert_eq!(check_command("ls -la /tmp", "/tmp"), Decision::Allow);
+    assert_eq!(
+        check_command("ls -la /tmp", "/tmp").decision,
+        Decision::Allow,
+    );
 }
 
 #[skuld::test]
 fn unallowed_command_asks() {
-    assert!(matches!(
-        check_command("my-totally-unknown-command --flag", "/tmp"),
-        Decision::Ask(_)
-    ));
+    assert_eq!(
+        check_command("my-totally-unknown-command --flag", "/tmp").decision,
+        Decision::Ask,
+    );
 }
 
 #[skuld::test]
 fn redirect_to_allowed_path() {
     assert_eq!(
-        check_command("echo hello > /tmp/claude/test-output.txt", "/tmp"),
+        check_command("echo hello > /tmp/claude/test-output.txt", "/tmp").decision,
         Decision::Allow,
     );
 }
 
 #[skuld::test]
 fn redirect_to_disallowed_path() {
-    let decision = check_command("echo hello > /etc/test-output.txt", "/tmp");
+    let result = check_command("echo hello > /etc/test-output.txt", "/tmp");
+    assert_eq!(result.decision, Decision::Ask);
     assert!(
-        matches!(decision, Decision::Ask(ref rules) if rules.iter().any(|r| r.contains("Write(")))
+        result.missing_rules.iter().any(|r| r.contains("Write(")),
+        "expected Write rule in missing, got {:?}",
+        result.missing_rules,
     );
 }
 
 #[skuld::test]
 fn eval_always_asks() {
-    assert!(matches!(
-        check_command("eval echo hello", "/tmp"),
-        Decision::Ask(_)
-    ));
+    assert_eq!(
+        check_command("eval echo hello", "/tmp").decision,
+        Decision::Ask,
+    );
 }
 
 #[skuld::test]
 fn pipeline_allowed() {
-    assert_eq!(check_command("echo hello | wc -l", "/tmp"), Decision::Allow);
+    assert_eq!(
+        check_command("echo hello | wc -l", "/tmp").decision,
+        Decision::Allow,
+    );
 }
 
 #[skuld::test]
 fn git_status_allowed() {
-    assert_eq!(check_command("git status --short", "/tmp"), Decision::Allow,);
+    assert_eq!(
+        check_command("git status --short", "/tmp").decision,
+        Decision::Allow,
+    );
 }
 
 #[skuld::test]
 fn cargo_check_allowed() {
     assert_eq!(
-        check_command("cargo check --all-targets", "/tmp"),
+        check_command("cargo check --all-targets", "/tmp").decision,
         Decision::Allow,
     );
 }
@@ -332,7 +344,7 @@ fn file_tool_json_with_mode(
 #[skuld::test]
 fn accept_edits_allows_workspace_write(#[fixture(temp_dir)] dir: &std::path::Path) {
     let project_root = dir.to_string_lossy().to_string();
-    let file_in_workspace = format!("{}/src/main.rs", project_root);
+    let file_in_workspace = format!("{project_root}/src/main.rs");
     std::fs::create_dir(dir.join("src")).unwrap();
 
     let input = file_tool_json_with_mode("Edit", &file_in_workspace, &project_root, Some("acceptEdits"));
@@ -346,7 +358,7 @@ fn accept_edits_allows_workspace_write(#[fixture(temp_dir)] dir: &std::path::Pat
 #[skuld::test]
 fn accept_edits_allows_workspace_write_tool(#[fixture(temp_dir)] dir: &std::path::Path) {
     let project_root = dir.to_string_lossy().to_string();
-    let file_in_workspace = format!("{}/output.txt", project_root);
+    let file_in_workspace = format!("{project_root}/output.txt");
 
     let input = file_tool_json_with_mode("Write", &file_in_workspace, &project_root, Some("acceptEdits"));
     let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
@@ -426,7 +438,7 @@ fn hook_home_override_redirects_settings_loading(#[fixture(temp_dir)] dir: &std:
 #[skuld::test]
 fn missing_permission_mode_is_default(#[fixture(temp_dir)] dir: &std::path::Path) {
     let project_root = dir.to_string_lossy().to_string();
-    let file_in_workspace = format!("{}/test.txt", project_root);
+    let file_in_workspace = format!("{project_root}/test.txt");
 
     let input = file_tool_json_with_mode("Edit", &file_in_workspace, &project_root, None);
     let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
@@ -439,7 +451,7 @@ fn missing_permission_mode_is_default(#[fixture(temp_dir)] dir: &std::path::Path
 #[skuld::test]
 fn default_mode_no_ephemeral_rules(#[fixture(temp_dir)] dir: &std::path::Path) {
     let project_root = dir.to_string_lossy().to_string();
-    let file_in_workspace = format!("{}/test.txt", project_root);
+    let file_in_workspace = format!("{project_root}/test.txt");
 
     let input = file_tool_json_with_mode("Edit", &file_in_workspace, &project_root, Some("default"));
     let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
@@ -556,7 +568,10 @@ fn bypass_allows_glob() {
 }
 
 #[skuld::test]
-fn bypass_allows_unknown_tool() {
+fn bypass_unknown_tool_silent_exits() {
+    // scriptcheck doesn't emit decisions for tools it wasn't designed to handle,
+    // regardless of permission mode. Claude Code applies its own per-mode default
+    // when the hook stays silent.
     let input = hook_json_with_mode(
         "Agent",
         serde_json::json!({}),
@@ -566,13 +581,18 @@ fn bypass_allows_unknown_tool() {
     let output = run_binary_with_env(&input, &[]);
 
     assert_eq!(output.status.code(), Some(0));
-    // Without bypass, unknown tools exit silently with no stdout.
-    // With bypass, they should get an explicit allow.
-    assert_eq!(parse_decision(&output), "allow");
+    assert!(
+        output.stdout.is_empty(),
+        "expected empty stdout for unknown tool in bypass, got: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
 }
 
 #[skuld::test]
-fn bypass_reason_message() {
+fn bypass_ls_is_allowed() {
+    // After the refactor, bypass mode runs the full pipeline. A scriptcheck-ask
+    // command (ls has no matching allow rule in /tmp settings) is converted to
+    // allow via apply_permission_mode's Ask→Allow transform.
     let input = hook_json_with_mode(
         "Bash",
         serde_json::json!({"command": "ls"}),
@@ -582,11 +602,7 @@ fn bypass_reason_message() {
     let output = run_binary_with_env(&input, &[]);
 
     assert_eq!(output.status.code(), Some(0));
-    let reason = parse_reason(&output);
-    assert!(
-        reason.contains("bypassPermissions"),
-        "reason should mention bypassPermissions, got: {reason}"
-    );
+    assert_eq!(parse_decision(&output), "allow");
 }
 
 #[skuld::test]
@@ -609,8 +625,9 @@ fn bypass_camelcase_key() {
 }
 
 #[skuld::test]
-fn bypass_empty_bash_command() {
-    // Empty Bash command normally exits silently; bypass should produce explicit allow.
+fn bypass_empty_bash_command_silent_exits() {
+    // Empty Bash command is a malformed input scriptcheck wasn't designed for;
+    // silent-exit regardless of mode.
     let input = hook_json_with_mode(
         "Bash",
         serde_json::json!({"command": ""}),
@@ -620,12 +637,16 @@ fn bypass_empty_bash_command() {
     let output = run_binary_with_env(&input, &[]);
 
     assert_eq!(output.status.code(), Some(0));
-    assert_eq!(parse_decision(&output), "allow");
+    assert!(
+        output.stdout.is_empty(),
+        "expected empty stdout for empty Bash command, got: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
 }
 
 #[skuld::test]
 fn bypass_missing_tool_input_fields() {
-    // Write tool with no file_path — bypass should still allow (early return before validation).
+    // Write tool with no file_path — missing-path emits Ask, transform converts to Allow in bypass.
     let input = hook_json_with_mode(
         "Write",
         serde_json::json!({}),
@@ -636,6 +657,503 @@ fn bypass_missing_tool_input_fields() {
 
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(parse_decision(&output), "allow");
+    let reason = parse_reason(&output);
+    assert!(
+        reason.contains("Missing file path"),
+        "bypass should preserve the informative reason via custom_reason, got: {reason}"
+    );
+}
+
+// ── Permission mode (auto) tests ────────────────────────────────────────────
+
+#[skuld::test]
+fn auto_allows_unmatched_bash() {
+    // Ask-worthy command in auto mode is transformed to Allow so scriptcheck
+    // doesn't add an extra prompt layer above Claude Code's own classifier.
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "my-totally-unknown-cmd --flag"}),
+        "/tmp",
+        Some("auto"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+}
+
+#[skuld::test]
+fn auto_respects_deny_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // Deny rules fire in auto mode — that's the hardening value of keeping
+    // scriptcheck as a pre-classifier layer.
+    let project_root = dir.to_string_lossy().to_string();
+    std::fs::create_dir_all(dir.join(".claude")).unwrap();
+    std::fs::write(
+        dir.join(".claude/settings.json"),
+        r#"{"permissions":{"deny":["Bash(rm *)"]}}"#,
+    )
+    .unwrap();
+
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "rm -rf /tmp/claude-test"}),
+        &project_root,
+        Some("auto"),
+    );
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "deny");
+}
+
+#[skuld::test]
+fn auto_preserves_missing_rules_after_transform(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // Ask → Allow transform must not drop the missing_rules list from the log.
+    let project_root = dir.to_string_lossy().to_string();
+    let log_path = dir.join("test-log.yaml");
+
+    let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "my-totally-unknown-xyzzy"}),
+        &project_root,
+        Some("auto"),
+    );
+    let output = Command::new(binary)
+        .env("CLAUDE_SCRIPTCHECK_HOOK_HOME", dir)
+        .env("CLAUDE_SCRIPTCHECK_LOG_PATH", &log_path)
+        .env("CLAUDE_PROJECT_DIR", &project_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child.stdin.take().unwrap().write_all(&input)?;
+            child.wait_with_output()
+        })
+        .expect("binary run");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+
+    let log = std::fs::read_to_string(&log_path).expect("log file");
+    assert!(
+        log.contains("xyzzy"),
+        "log should record the unmatched rule (contains 'xyzzy'), got:\n{log}"
+    );
+    assert!(
+        log.contains("missing_rules") || log.contains("missing-rules"),
+        "log should record missing_rules field, got:\n{log}"
+    );
+}
+
+#[skuld::test]
+fn auto_respects_read_deny_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let canonical = std::fs::canonicalize(dir).unwrap();
+    let project_root = canonical.to_string_lossy().replace('\\', "/");
+    let secret_path = format!("{project_root}/secret.txt");
+    std::fs::write(&secret_path, "secret").unwrap();
+    std::fs::create_dir_all(canonical.join(".claude")).unwrap();
+    // `//path` is Claude Code's absolute-path escape; bare `/path` is
+    // interpreted as project-root-relative.
+    std::fs::write(
+        canonical.join(".claude/settings.json"),
+        format!(r#"{{"permissions":{{"deny":["Read(/{project_root}/secret.txt)"]}}}}"#),
+    )
+    .unwrap();
+
+    let input = file_tool_json_with_mode("Read", &secret_path, &project_root, Some("auto"));
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "deny");
+}
+
+// ── Permission mode (dontAsk) tests ─────────────────────────────────────────
+
+#[skuld::test]
+fn dont_ask_denies_unmatched_bash() {
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "my-totally-unknown-cmd --flag"}),
+        "/tmp",
+        Some("dontAsk"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "deny");
+    let reason = parse_reason(&output);
+    assert!(
+        reason.starts_with("dontAsk mode: command requires rule(s)"),
+        "reason should describe dontAsk deny, got: {reason}"
+    );
+    assert!(
+        reason.contains("my-totally-unknown-cmd") || reason.contains("Bash("),
+        "reason should name the missing rule, got: {reason}"
+    );
+}
+
+#[skuld::test]
+fn dont_ask_respects_allow_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let project_root = dir.to_string_lossy().to_string();
+    std::fs::create_dir_all(dir.join(".claude")).unwrap();
+    std::fs::write(
+        dir.join(".claude/settings.json"),
+        r#"{"permissions":{"allow":["Bash(echo *)"]}}"#,
+    )
+    .unwrap();
+
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "echo hello"}),
+        &project_root,
+        Some("dontAsk"),
+    );
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+}
+
+#[skuld::test]
+fn dont_ask_respects_deny_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let project_root = dir.to_string_lossy().to_string();
+    std::fs::create_dir_all(dir.join(".claude")).unwrap();
+    std::fs::write(
+        dir.join(".claude/settings.json"),
+        r#"{"permissions":{"deny":["Bash(rm *)"]}}"#,
+    )
+    .unwrap();
+
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "rm /tmp/nothing"}),
+        &project_root,
+        Some("dontAsk"),
+    );
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "deny");
+}
+
+#[skuld::test]
+fn dont_ask_denies_grep_without_rule() {
+    let input = hook_json_with_mode(
+        "Grep",
+        serde_json::json!({"pattern": "x", "path": "/etc"}),
+        "/tmp",
+        Some("dontAsk"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "deny");
+}
+
+#[skuld::test]
+fn missing_file_path_in_dont_ask_denies() {
+    let input = hook_json_with_mode(
+        "Write",
+        serde_json::json!({}),
+        "/tmp",
+        Some("dontAsk"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "deny");
+}
+
+// ── Permission mode (bypass) deny-respecting regression tests ───────────────
+
+#[skuld::test]
+fn bypass_respects_bash_deny_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // Behavior change: bypass used to unconditionally allow; now deny rules fire.
+    let project_root = dir.to_string_lossy().to_string();
+    std::fs::create_dir_all(dir.join(".claude")).unwrap();
+    std::fs::write(
+        dir.join(".claude/settings.json"),
+        r#"{"permissions":{"deny":["Bash(rm *)"]}}"#,
+    )
+    .unwrap();
+
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "rm -rf /tmp/claude-test"}),
+        &project_root,
+        Some("bypassPermissions"),
+    );
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "deny");
+}
+
+#[skuld::test]
+fn bypass_respects_file_deny_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let canonical = std::fs::canonicalize(dir).unwrap();
+    let project_root = canonical.to_string_lossy().replace('\\', "/");
+    let forbidden_path = format!("{project_root}/forbidden.txt");
+    std::fs::create_dir_all(canonical.join(".claude")).unwrap();
+    // `//path` is Claude Code's absolute-path escape.
+    std::fs::write(
+        canonical.join(".claude/settings.json"),
+        format!(
+            r#"{{"permissions":{{"deny":["Write(/{project_root}/forbidden.txt)"]}}}}"#,
+        ),
+    )
+    .unwrap();
+
+    let input = file_tool_json_with_mode(
+        "Write",
+        &forbidden_path,
+        &project_root,
+        Some("bypassPermissions"),
+    );
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "deny");
+}
+
+#[skuld::test]
+fn bypass_respects_monitor_deny_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // Monitor is a transparent Bash wrapper — deny rules must fire the same way.
+    let project_root = dir.to_string_lossy().to_string();
+    std::fs::create_dir_all(dir.join(".claude")).unwrap();
+    std::fs::write(
+        dir.join(".claude/settings.json"),
+        r#"{"permissions":{"deny":["Bash(rm *)"]}}"#,
+    )
+    .unwrap();
+
+    let input = hook_json_with_mode(
+        "Monitor",
+        serde_json::json!({
+            "command": "rm -rf /tmp/claude-test",
+            "description": "test",
+            "persistent": false,
+            "timeout_ms": 1000
+        }),
+        &project_root,
+        Some("bypassPermissions"),
+    );
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "deny");
+}
+
+// ── Parse failure transform tests ───────────────────────────────────────────
+
+#[skuld::test]
+fn bash_parse_failure_in_bypass_allows() {
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "if then fi else"}),
+        "/tmp",
+        Some("bypassPermissions"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+    let reason = parse_reason(&output);
+    assert!(
+        reason.to_lowercase().contains("parse"),
+        "custom_reason should preserve parse-failure text even after transform, got: {reason}"
+    );
+}
+
+#[skuld::test]
+fn bash_parse_failure_in_auto_allows() {
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "if then fi else"}),
+        "/tmp",
+        Some("auto"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+    let reason = parse_reason(&output);
+    assert!(
+        reason.to_lowercase().contains("parse"),
+        "auto should preserve parse-failure reason via custom_reason, got: {reason}"
+    );
+}
+
+#[skuld::test]
+fn bash_parse_failure_in_dont_ask_denies() {
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "if then fi else"}),
+        "/tmp",
+        Some("dontAsk"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "deny");
+    let reason = parse_reason(&output);
+    // custom_reason (parse-failure context) is prefixed in the Deny reason so
+    // the user sees both WHY the command was ambiguous AND the dontAsk explanation.
+    assert!(
+        reason.to_lowercase().contains("parse"),
+        "dontAsk should prefix parse-failure context onto the deny reason, got: {reason}"
+    );
+    assert!(
+        reason.contains("dontAsk mode"),
+        "dontAsk should still include the mode explanation, got: {reason}"
+    );
+}
+
+#[skuld::test]
+fn dont_ask_full_reason_format() {
+    // Pin the exact reason wording so accidental drift is caught.
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "my-unknown-xyz"}),
+        "/tmp",
+        Some("dontAsk"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+    assert_eq!(parse_decision(&output), "deny");
+    let reason = parse_reason(&output);
+    assert!(
+        reason.starts_with("dontAsk mode: command requires rule(s) not in settings:"),
+        "reason prefix should match, got: {reason}"
+    );
+    assert!(
+        reason.ends_with("Add the listed rule(s) to permissions.allow to run this."),
+        "reason suffix should guide the user to the fix, got: {reason}"
+    );
+    assert!(
+        reason.contains("Bash(my-unknown-xyz)"),
+        "reason should list the missing rule, got: {reason}"
+    );
+}
+
+#[skuld::test]
+fn dont_ask_preserves_missing_rules_in_log(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // Regression guard: Ask → Deny transform under dontAsk must keep the
+    // structured missing_rules list in the YAML log (not just in the reason text).
+    let project_root = dir.to_string_lossy().to_string();
+    let log_path = dir.join("test-log.yaml");
+
+    let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "unique-dontask-marker-abc"}),
+        &project_root,
+        Some("dontAsk"),
+    );
+    let output = Command::new(binary)
+        .env("CLAUDE_SCRIPTCHECK_HOOK_HOME", dir)
+        .env("CLAUDE_SCRIPTCHECK_LOG_PATH", &log_path)
+        .env("CLAUDE_PROJECT_DIR", &project_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child.stdin.take().unwrap().write_all(&input)?;
+            child.wait_with_output()
+        })
+        .expect("binary run");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "deny");
+
+    let log = std::fs::read_to_string(&log_path).expect("log file");
+    assert!(
+        log.contains("missing_rules"),
+        "log should record missing_rules field for dontAsk Deny, got:\n{log}"
+    );
+    assert!(
+        log.contains("Bash(unique-dontask-marker-abc)"),
+        "log should list the unmatched rule, got:\n{log}"
+    );
+}
+
+#[skuld::test]
+fn cli_check_parse_failure_bypass_allows() {
+    // Match the hook path for unparseable input.
+    let output = run_check_cli(&[
+        "if then fi else",
+        "--cwd",
+        "/tmp",
+        "--permission-mode",
+        "bypassPermissions",
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("ALLOW"),
+        "expected ALLOW for bypass + parse failure, got: {stdout}",
+    );
+    assert!(
+        stdout.to_lowercase().contains("parse"),
+        "custom_reason should surface the parse-failure text, got: {stdout}",
+    );
+}
+
+#[skuld::test]
+fn cli_check_parse_failure_dont_ask_denies() {
+    let output = run_check_cli(&[
+        "if then fi else",
+        "--cwd",
+        "/tmp",
+        "--permission-mode",
+        "dontAsk",
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "deny exits nonzero; stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("DENY"),
+        "expected DENY for dontAsk + parse failure, got: {stdout}",
+    );
+}
+
+// ── plan and unknown mode passthrough ───────────────────────────────────────
+
+#[skuld::test]
+fn plan_mode_behaves_as_default() {
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "my-totally-unknown-cmd"}),
+        "/tmp",
+        Some("plan"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "ask");
+}
+
+#[skuld::test]
+fn unknown_permission_mode_behaves_as_default() {
+    // Forward-compat: an unknown mode string falls back to default behavior
+    // (PermissionMode::from_hook_str returns None for unrecognized inputs).
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "my-totally-unknown-cmd"}),
+        "/tmp",
+        Some("futureMode"),
+    );
+    let output = run_binary_with_env(&input, &[]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "ask");
 }
 
 // ── Monitor tool tests ──────────────────────────────────────────────────────
@@ -777,5 +1295,89 @@ fn accept_edits_allows_monitor_workspace_write(#[fixture(temp_dir)] dir: &std::p
     assert_eq!(
         decision, "allow",
         "acceptEdits + Monitor workspace write should auto-allow"
+    );
+}
+
+// ── CLI dry-run (--permission-mode) tests ───────────────────────────────────
+
+fn run_check_cli(args: &[&str]) -> std::process::Output {
+    let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
+    let mut cmd = Command::new(binary);
+    let _log_guard = apply_test_isolation(&mut cmd);
+    cmd.arg("check");
+    cmd.args(args);
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("cli run")
+}
+
+#[skuld::test]
+fn cli_check_auto_allows_unmatched() {
+    let output = run_check_cli(&[
+        "my-totally-unknown-cli-cmd",
+        "--cwd",
+        "/tmp",
+        "--permission-mode",
+        "auto",
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("ALLOW"),
+        "expected ALLOW for auto mode, got: {stdout}",
+    );
+}
+
+#[skuld::test]
+fn cli_check_dont_ask_denies_unmatched() {
+    let output = run_check_cli(&[
+        "my-totally-unknown-cli-cmd",
+        "--cwd",
+        "/tmp",
+        "--permission-mode",
+        "dontAsk",
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "deny exits nonzero; stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("DENY"),
+        "expected DENY for dontAsk mode, got: {stdout}",
+    );
+}
+
+#[skuld::test]
+fn cli_check_default_mode_asks_unmatched() {
+    let output = run_check_cli(&["my-totally-unknown-cli-cmd", "--cwd", "/tmp"]);
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("ASK"),
+        "expected ASK for default mode, got: {stdout}",
+    );
+}
+
+#[skuld::test]
+fn cli_check_rejects_invalid_mode() {
+    // clap's ValueEnum rejects values that don't match the enum.
+    let output = run_check_cli(&[
+        "my-totally-unknown-cli-cmd",
+        "--cwd",
+        "/tmp",
+        "--permission-mode",
+        "not-a-real-mode",
+    ]);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "clap should reject unknown --permission-mode values; got stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
 }

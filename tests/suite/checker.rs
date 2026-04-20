@@ -1,4 +1,4 @@
-use claude_scriptcheck::checker::{check_file_accesses, check_program, Decision};
+use claude_scriptcheck::checker::{check_file_accesses, check_program, CheckResult, Decision};
 use claude_scriptcheck::file_access::{AccessKind, FileAccess};
 use claude_scriptcheck::path_util;
 use claude_scriptcheck::permission::{self, ParsedPermissions};
@@ -18,40 +18,40 @@ fn make_perms(allow: &[&str], deny: &[&str]) -> ParsedPermissions {
     make_perms_full(allow, deny, &[])
 }
 
-fn check(cmd: &str, allow: &[&str], deny: &[&str]) -> Decision {
+fn check(cmd: &str, allow: &[&str], deny: &[&str]) -> CheckResult {
     let perms = make_perms(allow, deny);
     let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
-    check_program(&program, &perms, "/tmp").decision
+    check_program(&program, &perms, "/tmp")
 }
 
-fn check_with_ask(cmd: &str, allow: &[&str], deny: &[&str], ask: &[&str]) -> Decision {
+fn check_with_ask(cmd: &str, allow: &[&str], deny: &[&str], ask: &[&str]) -> CheckResult {
     let perms = make_perms_full(allow, deny, ask);
     let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
-    check_program(&program, &perms, "/tmp").decision
+    check_program(&program, &perms, "/tmp")
 }
 
-fn check_cwd(cmd: &str, allow: &[&str], deny: &[&str], cwd: &str) -> Decision {
+fn check_cwd(cmd: &str, allow: &[&str], deny: &[&str], cwd: &str) -> CheckResult {
     let perms = make_perms(allow, deny);
     let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
-    check_program(&program, &perms, cwd).decision
+    check_program(&program, &perms, cwd)
 }
 
 #[skuld::test]
 fn simple_allowed_command() {
     let d = check("ls -la", &["Bash(ls *)", "Bash(ls)"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn simple_unmatched_command() {
     let d = check("rm -rf /", &["Bash(ls *)"], &[]);
-    assert!(matches!(d, Decision::Ask(_)));
+    assert_eq!(d.decision, Decision::Ask);
 }
 
 #[skuld::test]
 fn denied_command() {
     let d = check("rm -rf /", &[], &["Bash(rm *)"]);
-    assert!(matches!(d, Decision::Deny(_)));
+    assert!(matches!(d.decision, Decision::Deny(_)));
 }
 
 #[skuld::test]
@@ -61,7 +61,7 @@ fn pipeline_both_allowed() {
         &["Bash(cat *)", "Bash(grep *)"],
         &[],
     );
-    assert!(matches!(d, Decision::Ask(_)));
+    assert_eq!(d.decision, Decision::Ask);
 }
 
 #[skuld::test]
@@ -71,7 +71,7 @@ fn pipeline_both_allowed_with_read_rule() {
         &["Bash(cat *)", "Bash(grep *)", "Read(/tmp/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -81,14 +81,15 @@ fn redirect_write_allowed() {
         &["Bash(echo *)", "Write(/tmp/claude/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn redirect_write_no_rule() {
     let d = check("echo hello > /etc/passwd", &["Bash(echo *)"], &[]);
-    assert!(matches!(d, Decision::Ask(_)));
-    if let Decision::Ask(missing) = d {
+    assert_eq!(d.decision, Decision::Ask);
+    if d.decision == Decision::Ask {
+        let missing = &d.missing_rules;
         assert!(missing.iter().any(|r| r.contains("Write(")));
     }
 }
@@ -96,38 +97,39 @@ fn redirect_write_no_rule() {
 #[skuld::test]
 fn eval_always_asks() {
     let d = check("eval echo hello", &["Bash(eval *)", "Bash(echo *)"], &[]);
-    assert!(matches!(d, Decision::Ask(_)));
+    assert_eq!(d.decision, Decision::Ask);
 }
 
 #[skuld::test]
 fn empty_command_allows() {
     let d = check("FOO=bar", &[], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn and_chain() {
     let d = check("echo a && echo b", &["Bash(echo *)", "Bash(echo)"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn and_chain_partial_deny() {
     let d = check("echo a && rm foo", &["Bash(echo *)"], &["Bash(rm *)"]);
-    assert!(matches!(d, Decision::Deny(_)));
+    assert!(matches!(d.decision, Decision::Deny(_)));
 }
 
 #[skuld::test]
 fn redirect_to_dev_null_needs_write_rule() {
     let d = check("echo hello 2>/dev/null", &["Bash(echo *)"], &[]);
-    assert!(matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.contains("Write("))));
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(d.missing_rules.iter().any(|r| r.contains("Write(")));
 
     let d = check(
         "echo hello 2>/dev/null",
         &["Bash(echo *)", "Write(/dev/*)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -137,20 +139,21 @@ fn compound_if() {
         &["Bash(true)", "Bash(echo *)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn compound_for() {
     let d = check("for f in a b; do echo $f; done", &["Bash(echo *)"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn source_reads_file() {
     let d = check("source /tmp/script.sh", &["Bash(source *)"], &[]);
-    assert!(matches!(d, Decision::Ask(_)));
-    if let Decision::Ask(missing) = d {
+    assert_eq!(d.decision, Decision::Ask);
+    if d.decision == Decision::Ask {
+        let missing = &d.missing_rules;
         assert!(missing.iter().any(|r| r.contains("Read(")));
     }
 }
@@ -162,7 +165,7 @@ fn source_reads_file_with_read_rule() {
         &["Bash(source *)", "Read(/tmp/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -172,7 +175,7 @@ fn append_redirect() {
         &["Bash(echo *)", "Write(/tmp/claude/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -182,7 +185,7 @@ fn input_redirect() {
         &["Bash(wc *)", "Read(/tmp/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -192,7 +195,7 @@ fn heredoc_no_file_access() {
         &["Bash(cat *)", "Bash(cat)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -202,7 +205,7 @@ fn cp_read_and_write() {
         &["Bash(cp *)", "Read(/tmp/**)", "Write(/tmp/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -212,8 +215,9 @@ fn cp_missing_write_rule() {
         &["Bash(cp *)", "Read(/tmp/**)"],
         &[],
     );
-    assert!(matches!(d, Decision::Ask(_)));
-    if let Decision::Ask(missing) = d {
+    assert_eq!(d.decision, Decision::Ask);
+    if d.decision == Decision::Ask {
+        let missing = &d.missing_rules;
         assert!(missing.iter().any(|r| r.contains("Write(")));
     }
 }
@@ -225,7 +229,7 @@ fn deny_takes_precedence_for_file() {
         &["Bash(cat *)", "Read(/etc/**)"],
         &["Read(/etc/shadow)"],
     );
-    assert!(matches!(d, Decision::Deny(_)));
+    assert!(matches!(d.decision, Decision::Deny(_)));
 }
 
 #[skuld::test]
@@ -235,31 +239,31 @@ fn or_chain() {
         &["Bash(true)", "Bash(echo *)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn negation() {
     let d = check("! true", &["Bash(true)"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn dynamic_command_name() {
     let d = check("$CMD arg", &[], &[]);
-    assert!(matches!(d, Decision::Ask(_)));
+    assert_eq!(d.decision, Decision::Ask);
 }
 
 #[skuld::test]
 fn awk_pattern_not_treated_as_file() {
     let d = check("awk '/pattern/{ print }'", &["Bash(awk *)"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn awk_double_quoted_pattern_not_treated_as_file() {
     let d = check(r#"awk "/pattern/{ print }""#, &["Bash(awk *)"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -269,19 +273,19 @@ fn awk_with_file_reads_file_not_pattern() {
         &["Bash(awk *)", "Read(/tmp/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn grep_pattern_not_treated_as_file() {
     let d = check("grep 'pattern'", &["Bash(grep *)"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn tr_no_file_access() {
     let d = check("tr 'a-z' 'A-Z'", &["Bash(tr *)"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -291,7 +295,7 @@ fn sed_script_not_treated_as_file() {
         &["Bash(sed *)", "Read(/tmp/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 // ── File-only command tests ─────────────────────────────────────────────────
@@ -299,7 +303,7 @@ fn sed_script_not_treated_as_file() {
 #[skuld::test]
 fn mkdir_allowed_by_write_rule() {
     let d = check("mkdir /tmp/claude/foo", &["Write(/tmp/claude/**)"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -309,54 +313,58 @@ fn mkdir_p_allowed_by_write_rule() {
         &["Write(/tmp/claude/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn mkdir_missing_write_rule_asks_for_write_not_bash() {
     let d = check("mkdir /home/user/foo", &[], &[]);
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(rules.iter().any(|r| r.contains("Write(")));
         assert!(!rules.iter().any(|r| r.starts_with("Bash(")));
     } else {
-        panic!("expected Ask, got {:?}", d);
+        panic!("expected Ask, got {d:?}");
     }
 }
 
 #[skuld::test]
 fn mkdir_dynamic_arg_needs_bash_rule() {
     let d = check("mkdir $VAR", &["Write(/tmp/**)"], &[]);
-    assert!(matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))));
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(d.missing_rules.iter().any(|r| r.starts_with("Bash(")));
 }
 
 #[skuld::test]
 fn mkdir_no_args_needs_bash_rule() {
     let d = check("mkdir", &["Write(/tmp/**)"], &[]);
-    assert!(matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))));
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(d.missing_rules.iter().any(|r| r.starts_with("Bash(")));
 }
 
 #[skuld::test]
 fn touch_allowed_by_write_rule() {
     let d = check("touch /tmp/claude/foo", &["Write(/tmp/claude/**)"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn cat_allowed_by_read_rule() {
     let d = check("cat /tmp/file.txt", &["Read(/tmp/**)"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn rm_allowed_by_write_rule() {
     let d = check("rm /tmp/claude/foo.txt", &["Write(/tmp/claude/**)"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn source_still_needs_bash_rule() {
     let d = check("source /tmp/script.sh", &["Read(/tmp/**)"], &[]);
-    assert!(matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))));
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(d.missing_rules.iter().any(|r| r.starts_with("Bash(")));
 }
 
 #[skuld::test]
@@ -366,30 +374,32 @@ fn cp_allowed_by_file_rules() {
         &["Read(/tmp/**)", "Write(/tmp/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn cp_missing_write_asks_for_write_not_bash() {
     let d = check("cp /tmp/a.txt /home/user/b.txt", &["Read(/tmp/**)"], &[]);
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(rules.iter().any(|r| r.contains("Write(")));
         assert!(!rules.iter().any(|r| r.starts_with("Bash(")));
     } else {
-        panic!("expected Ask, got {:?}", d);
+        panic!("expected Ask, got {d:?}");
     }
 }
 
 #[skuld::test]
 fn grep_with_file_allowed_by_read_rule() {
     let d = check("grep pattern /tmp/data.txt", &["Read(/tmp/**)"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn grep_stdin_only_needs_bash_rule() {
     let d = check("grep pattern", &["Read(/tmp/**)"], &[]);
-    assert!(matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))));
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(d.missing_rules.iter().any(|r| r.starts_with("Bash(")));
 }
 
 #[skuld::test]
@@ -399,7 +409,7 @@ fn file_only_with_bash_deny_still_denied() {
         &["Write(/tmp/claude/**)"],
         &["Bash(mkdir *)"],
     );
-    assert!(matches!(d, Decision::Deny(_)));
+    assert!(matches!(d.decision, Decision::Deny(_)));
 }
 
 #[skuld::test]
@@ -409,7 +419,7 @@ fn file_only_with_explicit_bash_rule_still_works() {
         &["Bash(mkdir *)", "Write(/tmp/claude/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -420,7 +430,7 @@ fn file_only_with_bash_ask_still_asks() {
         &[],
         &["Bash(mkdir *)"],
     );
-    assert!(matches!(d, Decision::Ask(_)));
+    assert_eq!(d.decision, Decision::Ask);
 }
 
 // ── Bare rules (tool-level wildcards) ──
@@ -428,13 +438,13 @@ fn file_only_with_bash_ask_still_asks() {
 #[skuld::test]
 fn bare_read_allows_file_access() {
     let d = check("cat /tmp/file.txt", &["Bash(cat *)", "Read"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn bare_write_allows_file_access() {
     let d = check("echo hi > /tmp/out.txt", &["Bash(echo *)", "Write"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 // ── Script-runner inline-script sanitization ──
@@ -442,7 +452,8 @@ fn bare_write_allows_file_access() {
 #[skuld::test]
 fn bash_c_logs_wildcard_rule() {
     let d = check("bash -c 'echo hello'", &[], &[]);
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(
             rules.iter().any(|r| r == "Bash(bash -c *)"),
             "expected 'Bash(bash -c *)', got {rules:?}",
@@ -455,7 +466,8 @@ fn bash_c_logs_wildcard_rule() {
 #[skuld::test]
 fn bash_xc_logs_wildcard_rule() {
     let d = check("bash -xc 'echo hello'", &[], &[]);
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(
             rules.iter().any(|r| r == "Bash(bash -xc *)"),
             "expected 'Bash(bash -xc *)', got {rules:?}",
@@ -469,14 +481,15 @@ fn bash_xc_logs_wildcard_rule() {
 fn python_c_pure_computation_allows() {
     // Python AST analysis sees print(1) has no file I/O → auto-allow
     let d = check("python3 -c 'print(1)'", &[], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn python_c_unanalyzable_logs_wildcard_rule() {
     // exec() is unanalyzable → falls back to Bash(python3 -c *)
     let d = check("python3 -c 'exec(\"bad\")'", &[], &[]);
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(
             rules.iter().any(|r| r == "Bash(python3 -c *)"),
             "expected 'Bash(python3 -c *)', got {rules:?}",
@@ -489,7 +502,8 @@ fn python_c_unanalyzable_logs_wildcard_rule() {
 #[skuld::test]
 fn python_script_file_logs_normal_rule() {
     let d = check("python3 script.py", &[], &[]);
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(
             rules
                 .iter()
@@ -504,13 +518,14 @@ fn python_script_file_logs_normal_rule() {
 #[skuld::test]
 fn bash_c_allowed_by_wildcard() {
     let d = check("bash -c 'echo hello'", &["Bash(bash *)"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn ruby_e_logs_wildcard_rule() {
     let d = check("ruby -e 'puts 1'", &[], &[]);
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(
             rules.iter().any(|r| r == "Bash(ruby -e *)"),
             "expected 'Bash(ruby -e *)', got {rules:?}",
@@ -523,7 +538,8 @@ fn ruby_e_logs_wildcard_rule() {
 #[skuld::test]
 fn node_e_logs_wildcard_rule() {
     let d = check("node -e 'console.log(1)'", &[], &[]);
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(
             rules.iter().any(|r| r == "Bash(node -e *)"),
             "expected 'Bash(node -e *)', got {rules:?}",
@@ -536,7 +552,8 @@ fn node_e_logs_wildcard_rule() {
 #[skuld::test]
 fn perl_e_logs_wildcard_rule() {
     let d = check("perl -e 'print 1'", &[], &[]);
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(
             rules.iter().any(|r| r == "Bash(perl -e *)"),
             "expected 'Bash(perl -e *)', got {rules:?}",
@@ -549,7 +566,8 @@ fn perl_e_logs_wildcard_rule() {
 #[skuld::test]
 fn sh_c_logs_wildcard_rule() {
     let d = check("sh -c 'ls -la'", &[], &[]);
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(
             rules.iter().any(|r| r == "Bash(sh -c *)"),
             "expected 'Bash(sh -c *)', got {rules:?}",
@@ -562,7 +580,8 @@ fn sh_c_logs_wildcard_rule() {
 #[skuld::test]
 fn bash_script_file_reads() {
     let d = check("bash script.sh", &["Bash(bash *)"], &[]);
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(
             rules.iter().any(|r| r.starts_with("Read(")),
             "expected Read rule, got {rules:?}",
@@ -575,7 +594,7 @@ fn bash_script_file_reads() {
 #[skuld::test]
 fn bash_script_file_with_read_rule() {
     let d = check("bash script.sh", &["Bash(bash *)", "Read(/tmp/**)"], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 // ── Ask rule semantics ──────────────────────────────────────────────────────
@@ -583,13 +602,13 @@ fn bash_script_file_with_read_rule() {
 #[skuld::test]
 fn ask_rule_overrides_allow_bash() {
     let d = check_with_ask("ls -la", &["Bash(ls *)"], &[], &["Bash(ls *)"]);
-    assert!(matches!(d, Decision::Ask(_)));
+    assert_eq!(d.decision, Decision::Ask);
 }
 
 #[skuld::test]
 fn ask_rule_does_not_override_deny() {
     let d = check_with_ask("rm -rf /tmp/foo", &[], &["Bash(rm *)"], &["Bash(rm *)"]);
-    assert!(matches!(d, Decision::Deny(_)));
+    assert!(matches!(d.decision, Decision::Deny(_)));
 }
 
 #[skuld::test]
@@ -600,7 +619,7 @@ fn ask_rule_overrides_allow_file_read() {
         &[],
         &["Read(/tmp/secret.txt)"],
     );
-    assert!(matches!(d, Decision::Ask(_)));
+    assert_eq!(d.decision, Decision::Ask);
 }
 
 #[skuld::test]
@@ -611,19 +630,19 @@ fn ask_rule_overrides_allow_file_write() {
         &[],
         &["Write(/tmp/out.txt)"],
     );
-    assert!(matches!(d, Decision::Ask(_)));
+    assert_eq!(d.decision, Decision::Ask);
 }
 
 #[skuld::test]
 fn ask_rule_no_match_allows_through() {
     let d = check_with_ask("ls -la", &["Bash(ls *)"], &[], &["Bash(rm *)"]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn empty_ask_rules_unchanged_behavior() {
     let d = check_with_ask("ls -la", &["Bash(ls *)"], &[], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 // ── Path canonicalization ────────────────────────────────────────────────────
@@ -649,7 +668,7 @@ fn dotdot_query_path_matches_clean_rule() {
         &[],
         &format!("{tmp}/subdir"),
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -662,7 +681,7 @@ fn rule_with_dotdot_matches_normalized_query() {
         ],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -672,7 +691,7 @@ fn dot_in_query_path_resolved() {
         &[&format!("Read({}/**)", c("/tmp")), "Bash(cat *)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -682,14 +701,14 @@ fn relative_path_in_query_canonicalized() {
         &[&format!("Write({}/**)", c("/tmp"))],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 // ── check_file_accesses tests ────────────────────────────────────────────────
 
-fn check_accesses(accesses: &[FileAccess], allow: &[&str], deny: &[&str]) -> Decision {
+fn check_accesses(accesses: &[FileAccess], allow: &[&str], deny: &[&str]) -> CheckResult {
     let perms = make_perms(allow, deny);
-    check_file_accesses(accesses, &perms, "/tmp").decision
+    check_file_accesses(accesses, &perms, "/tmp")
 }
 
 fn check_accesses_full(
@@ -697,9 +716,9 @@ fn check_accesses_full(
     allow: &[&str],
     deny: &[&str],
     ask: &[&str],
-) -> Decision {
+) -> CheckResult {
     let perms = make_perms_full(allow, deny, ask);
-    check_file_accesses(accesses, &perms, "/tmp").decision
+    check_file_accesses(accesses, &perms, "/tmp")
 }
 
 #[skuld::test]
@@ -746,7 +765,8 @@ fn file_accesses_read_no_matching_rule_asks() {
         &[],
         &[],
     );
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(
             rules.iter().any(|r| r.contains("Read(")),
             "expected Ask with Read rule, got {rules:?}",
@@ -767,7 +787,7 @@ fn file_accesses_read_ask_overrides_allow() {
         &[],
         &["Read(/tmp/secret.txt)"],
     );
-    assert!(matches!(d, Decision::Ask(_)));
+    assert_eq!(d.decision, Decision::Ask);
 }
 
 #[skuld::test]
@@ -780,7 +800,7 @@ fn file_accesses_write_allowed() {
         &["Write(/tmp/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -793,7 +813,7 @@ fn file_accesses_write_allowed_by_edit_fallback() {
         &["Edit(/tmp/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -806,13 +826,13 @@ fn file_accesses_write_denied() {
         &[],
         &["Write(/etc/**)"],
     );
-    assert!(matches!(d, Decision::Deny(_)));
+    assert!(matches!(d.decision, Decision::Deny(_)));
 }
 
 #[skuld::test]
 fn file_accesses_empty_list_allows() {
     let d = check_accesses(&[], &[], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -828,7 +848,7 @@ fn file_accesses_multiple_with_deny_stops_early() {
         },
     ];
     let d = check_accesses(&accesses, &["Read(/tmp/**)"], &["Read(/etc/shadow)"]);
-    assert!(matches!(d, Decision::Deny(_)));
+    assert!(matches!(d.decision, Decision::Deny(_)));
 }
 
 #[skuld::test]
@@ -844,7 +864,8 @@ fn file_accesses_multiple_unmatched_collected() {
         },
     ];
     let d = check_accesses(&accesses, &[], &[]);
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(
             rules.len() >= 2,
             "expected at least 2 unmatched rules, got {rules:?}",
@@ -864,7 +885,7 @@ fn file_accesses_write_denied_by_edit_rule() {
         &[],
         &["Edit(/etc/**)"],
     );
-    assert!(matches!(d, Decision::Deny(_)));
+    assert!(matches!(d.decision, Decision::Deny(_)));
 }
 
 // Python AST analysis integration tests =====
@@ -876,7 +897,7 @@ fn python_c_open_read_with_read_rule_allows() {
         &["Read(/tmp/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -886,13 +907,14 @@ fn python_c_open_write_with_write_rule_allows() {
         &["Write(/tmp/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn python_c_open_write_without_rule_asks_specific_path() {
     let d = check(r#"python3 -c "open('/tmp/x', 'w')""#, &[], &[]);
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         // /tmp may be canonicalized to /private/tmp on macOS
         assert!(
             rules.iter().any(|r| r.starts_with("Write(") && r.contains("/tmp/x")),
@@ -915,13 +937,14 @@ fn python_c_open_write_denied_by_rule() {
         &[],
         &["Write(/tmp/**)"],
     );
-    assert!(matches!(d, Decision::Deny(_)));
+    assert!(matches!(d.decision, Decision::Deny(_)));
 }
 
 #[skuld::test]
 fn python_c_import_subprocess_asks_wildcard() {
     let d = check(r#"python3 -c "import subprocess""#, &[], &[]);
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(
             rules.iter().any(|r| r == "Bash(python3 -c *)"),
             "expected 'Bash(python3 -c *)', got {rules:?}",
@@ -938,7 +961,7 @@ fn python_c_in_pipeline_allows() {
         &["Read(/tmp/**)", "Bash(echo *)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -948,7 +971,7 @@ fn python_not_python3_also_analyzed() {
         &["Read(/tmp/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -960,7 +983,7 @@ fn python_c_bash_ask_rule_forces_ask() {
         &[],
         &["Bash(python3 *)"],
     );
-    assert!(matches!(d, Decision::Ask(_)));
+    assert_eq!(d.decision, Decision::Ask);
 }
 
 #[skuld::test]
@@ -970,7 +993,7 @@ fn python_c_bash_deny_rule_still_denies() {
         &[],
         &["Bash(python3 *)"],
     );
-    assert!(matches!(d, Decision::Deny(_)));
+    assert!(matches!(d.decision, Decision::Deny(_)));
 }
 
 #[skuld::test]
@@ -984,7 +1007,7 @@ print(data)
         &["Read(/tmp/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -994,7 +1017,7 @@ fn python_c_json_load_open_allows() {
         &["Read(/tmp/**)"],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -1005,7 +1028,8 @@ fn python_c_multiple_accesses_all_checked() {
         &["Read(/tmp/**)"],
         &[],
     );
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(
             rules.iter().any(|r| r.starts_with("Write(")),
             "expected Write rule, got {rules:?}",
@@ -1020,19 +1044,19 @@ fn python_c_multiple_accesses_all_checked() {
 #[skuld::test]
 fn python_exe_normalized_for_analysis() {
     let d = check(r#"python.exe -c "print(1)""#, &[], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn absolute_path_python_normalized() {
     let d = check(r#"/usr/bin/python3 -c "print(1)""#, &[], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn versioned_python_normalized() {
     let d = check(r#"python3.12 -c "print(1)""#, &[], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -1042,7 +1066,7 @@ fn deny_rule_matches_normalized_name() {
         &[],
         &["Bash(python3 *)"],
     );
-    assert!(matches!(d, Decision::Deny(_)));
+    assert!(matches!(d.decision, Decision::Deny(_)));
 }
 
 // uv run wrapper =====
@@ -1054,7 +1078,7 @@ fn uv_run_python_c_allows() {
         &[],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -1064,7 +1088,7 @@ fn uv_run_with_flag_python_c_allows() {
         &[],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -1074,7 +1098,8 @@ fn uv_run_python_c_unanalyzable_asks_for_bash() {
         &[],
         &[],
     );
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(
             rules.iter().any(|r| r == "Bash(uv run python -c *)"),
             "expected 'Bash(uv run python -c *)', got {rules:?}",
@@ -1091,7 +1116,7 @@ fn uv_run_python_versioned_allows() {
         &[],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 // Git subcommand file-only suppression =====
@@ -1104,7 +1129,7 @@ fn git_restore_allowed_by_write_rule() {
         &[&format!("Write({}/**)", c("/tmp"))],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -1115,7 +1140,7 @@ fn git_add_allowed_by_git_write_rule() {
         &[&format!("Write({}/**)", c("/tmp"))],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -1125,26 +1150,26 @@ fn git_commit_allowed_by_git_write_rule() {
         &[&format!("Write({}/**)", c("/tmp"))],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn git_status_no_rules_allowed() {
     // git status is read-only and file_only=true with no accesses → no Bash rule needed
     let d = check("git status", &[], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn git_log_no_rules_allowed() {
     let d = check("git log --oneline", &[], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
 fn git_diff_no_rules_allowed() {
     let d = check("git diff", &[], &[]);
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -1155,9 +1180,11 @@ fn git_fetch_requires_bash_rule() {
         &[&format!("Write({}/**)", c("/tmp"))],
         &[],
     );
+    assert_eq!(d.decision, Decision::Ask, "expected Ask, got {d:?}");
     assert!(
-        matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))),
-        "expected Ask with Bash rule, got {d:?}",
+        d.missing_rules.iter().any(|r| r.starts_with("Bash(")),
+        "expected Bash rule in missing, got {:?}",
+        d.missing_rules,
     );
 }
 
@@ -1168,9 +1195,11 @@ fn git_push_requires_bash_rule() {
         &[&format!("Read({}/**)", c("/tmp"))],
         &[],
     );
+    assert_eq!(d.decision, Decision::Ask, "expected Ask, got {d:?}");
     assert!(
-        matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))),
-        "expected Ask with Bash rule, got {d:?}",
+        d.missing_rules.iter().any(|r| r.starts_with("Bash(")),
+        "expected Bash rule in missing, got {:?}",
+        d.missing_rules,
     );
 }
 
@@ -1184,7 +1213,7 @@ fn git_fetch_allowed_with_bash_and_write_rules() {
         ],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -1195,9 +1224,11 @@ fn git_unknown_subcommand_requires_bash_rule() {
         &[&format!("Write({}/**)", c("/tmp"))],
         &[],
     );
+    assert_eq!(d.decision, Decision::Ask, "expected Ask, got {d:?}");
     assert!(
-        matches!(d, Decision::Ask(ref rules) if rules.iter().any(|r| r.starts_with("Bash("))),
-        "expected Ask with Bash rule, got {d:?}",
+        d.missing_rules.iter().any(|r| r.starts_with("Bash(")),
+        "expected Bash rule in missing, got {:?}",
+        d.missing_rules,
     );
 }
 
@@ -1210,7 +1241,7 @@ fn git_c_flag_path_resolution() {
         &[],
         "/tmp",
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -1221,7 +1252,7 @@ fn git_checkout_branch_needs_write() {
         &[&format!("Write({}/**)", c("/tmp"))],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -1231,7 +1262,7 @@ fn git_merge_needs_write() {
         &[&format!("Write({}/**)", c("/tmp"))],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -1241,7 +1272,7 @@ fn git_reset_hard_needs_write() {
         &[&format!("Write({}/**)", c("/tmp"))],
         &[],
     );
-    assert_eq!(d, Decision::Allow);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -1251,13 +1282,14 @@ fn git_restore_denied() {
         &[],
         &[&format!("Write({}/**)", c("/tmp"))],
     );
-    assert!(matches!(d, Decision::Deny(_)));
+    assert!(matches!(d.decision, Decision::Deny(_)));
 }
 
 #[skuld::test]
 fn git_restore_missing_write_asks_for_write() {
     let d = check("git restore .", &[], &[]);
-    if let Decision::Ask(ref rules) = d {
+    if d.decision == Decision::Ask {
+        let rules = &d.missing_rules;
         assert!(
             rules.iter().any(|r| r.starts_with("Write(")),
             "expected Write rule, got {rules:?}",
