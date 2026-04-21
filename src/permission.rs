@@ -123,14 +123,22 @@ pub fn parse_single_rule(rule: &str, home: &str) -> Option<ParsedFilter> {
 /// warn to stderr and return `None` so the caller drops the rule. Otherwise
 /// return the expanded path.
 ///
-/// The `rule` argument is the full rule string for the warning message.
+/// The `rule` argument is the full rule string for the warning message. The
+/// warning is emitted at most once per process to avoid spamming stderr when
+/// a settings file contains many tilde rules (one line per rule per hook call
+/// would be unreadable).
 fn expand_tilde_or_warn(inner: &str, home: &str, rule: &str) -> Option<String> {
     match expand_tilde(inner, home) {
         Some(s) => Some(s),
         None => {
-            eprintln!(
-                "scriptcheck: dropping rule `{rule}`: home directory unknown, cannot expand `~`"
-            );
+            use std::sync::OnceLock;
+            static WARNED: OnceLock<()> = OnceLock::new();
+            if WARNED.set(()).is_ok() {
+                eprintln!(
+                    "scriptcheck: dropping tilde-rooted rule (first offender: `{rule}`): \
+                     home directory unknown, cannot expand `~`. Further occurrences suppressed."
+                );
+            }
             None
         }
     }
@@ -196,6 +204,10 @@ pub fn inject_accept_edits_rules(perms: &mut ParsedPermissions, workspace_dirs: 
         let write_rule = format!("Write({base}/**)");
         let edit_rule = format!("Edit({base}/**)");
 
+        // `parse_single_rule` can only legitimately return `None` here if `base`
+        // is tilde-rooted and home is unknown (B3 drop). Filesystem-root bases
+        // are already filtered by `is_filesystem_root`, and the rule shape is
+        // always well-formed by construction, so any other `None` is a bug.
         if let Some(ParsedFilter::Write(f)) = parse_single_rule(&write_rule, &home) {
             perms.write.allow.push(f);
         }
@@ -203,19 +215,6 @@ pub fn inject_accept_edits_rules(perms: &mut ParsedPermissions, workspace_dirs: 
             perms.edit.allow.push(f);
         }
     }
-}
-
-/// Test-only helper: match a pattern against a path with separator normalization.
-///
-/// Production code uses `PathFilter::matches`, which assumes both sides are
-/// already canonical (forward-slash). This helper preserves the pre-refactor
-/// call-site ergonomics for tests that want to sanity-check glob semantics
-/// without threading a filter instance through.
-#[doc(hidden)]
-pub fn file_rule_matches(pattern: &str, path: &str) -> bool {
-    let pattern = crate::path_util::normalize_separators(pattern);
-    let path = crate::path_util::normalize_separators(path);
-    glob_match::glob_match(&pattern, &path)
 }
 
 /// Expand a leading `~/` or bare `~` to the home directory.

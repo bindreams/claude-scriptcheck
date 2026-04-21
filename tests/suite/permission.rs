@@ -16,6 +16,18 @@ fn tokens(s: &[&str]) -> Vec<String> {
     s.iter().map(|s| s.to_string()).collect()
 }
 
+/// Test helper: match a pattern against a path with separator normalization.
+///
+/// Production code uses `PathFilter::matches`, which assumes both sides are
+/// canonical (forward-slash). This helper lets us feed raw Windows-style paths
+/// without having to go through the full parse-and-canonicalize pipeline each
+/// time we want to sanity-check glob semantics.
+fn file_rule_matches(pattern: &str, path: &str) -> bool {
+    let pattern = claude_scriptcheck::path_util::normalize_separators(pattern);
+    let path = claude_scriptcheck::path_util::normalize_separators(path);
+    glob_match::glob_match(&pattern, &path)
+}
+
 #[skuld::test]
 fn exact_match() {
     let rule = make_rule(&["git", "status"], false);

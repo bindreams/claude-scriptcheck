@@ -2,6 +2,12 @@ use path_clean::PathClean;
 use std::path::PathBuf;
 
 /// Returns true if the path segment contains glob wildcard characters.
+///
+// TODO: see plan how-are-file-filters-expressive-newell.md § deferred items (B4).
+// Treating `[` as a wildcard is ambiguous: a user writing `Write(/tmp/my[test]dir/**)`
+// might mean the literal directory `my[test]dir` or a glob char class matching
+// `m`/`y`/`[`/…. Claude Code's own behavior is undocumented (closed-source). This
+// split-on-`[` currently breaks filesystem canonicalization for paths with literal `[`.
 pub fn is_wildcard_segment(segment: &str) -> bool {
     segment.contains('*') || segment.contains('?') || segment.contains('[') || segment.contains('{')
 }
