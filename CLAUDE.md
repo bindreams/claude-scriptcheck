@@ -19,14 +19,17 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git  # insta
 | `src/lib.rs`         | Library crate root. Re-exports all modules so they are usable without spawning the binary.                         |
 | `src/main.rs`        | Binary: CLI routing (clap), hook-mode dispatch (Bash/Monitor/Grep/Glob/Read/Write/Edit), I/O (stdin JSON → decision JSON). |
 | `src/cli.rs`         | Subcommand implementations: `install`, `uninstall`, `check`, `log`, `log-path`, `upgrade`. `VerdictFilter` type.   |
-| `src/checker.rs`     | Core logic. `check_program()` for Bash AST, `check_file_accesses()` for non-Bash tools. Returns `CheckResult`. End-stage `apply_permission_mode()` transforms verdicts per mode. |
-| `src/permission.rs`  | Parses rule strings (`Bash(cmd *)`, `Read(glob)`, etc.) into `ParsedPermissions`. Matching logic. `load_perms()` composes `settings::load_settings` + parse + mode-specific synthetic rule injection. ~20 unit tests. |
+| `src/checker.rs`     | Core logic. `check_program()` for Bash AST, `check_file_accesses()` for non-Bash tools. Returns `CheckResult`. `find_match<F: PathFilter>()` is the generic per-verdict scan. End-stage `apply_permission_mode()` transforms verdicts per mode. |
+| `src/filter.rs`      | `Filter` / `PathFilter` traits, `RuleSet<F>` bucketed by verdict, `Verdict` enum, `impl_filter!` macro. Sub-modules under `src/filter/`. |
+| `src/filter/bash.rs` | `BashFilter` — command-token glob filter. Owns `matches(&[String])` and `match_tokens` / `token_matches` helpers. |
+| `src/filter/path.rs` | `ReadFilter`, `WriteFilter`, `EditFilter` — single-field newtypes over canonical glob patterns. Debug-assert canonical form on construction. |
+| `src/permission.rs`  | Parses rule strings (`Bash(cmd *)`, `Read(glob)`, etc.) into `ParsedPermissions`. `parse_rules`/`parse_single_rule` → `ParsedFilter` variants. `load_perms()` composes `settings::load_settings` + parse + mode-specific synthetic rule injection. |
 | `src/permission_mode.rs` | `PermissionMode` enum with `ValueEnum` (clap) and `from_hook_str` for the hook JSON field.                     |
 | `src/file_access.rs` | Maps well-known commands to file-access semantics (read/write args, redirects). ~25 unit tests.                    |
 | `src/hook.rs`        | `HookInput` / `HookOutput` serde structs for JSON protocol with Claude Code.                                       |
-| `src/settings.rs`    | Loads and merges permission rules + `additionalDirectories` (both nested inside `permissions` and top-level) from settings files. Returns `LoadedSettings`. |
+| `src/settings.rs`    | Loads and merges permission rules + `additionalDirectories` (both nested inside `permissions` and top-level) from settings files. Returns `LoadedSettings`. `resolve_one_rule` normalizes separators before the 4-tier prefix dispatch so backslash-written paths route correctly. |
 | `src/logging.rs`     | Appends decisions to platform-specific log file. Read-back helpers: `split_documents()`, `extract_verdict()`.       |
-| `src/path_util.rs`   | Cross-platform path helpers: `is_absolute()`, `normalize_separators()`.                                            |
+| `src/path_util.rs`   | Cross-platform path helpers: `is_absolute()`, `normalize_separators()`, `is_filesystem_root()`.                    |
 | `src/env_hooks.rs`   | Test-isolation env-var hooks: `hook_home()` overrides `dirs::home_dir()` for the hook dispatch path; `log_path_override()` overrides the log file location. |
 | `src/python_ast.rs`  | Python AST analysis for `python -c` inline scripts. Parses Python, extracts file accesses, detects unsafe patterns.|
 | `src/cmd_parser/git.rs` | Git subcommand parser. Dispatches on subcommand, emits Write(.git) for local ops, file_only=false for network ops.|
@@ -41,8 +44,14 @@ CheckResult     { decision, matched_allow, matched_deny, missing_rules: Vec<Stri
     // missing_rules survives the apply_permission_mode transform so the log shows what was unmatched even after Ask→Allow.
     // custom_reason overrides the generic per-verdict reason (used by synthetic Ask sites: parse failure, missing file_path).
 PermissionMode  = Default | Plan | AcceptEdits | Auto | DontAsk | BypassPermissions
-ParsedPermissions  { allow_bash, deny_bash, allow_read, deny_read, allow_write, deny_write, allow_edit, deny_edit, ask_* variants }
-BashRule         { prefix_tokens: Vec<String>, wildcard: bool }
+Filter (trait)  — kind(), data() → Cow<str>, provided to_rule_string() → "Kind(data)"
+PathFilter (trait) : Filter — matches(&str), pattern() → &str
+Verdict         = Allow | Deny | Ask
+RuleSet<F>      { allow: Vec<F>, deny: Vec<F>, ask: Vec<F> }   // push(verdict, F), bucket(verdict) → &[F]
+ParsedPermissions  { bash: RuleSet<BashFilter>, read: RuleSet<ReadFilter>, write: RuleSet<WriteFilter>, edit: RuleSet<EditFilter> }
+ParsedFilter    = Bash(BashFilter) | Read(ReadFilter) | Write(WriteFilter) | Edit(EditFilter)
+BashFilter      { prefix_tokens: Vec<String>, wildcard: bool } ; matches(&[String]) -> bool
+{Read,Write,Edit}Filter(String) — PathFilter; ::new(p) debug-asserts p is canonical
 FileAccess       { path: String, kind: AccessKind }   // AccessKind = Read | Write
 HookInput        { session_id, cwd, tool_name, tool_input, permission_mode? }
 ToolInput        { command?, file_path?, path? }          // each tool uses a different subset
