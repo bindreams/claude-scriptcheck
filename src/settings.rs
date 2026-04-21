@@ -187,8 +187,15 @@ pub fn resolve_rule_relative_paths(rules: &mut [String], cwd: &str, project_root
 
 fn resolve_one_rule(rule: &str, cwd: &str, project_root: &str) -> String {
     for prefix in ["Read(", "Write(", "Edit("] {
-        if let Some(inner) = rule.strip_prefix(prefix).and_then(|s| s.strip_suffix(')')) {
+        if let Some(raw_inner) = rule.strip_prefix(prefix).and_then(|s| s.strip_suffix(')')) {
             let kind = &prefix[..prefix.len() - 1]; // "Read", "Write", or "Edit"
+
+            // B1/B2: normalize separators on `inner` before prefix dispatch so
+            // backslash-written forms (`\\C:\…` for `//C:/…`, `\project\src` for
+            // `/project/src`) take the correct branch. Rule strings on disk may
+            // come from users writing Windows-native paths.
+            let inner = crate::path_util::normalize_separators(raw_inner);
+
             if let Some(abs) = inner.strip_prefix("//") {
                 // //path → absolute filesystem path
                 // On Windows, //C:/foo strips to C:/foo which is already absolute
@@ -198,17 +205,19 @@ fn resolve_one_rule(rule: &str, cwd: &str, project_root: &str) -> String {
                 return format!("{kind}(/{abs})");
             }
             if inner.starts_with('~') {
-                // ~/path → home-relative, expanded later in parse_single_rule
-                return rule.to_string();
+                // ~/path → home-relative, expanded later in parse_single_rule.
+                // Normalize separators so downstream parsing sees forward slashes.
+                return format!("{kind}({inner})");
             }
             if inner.starts_with('/') {
                 // /path → project-root-relative (inner already has leading /)
                 return format!("{kind}({project_root}{inner})");
             }
-            // Check for Windows drive-letter or UNC paths (C:/..., \\server\...)
-            // These are already absolute and should not be treated as relative.
-            if crate::path_util::is_absolute(inner) {
-                return rule.to_string();
+            // Check for Windows drive-letter paths (C:/...).
+            // After normalization, UNC paths `//server/share` are handled by the
+            // `//`-absolute branch above.
+            if crate::path_util::is_absolute(&inner) {
+                return format!("{kind}({inner})");
             }
             // bare path or ./path → CWD-relative
             return format!("{kind}({cwd}/{inner})");

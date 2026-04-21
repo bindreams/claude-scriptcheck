@@ -445,3 +445,36 @@ fn single_slash_with_windows_project_root() {
     resolve_rule_relative_paths(&mut rules, "C:/Users/foo/project", "C:/Users/foo/project");
     assert_eq!(rules, vec!["Read(C:/Users/foo/project/src/**)"]);
 }
+
+// ─── B1/B2: separator normalization before prefix dispatch ────────────────────
+
+#[skuld::test]
+fn backslash_absolute_filesystem_marker() {
+    // B1: user writes `\\C:\...` intending Claude's `//abs` absolute-path marker.
+    // Without separator normalization on `inner`, `strip_prefix("//")` fails on the
+    // backslashes and the rule falls through to `is_absolute` (leading `\`), which
+    // returns it unchanged — the project-root prefix step never runs, but neither
+    // does the `//`→absolute-normalization step. Expected behavior: treat as absolute.
+    let mut rules = vec!["Read(\\\\C:\\Users\\alice\\**)".to_string()];
+    resolve_rule_relative_paths(&mut rules, "/home/user/project", "/home/user/project");
+    assert_eq!(rules, vec!["Read(C:/Users/alice/**)"]);
+}
+
+#[skuld::test]
+fn backslash_project_root_relative() {
+    // B2: user writes `\project\src` (single backslash-prefixed, intent: project-root-relative).
+    // Without separator normalization, the leading `\` makes `is_absolute` true
+    // and the rule is returned unchanged — but the intent was project-root-relative.
+    let mut rules = vec!["Read(\\project\\src)".to_string()];
+    resolve_rule_relative_paths(&mut rules, "/home/user/root", "/home/user/root");
+    assert_eq!(rules, vec!["Read(/home/user/root/project/src)"]);
+}
+
+#[skuld::test]
+fn backslash_unc_share_as_absolute() {
+    // B1 variant: `\\\\server\\share` (JSON-escaped UNC) normalizes to `//server/share`
+    // which must be treated as the `//abs` marker and yield an absolute path.
+    let mut rules = vec!["Write(\\\\server\\share\\**)".to_string()];
+    resolve_rule_relative_paths(&mut rules, "/home/user/project", "/home/user/project");
+    assert_eq!(rules, vec!["Write(/server/share/**)"]);
+}
