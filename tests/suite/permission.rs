@@ -668,19 +668,27 @@ fn tilde_prefix_expanded_in_edit_rule(#[fixture(temp_dir)] dir: &Path) {
 }
 
 #[skuld::test]
-fn tilde_with_empty_home_not_expanded() {
-    let home = "";
-    let parsed = parse_single_rule("Read(~/foo)", home).unwrap();
-    match parsed {
-        ParsedFilter::Read(pat) => {
-            let pattern = pat.pattern();
-            assert!(
-                !pattern.starts_with("/foo"),
-                "empty home should not produce /foo, got: {pattern}"
-            );
-        }
-        _ => panic!("expected Read rule"),
-    }
+fn tilde_rule_dropped_when_home_empty() {
+    // B3: when home is unknown (e.g. Windows without CLAUDE_SCRIPTCHECK_HOOK_HOME
+    // and with `dirs::home_dir()` unavailable), a tilde-rooted rule cannot be
+    // expanded. Silently keeping `~/foo` as the literal pattern produces a dead
+    // rule that matches nothing. Drop it and surface a warning.
+    let parsed = parse_single_rule("Read(~/foo)", "");
+    assert!(parsed.is_none(), "tilde rule should be dropped when home is empty");
+}
+
+#[skuld::test]
+fn bare_tilde_rule_dropped_when_home_empty() {
+    // B3: same treatment for bare `~`.
+    let parsed = parse_single_rule("Read(~)", "");
+    assert!(parsed.is_none());
+}
+
+#[skuld::test]
+fn non_tilde_rule_unaffected_by_empty_home() {
+    // B3 guardrail: rules without a tilde prefix parse normally even with home empty.
+    let parsed = parse_single_rule("Read(/absolute/foo)", "");
+    assert!(parsed.is_some());
 }
 
 // ─── Colon-wildcard format (Claude Code's native format) ─────────────────────

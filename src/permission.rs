@@ -99,21 +99,41 @@ pub fn parse_single_rule(rule: &str, home: &str) -> Option<ParsedFilter> {
     }
 
     if let Some(inner) = rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')')) {
-        let pattern = crate::canonicalize::best_effort_canonicalize(&expand_tilde(inner, home));
+        let expanded = expand_tilde_or_warn(inner, home, rule)?;
+        let pattern = crate::canonicalize::best_effort_canonicalize(&expanded);
         return Some(ParsedFilter::Read(ReadFilter::new(pattern)));
     }
     if let Some(inner) = rule
         .strip_prefix("Write(")
         .and_then(|s| s.strip_suffix(')'))
     {
-        let pattern = crate::canonicalize::best_effort_canonicalize(&expand_tilde(inner, home));
+        let expanded = expand_tilde_or_warn(inner, home, rule)?;
+        let pattern = crate::canonicalize::best_effort_canonicalize(&expanded);
         return Some(ParsedFilter::Write(WriteFilter::new(pattern)));
     }
     if let Some(inner) = rule.strip_prefix("Edit(").and_then(|s| s.strip_suffix(')')) {
-        let pattern = crate::canonicalize::best_effort_canonicalize(&expand_tilde(inner, home));
+        let expanded = expand_tilde_or_warn(inner, home, rule)?;
+        let pattern = crate::canonicalize::best_effort_canonicalize(&expanded);
         return Some(ParsedFilter::Edit(EditFilter::new(pattern)));
     }
     None
+}
+
+/// Wrap `expand_tilde`: when the input is tilde-rooted but home is unknown,
+/// warn to stderr and return `None` so the caller drops the rule. Otherwise
+/// return the expanded path.
+///
+/// The `rule` argument is the full rule string for the warning message.
+fn expand_tilde_or_warn(inner: &str, home: &str, rule: &str) -> Option<String> {
+    match expand_tilde(inner, home) {
+        Some(s) => Some(s),
+        None => {
+            eprintln!(
+                "scriptcheck: dropping rule `{rule}`: home directory unknown, cannot expand `~`"
+            );
+            None
+        }
+    }
 }
 
 /// Load settings from disk and parse them into `ParsedPermissions`, injecting
@@ -195,16 +215,22 @@ pub fn file_rule_matches(pattern: &str, path: &str) -> bool {
 
 /// Expand a leading `~/` or bare `~` to the home directory.
 /// Does NOT expand `~` in the middle of a path (e.g. `/home/user/my~project`).
-/// Returns the input unchanged if `home` is empty (cannot expand).
-fn expand_tilde(path: &str, home: &str) -> String {
+///
+/// Returns `None` when `home` is empty AND the path is tilde-rooted — the
+/// caller should drop the rule rather than silently keep a literal `~` that
+/// would never match a real path (B3).
+fn expand_tilde(path: &str, home: &str) -> Option<String> {
     if home.is_empty() {
-        return path.to_string();
+        if path.starts_with('~') {
+            return None;
+        }
+        return Some(path.to_string());
     }
     if let Some(rest) = path.strip_prefix("~/") {
-        format!("{home}/{rest}")
+        Some(format!("{home}/{rest}"))
     } else if path == "~" {
-        home.to_string()
+        Some(home.to_string())
     } else {
-        path.to_string()
+        Some(path.to_string())
     }
 }
