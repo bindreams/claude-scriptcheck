@@ -67,10 +67,7 @@ mod tests {
 
     #[test]
     fn open_default_mode_is_read() {
-        assert_eq!(
-            analyzed("open('/tmp/a')", "/tmp"),
-            vec![read("/tmp/a")]
-        );
+        assert_eq!(analyzed("open('/tmp/a')", "/tmp"), vec![read("/tmp/a")]);
     }
 
     #[test]
@@ -363,10 +360,7 @@ mod tests {
     #[test]
     fn exec_shadowed_is_not_unsafe() {
         // If exec is shadowed, it's not the unsafe builtin anymore
-        assert_eq!(
-            analyzed("exec = print\nexec('hello')", "/tmp"),
-            vec![]
-        );
+        assert_eq!(analyzed("exec = print\nexec('hello')", "/tmp"), vec![]);
     }
 
     // builtins.open =====
@@ -467,10 +461,7 @@ mod tests {
 
     #[test]
     fn import_json_is_safe() {
-        assert_eq!(
-            analyzed("import json\njson.loads('{}')", "/tmp"),
-            vec![]
-        );
+        assert_eq!(analyzed("import json\njson.loads('{}')", "/tmp"), vec![]);
     }
 
     #[test]
@@ -577,7 +568,10 @@ mod tests {
     #[test]
     fn os_makedirs_keyword_arg() {
         assert_eq!(
-            analyzed("import os\nos.makedirs(name='/tmp/dir', exist_ok=True)", "/tmp"),
+            analyzed(
+                "import os\nos.makedirs(name='/tmp/dir', exist_ok=True)",
+                "/tmp"
+            ),
             vec![write("/tmp/dir")]
         );
     }
@@ -657,10 +651,7 @@ mod tests {
     #[test]
     fn from_builtins_import_open_write() {
         assert_eq!(
-            analyzed(
-                "from builtins import open\nopen('/tmp/x', 'w')",
-                "/tmp"
-            ),
+            analyzed("from builtins import open\nopen('/tmp/x', 'w')", "/tmp"),
             vec![write("/tmp/x")]
         );
     }
@@ -678,10 +669,7 @@ mod tests {
     #[test]
     fn open_shadowed_by_with_as() {
         assert_eq!(
-            analyzed(
-                "with something() as open:\n    open('/tmp/x')",
-                "/tmp"
-            ),
+            analyzed("with something() as open:\n    open('/tmp/x')", "/tmp"),
             vec![]
         );
     }

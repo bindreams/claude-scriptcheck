@@ -22,7 +22,9 @@ fn status_is_read_only() {
 
 #[skuld::test]
 fn status_with_flags() {
-    let result = GitParser.parse(&["status", "-s", "--branch"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["status", "-s", "--branch"], "/repo")
+        .unwrap();
     assert!(result.reads.is_empty());
     assert!(result.writes.is_empty());
     assert_eq!(result.file_only, Some(true));
@@ -30,7 +32,9 @@ fn status_with_flags() {
 
 #[skuld::test]
 fn log_is_read_only() {
-    let result = GitParser.parse(&["log", "--oneline", "-10"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["log", "--oneline", "-10"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert!(result.writes.is_empty());
 }
@@ -44,14 +48,18 @@ fn diff_is_read_only() {
 
 #[skuld::test]
 fn diff_output_writes_file() {
-    let result = GitParser.parse(&["diff", "--output=out.patch"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["diff", "--output=out.patch"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/out.patch"]));
 }
 
 #[skuld::test]
 fn diff_output_space_writes_file() {
-    let result = GitParser.parse(&["diff", "--output", "out.patch"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["diff", "--output", "out.patch"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/out.patch"]));
 }
@@ -169,27 +177,35 @@ fn remote_verbose() {
 #[skuld::test]
 fn remote_show_is_network() {
     // `remote show` contacts the remote server
-    let result = GitParser.parse(&["remote", "show", "origin"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["remote", "show", "origin"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(false));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
 
 #[skuld::test]
 fn remote_get_url() {
-    let result = GitParser.parse(&["remote", "get-url", "origin"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["remote", "get-url", "origin"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
 }
 
 #[skuld::test]
 fn remote_add_is_network() {
-    let result = GitParser.parse(&["remote", "add", "origin", "url"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["remote", "add", "origin", "url"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(false));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
 
 #[skuld::test]
 fn remote_remove_is_network() {
-    let result = GitParser.parse(&["remote", "remove", "origin"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["remote", "remove", "origin"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(false));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
@@ -248,7 +264,9 @@ fn commit_writes_git() {
 
 #[skuld::test]
 fn commit_amend_writes_git() {
-    let result = GitParser.parse(&["commit", "--amend", "--no-edit"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["commit", "--amend", "--no-edit"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
@@ -263,21 +281,27 @@ fn reset_default_writes_git() {
 
 #[skuld::test]
 fn reset_soft_writes_git() {
-    let result = GitParser.parse(&["reset", "--soft", "HEAD~1"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["reset", "--soft", "HEAD~1"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
 
 #[skuld::test]
 fn reset_mixed_writes_git() {
-    let result = GitParser.parse(&["reset", "--mixed", "HEAD~1"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["reset", "--mixed", "HEAD~1"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
 
 #[skuld::test]
 fn rm_cached_writes_git_only() {
-    let result = GitParser.parse(&["rm", "--cached", "file.txt"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["rm", "--cached", "file.txt"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
@@ -291,21 +315,27 @@ fn branch_create_writes_git() {
 
 #[skuld::test]
 fn branch_delete_writes_git() {
-    let result = GitParser.parse(&["branch", "-d", "old-branch"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["branch", "-d", "old-branch"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
 
 #[skuld::test]
 fn branch_force_delete_writes_git() {
-    let result = GitParser.parse(&["branch", "-D", "old-branch"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["branch", "-D", "old-branch"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
 
 #[skuld::test]
 fn branch_rename_writes_git() {
-    let result = GitParser.parse(&["branch", "-m", "old", "new"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["branch", "-m", "old", "new"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
@@ -319,7 +349,9 @@ fn tag_create_writes_git() {
 
 #[skuld::test]
 fn tag_annotated_writes_git() {
-    let result = GitParser.parse(&["tag", "-a", "v1.0", "-m", "release"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["tag", "-a", "v1.0", "-m", "release"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
@@ -361,7 +393,9 @@ fn stash_clear_writes_git() {
 
 #[skuld::test]
 fn notes_writes_git() {
-    let result = GitParser.parse(&["notes", "add", "-m", "note"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["notes", "add", "-m", "note"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
@@ -378,14 +412,18 @@ fn restore_dot() {
 #[skuld::test]
 fn restore_specific_file() {
     // restore takes pathspecs — we emit Write(.git) only
-    let result = GitParser.parse(&["restore", "path/file.txt"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["restore", "path/file.txt"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
 
 #[skuld::test]
 fn restore_multiple_files() {
-    let result = GitParser.parse(&["restore", "a.txt", "b.txt"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["restore", "a.txt", "b.txt"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
@@ -399,7 +437,9 @@ fn checkout_branch() {
 
 #[skuld::test]
 fn checkout_file_with_separator() {
-    let result = GitParser.parse(&["checkout", "--", "file.txt"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["checkout", "--", "file.txt"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert!(result.writes.contains(&"/repo/file.txt".to_string()));
     assert!(result.writes.contains(&"/repo/.git".to_string()));
@@ -407,7 +447,9 @@ fn checkout_file_with_separator() {
 
 #[skuld::test]
 fn checkout_ref_and_file() {
-    let result = GitParser.parse(&["checkout", "HEAD~1", "--", "file.txt"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["checkout", "HEAD~1", "--", "file.txt"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert!(result.writes.contains(&"/repo/file.txt".to_string()));
     assert!(result.writes.contains(&"/repo/.git".to_string()));
@@ -415,14 +457,18 @@ fn checkout_ref_and_file() {
 
 #[skuld::test]
 fn checkout_create_branch() {
-    let result = GitParser.parse(&["checkout", "-b", "new-branch"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["checkout", "-b", "new-branch"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
 
 #[skuld::test]
 fn checkout_orphan() {
-    let result = GitParser.parse(&["checkout", "--orphan", "new"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["checkout", "--orphan", "new"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
@@ -450,7 +496,9 @@ fn reset_hard_writes_cwd_and_git() {
 
 #[skuld::test]
 fn reset_hard_commit_writes_cwd_and_git() {
-    let result = GitParser.parse(&["reset", "--hard", "HEAD~3"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["reset", "--hard", "HEAD~3"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
@@ -471,7 +519,9 @@ fn rebase_writes_cwd_and_git() {
 
 #[skuld::test]
 fn cherry_pick_writes_cwd_and_git() {
-    let result = GitParser.parse(&["cherry-pick", "abc123"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["cherry-pick", "abc123"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
@@ -532,14 +582,18 @@ fn apply_requires_bash_rule() {
 
 #[skuld::test]
 fn apply_stat_is_read_only() {
-    let result = GitParser.parse(&["apply", "--stat", "patch.diff"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["apply", "--stat", "patch.diff"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert!(result.writes.is_empty());
 }
 
 #[skuld::test]
 fn apply_check_is_read_only() {
-    let result = GitParser.parse(&["apply", "--check", "patch.diff"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["apply", "--check", "patch.diff"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert!(result.writes.is_empty());
 }
@@ -576,7 +630,9 @@ fn fetch_writes_git_not_file_only() {
 
 #[skuld::test]
 fn fetch_with_branch() {
-    let result = GitParser.parse(&["fetch", "origin", "main"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["fetch", "origin", "main"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(false));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
@@ -597,7 +653,9 @@ fn pull_rebase() {
 
 #[skuld::test]
 fn push_reads_git_not_file_only() {
-    let result = GitParser.parse(&["push", "origin", "main"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["push", "origin", "main"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(false));
     assert_eq!(result.reads, r(&["/repo/.git"]));
     assert!(result.writes.is_empty());
@@ -612,14 +670,21 @@ fn push_no_args() {
 
 #[skuld::test]
 fn clone_with_dir() {
-    let result = GitParser.parse(&["clone", "https://example.com/repo.git", "/tmp/dest"], "/repo").unwrap();
+    let result = GitParser
+        .parse(
+            &["clone", "https://example.com/repo.git", "/tmp/dest"],
+            "/repo",
+        )
+        .unwrap();
     assert_eq!(result.file_only, Some(false));
     assert_eq!(result.writes, w(&["/tmp/dest"]));
 }
 
 #[skuld::test]
 fn clone_no_dir() {
-    let result = GitParser.parse(&["clone", "https://example.com/repo.git"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["clone", "https://example.com/repo.git"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(false));
     assert_eq!(result.writes, w(&["/repo"]));
 }
@@ -628,7 +693,9 @@ fn clone_no_dir() {
 
 #[skuld::test]
 fn c_flag_adjusts_cwd() {
-    let result = GitParser.parse(&["-C", "/other/dir", "status"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["-C", "/other/dir", "status"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     // Read-only, no accesses, but effective cwd changed
     assert!(result.writes.is_empty());
@@ -636,15 +703,22 @@ fn c_flag_adjusts_cwd() {
 
 #[skuld::test]
 fn c_flag_affects_paths() {
-    let result = GitParser.parse(&["-C", "/other/dir", "restore", "."], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["-C", "/other/dir", "restore", "."], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
-    assert!(result.writes.contains(&"/other/dir/.".to_string()) || result.writes.contains(&"/other/dir/.git".to_string()));
+    assert!(
+        result.writes.contains(&"/other/dir/.".to_string())
+            || result.writes.contains(&"/other/dir/.git".to_string())
+    );
     assert!(result.writes.contains(&"/other/dir/.git".to_string()));
 }
 
 #[skuld::test]
 fn c_flag_chained() {
-    let result = GitParser.parse(&["-C", "/base", "-C", "sub", "add", "f.txt"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["-C", "/base", "-C", "sub", "add", "f.txt"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/base/sub/.git"]));
 }
@@ -655,21 +729,27 @@ fn c_flag_chained() {
 fn c_config_forces_bash_rule() {
     // -c can set dangerous config keys (core.pager, diff.external, etc.)
     // so any git -c ... command must require a Bash rule
-    let result = GitParser.parse(&["-c", "user.name=test", "status"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["-c", "user.name=test", "status"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, None);
 }
 
 #[skuld::test]
 fn c_config_inline_forces_bash_rule() {
     // -ckey=value (no space) also forces Bash rule
-    let result = GitParser.parse(&["-ccore.pager=less", "log"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["-ccore.pager=less", "log"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, None);
 }
 
 #[skuld::test]
 fn c_config_dangerous_key() {
     // Even innocuous-looking commands become dangerous with -c
-    let result = GitParser.parse(&["-c", "core.pager=evil", "log"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["-c", "core.pager=evil", "log"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, None);
 }
 
@@ -677,21 +757,27 @@ fn c_config_dangerous_key() {
 
 #[skuld::test]
 fn git_dir_override() {
-    let result = GitParser.parse(&["--git-dir=/other/.git", "add", "file.txt"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["--git-dir=/other/.git", "add", "file.txt"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/other/.git"]));
 }
 
 #[skuld::test]
 fn git_dir_space_separated() {
-    let result = GitParser.parse(&["--git-dir", "/other/.git", "add", "file.txt"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["--git-dir", "/other/.git", "add", "file.txt"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/other/.git"]));
 }
 
 #[skuld::test]
 fn git_dir_with_read_only_cmd() {
-    let result = GitParser.parse(&["--git-dir=/other/.git", "status"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["--git-dir=/other/.git", "status"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert!(result.writes.is_empty());
 }
@@ -700,7 +786,9 @@ fn git_dir_with_read_only_cmd() {
 
 #[skuld::test]
 fn work_tree_override() {
-    let result = GitParser.parse(&["--work-tree=/other", "restore", "."], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["--work-tree=/other", "restore", "."], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     // git_dir still defaults to cwd/.git (not work_tree/.git)
     assert_eq!(result.writes, w(&["/repo/.git"]));
@@ -708,10 +796,17 @@ fn work_tree_override() {
 
 #[skuld::test]
 fn work_tree_and_git_dir() {
-    let result = GitParser.parse(
-        &["--work-tree=/other", "--git-dir=/repo/.git", "fetch", "origin"],
-        "/repo",
-    ).unwrap();
+    let result = GitParser
+        .parse(
+            &[
+                "--work-tree=/other",
+                "--git-dir=/repo/.git",
+                "fetch",
+                "origin",
+            ],
+            "/repo",
+        )
+        .unwrap();
     assert_eq!(result.file_only, Some(false));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
@@ -767,7 +862,9 @@ fn rebase_continue() {
 
 #[skuld::test]
 fn cherry_pick_abort() {
-    let result = GitParser.parse(&["cherry-pick", "--abort"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["cherry-pick", "--abort"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
@@ -777,7 +874,9 @@ fn cherry_pick_abort() {
 #[skuld::test]
 fn branch_verbose_with_name_creates() {
     // `git branch -v new-branch` creates a branch, not lists
-    let result = GitParser.parse(&["branch", "-v", "new-branch"], "/repo").unwrap();
+    let result = GitParser
+        .parse(&["branch", "-v", "new-branch"], "/repo")
+        .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
@@ -1062,7 +1161,10 @@ fn config_blob_is_not_a_file_path() {
     // `--blob HEAD:config` is a git blob ref, not a filesystem path.
     // Must NOT emit a Read.
     let result = GitParser
-        .parse(&["config", "--blob", "HEAD:config", "--get", "foo"], "/repo")
+        .parse(
+            &["config", "--blob", "HEAD:config", "--get", "foo"],
+            "/repo",
+        )
         .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert!(result.reads.is_empty());
@@ -1147,9 +1249,7 @@ fn config_with_dash_lowercase_c_override_requires_bash_rule() {
 
 #[skuld::test]
 fn symbolic_ref_read_head() {
-    let result = GitParser
-        .parse(&["symbolic-ref", "HEAD"], "/repo")
-        .unwrap();
+    let result = GitParser.parse(&["symbolic-ref", "HEAD"], "/repo").unwrap();
     assert_eq!(result.file_only, Some(true));
     assert!(result.writes.is_empty());
 }
@@ -1248,10 +1348,7 @@ fn config_get_with_value_pattern_is_read() {
 fn config_get_regexp_with_value_pattern_is_read() {
     // BUG 1 regression: same for --get-regexp
     let result = GitParser
-        .parse(
-            &["config", "--get-regexp", "^remote\\.", "origin"],
-            "/repo",
-        )
+        .parse(&["config", "--get-regexp", "^remote\\.", "origin"], "/repo")
         .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert!(result.writes.is_empty());
@@ -1331,7 +1428,13 @@ fn worktree_add_unknown_flag_requires_bash_rule() {
     // Fall back to Bash rule.
     let result = GitParser
         .parse(
-            &["worktree", "add", "--future-flag", "value", ".worktrees/foo"],
+            &[
+                "worktree",
+                "add",
+                "--future-flag",
+                "value",
+                ".worktrees/foo",
+            ],
             "/repo",
         )
         .unwrap();
@@ -1343,10 +1446,7 @@ fn worktree_add_no_lock_is_skipped() {
     // Verifies --no-lock is recognized as a boolean (regression for the
     // flag list fix).
     let result = GitParser
-        .parse(
-            &["worktree", "add", "--no-lock", ".worktrees/foo"],
-            "/repo",
-        )
+        .parse(&["worktree", "add", "--no-lock", ".worktrees/foo"], "/repo")
         .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
@@ -1412,10 +1512,7 @@ fn worktree_rm_alias() {
 fn worktree_mv_alias() {
     // GAP 5: `mv` is an alias for `move`
     let result = GitParser
-        .parse(
-            &["worktree", "mv", ".worktrees/a", ".worktrees/b"],
-            "/repo",
-        )
+        .parse(&["worktree", "mv", ".worktrees/a", ".worktrees/b"], "/repo")
         .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.worktrees/b", "/repo/.git"]));
@@ -1513,10 +1610,7 @@ fn config_dash_l_short_form_is_read() {
 fn config_blob_equals_form() {
     // GAP 13: `--blob=HEAD:config`
     let result = GitParser
-        .parse(
-            &["config", "--blob=HEAD:config", "--get", "foo"],
-            "/repo",
-        )
+        .parse(&["config", "--blob=HEAD:config", "--get", "foo"], "/repo")
         .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert!(result.reads.is_empty());
@@ -1637,10 +1731,7 @@ fn worktree_add_reason_value_containing_dash_h_is_not_help() {
 fn worktree_add_b_flag_value_dash_h_is_not_help() {
     // BUG 9 regression: `-h` as branch name via `-b -h`.
     let result = GitParser
-        .parse(
-            &["worktree", "add", "-b", "-h", ".worktrees/foo"],
-            "/repo",
-        )
+        .parse(&["worktree", "add", "-b", "-h", ".worktrees/foo"], "/repo")
         .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));

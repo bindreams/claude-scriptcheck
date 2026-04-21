@@ -18,7 +18,10 @@ mod tests {
     #[test]
     fn uv_run_with_flag_python_c() {
         let result = UvParser
-            .parse(&["run", "--with", "requests", "python", "-c", "print(1)"], "/tmp")
+            .parse(
+                &["run", "--with", "requests", "python", "-c", "print(1)"],
+                "/tmp",
+            )
             .unwrap();
         assert_eq!(result.inline_script_start, Some(5));
         assert_eq!(result.effective_cmd_name.as_deref(), Some("python"));
@@ -35,18 +38,14 @@ mod tests {
 
     #[test]
     fn uv_run_script_py() {
-        let result = UvParser
-            .parse(&["run", "script.py"], "/tmp")
-            .unwrap();
+        let result = UvParser.parse(&["run", "script.py"], "/tmp").unwrap();
         assert_eq!(result.reads, vec!["/tmp/script.py"]);
         assert_eq!(result.effective_cmd_name.as_deref(), Some("script.py"));
     }
 
     #[test]
     fn uv_run_unknown_tool() {
-        let result = UvParser
-            .parse(&["run", "pytest", "-v"], "/tmp")
-            .unwrap();
+        let result = UvParser.parse(&["run", "pytest", "-v"], "/tmp").unwrap();
         assert!(result.reads.is_empty());
         assert!(result.writes.is_empty());
         assert_eq!(result.effective_cmd_name.as_deref(), Some("pytest"));
@@ -81,7 +80,10 @@ mod tests {
     #[test]
     fn uv_run_with_equals_form() {
         let result = UvParser
-            .parse(&["run", "--with=requests", "python", "-c", "print(1)"], "/tmp")
+            .parse(
+                &["run", "--with=requests", "python", "-c", "print(1)"],
+                "/tmp",
+            )
             .unwrap();
         assert_eq!(result.inline_script_start, Some(4));
         assert_eq!(result.effective_cmd_name.as_deref(), Some("python"));

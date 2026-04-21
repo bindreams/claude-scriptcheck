@@ -7,7 +7,8 @@ use crate::{checker, logging, path_util, permission};
 const HOOK_ENTRY_MARKER: &str = "claude-scriptcheck";
 
 /// Tool matchers that claude-scriptcheck handles. Each gets its own hook entry.
-pub const SUPPORTED_MATCHERS: &[&str] = &["Bash", "Monitor", "Grep", "Glob", "Read", "Write", "Edit"];
+pub const SUPPORTED_MATCHERS: &[&str] =
+    &["Bash", "Monitor", "Grep", "Glob", "Read", "Write", "Edit"];
 
 /// Install the hook into Claude settings.
 pub fn install(project: bool) {
@@ -233,7 +234,9 @@ pub fn log(clear: bool, follow: bool, tail: Option<usize>, filter: &VerdictFilte
                     for doc in docs {
                         match logging::extract_verdict(doc) {
                             Some(ref v) if !filter.matches(v) => {}
-                            _ => { let _ = write!(stdout, "{doc}"); }
+                            _ => {
+                                let _ = write!(stdout, "{doc}");
+                            }
                         }
                     }
                     let _ = stdout.flush();
@@ -549,9 +552,7 @@ fn settings_path(project: bool) -> PathBuf {
 fn current_binary_path() -> String {
     match std::env::args().next() {
         // Bare command name (no path separators) → PATH lookup, keep as-is
-        Some(argv0) if !argv0.is_empty() && !argv0.contains('/') && !argv0.contains('\\') => {
-            argv0
-        }
+        Some(argv0) if !argv0.is_empty() && !argv0.contains('/') && !argv0.contains('\\') => argv0,
         // Path-based invocation, empty argv[0], or missing argv → resolve to absolute
         _ => std::env::current_exe()
             .expect("Could not determine binary path")
@@ -654,55 +655,91 @@ mod tests {
 
     #[test]
     fn verdict_filter_matches_allow() {
-        let f = VerdictFilter { show_allow: true, show_ask: false, show_deny: false };
+        let f = VerdictFilter {
+            show_allow: true,
+            show_ask: false,
+            show_deny: false,
+        };
         assert!(f.matches("allow"));
     }
 
     #[test]
     fn verdict_filter_rejects_allow() {
-        let f = VerdictFilter { show_allow: false, show_ask: true, show_deny: true };
+        let f = VerdictFilter {
+            show_allow: false,
+            show_ask: true,
+            show_deny: true,
+        };
         assert!(!f.matches("allow"));
     }
 
     #[test]
     fn verdict_filter_matches_ask() {
-        let f = VerdictFilter { show_allow: false, show_ask: true, show_deny: false };
+        let f = VerdictFilter {
+            show_allow: false,
+            show_ask: true,
+            show_deny: false,
+        };
         assert!(f.matches("ask"));
     }
 
     #[test]
     fn verdict_filter_rejects_ask() {
-        let f = VerdictFilter { show_allow: true, show_ask: false, show_deny: true };
+        let f = VerdictFilter {
+            show_allow: true,
+            show_ask: false,
+            show_deny: true,
+        };
         assert!(!f.matches("ask"));
     }
 
     #[test]
     fn verdict_filter_matches_deny() {
-        let f = VerdictFilter { show_allow: false, show_ask: false, show_deny: true };
+        let f = VerdictFilter {
+            show_allow: false,
+            show_ask: false,
+            show_deny: true,
+        };
         assert!(f.matches("deny"));
     }
 
     #[test]
     fn verdict_filter_rejects_deny() {
-        let f = VerdictFilter { show_allow: true, show_ask: true, show_deny: false };
+        let f = VerdictFilter {
+            show_allow: true,
+            show_ask: true,
+            show_deny: false,
+        };
         assert!(!f.matches("deny"));
     }
 
     #[test]
     fn verdict_filter_unknown_passes() {
-        let f = VerdictFilter { show_allow: false, show_ask: false, show_deny: false };
+        let f = VerdictFilter {
+            show_allow: false,
+            show_ask: false,
+            show_deny: false,
+        };
         assert!(f.matches("something_else"));
     }
 
     #[test]
     fn verdict_filter_shows_all() {
-        let f = VerdictFilter { show_allow: true, show_ask: true, show_deny: true };
+        let f = VerdictFilter {
+            show_allow: true,
+            show_ask: true,
+            show_deny: true,
+        };
         assert!(f.shows_all());
     }
 
     #[test]
     fn verdict_filter_not_shows_all() {
-        let f = VerdictFilter { show_allow: true, show_ask: false, show_deny: true };
+        let f = VerdictFilter {
+            show_allow: true,
+            show_ask: false,
+            show_deny: true,
+        };
         assert!(!f.shows_all());
     }
 
@@ -722,7 +759,11 @@ mod tests {
     #[test]
     fn filter_and_tail_no_filter_no_tail() {
         let content = make_log(&["allow", "deny", "ask"]);
-        let all = VerdictFilter { show_allow: true, show_ask: true, show_deny: true };
+        let all = VerdictFilter {
+            show_allow: true,
+            show_ask: true,
+            show_deny: true,
+        };
         let result = filter_and_tail(&content, &all, None);
         assert_eq!(result.len(), 3);
     }
@@ -730,7 +771,11 @@ mod tests {
     #[test]
     fn filter_and_tail_filters_verdict() {
         let content = make_log(&["allow", "deny", "ask", "allow"]);
-        let f = VerdictFilter { show_allow: false, show_ask: true, show_deny: true };
+        let f = VerdictFilter {
+            show_allow: false,
+            show_ask: true,
+            show_deny: true,
+        };
         let result = filter_and_tail(&content, &f, None);
         assert_eq!(result.len(), 2);
         assert!(result[0].contains("deny"));
@@ -740,7 +785,11 @@ mod tests {
     #[test]
     fn filter_and_tail_applies_tail() {
         let content = make_log(&["allow", "deny", "ask", "allow", "deny"]);
-        let all = VerdictFilter { show_allow: true, show_ask: true, show_deny: true };
+        let all = VerdictFilter {
+            show_allow: true,
+            show_ask: true,
+            show_deny: true,
+        };
         let result = filter_and_tail(&content, &all, Some(2));
         assert_eq!(result.len(), 2);
         assert!(result[0].contains("cmd3"));
@@ -750,7 +799,11 @@ mod tests {
     #[test]
     fn filter_and_tail_tail_after_filter() {
         let content = make_log(&["allow", "ask", "deny", "ask", "allow", "ask"]);
-        let f = VerdictFilter { show_allow: false, show_ask: true, show_deny: false };
+        let f = VerdictFilter {
+            show_allow: false,
+            show_ask: true,
+            show_deny: false,
+        };
         let result = filter_and_tail(&content, &f, Some(2));
         assert_eq!(result.len(), 2);
         assert!(result[0].contains("cmd3"));
@@ -760,7 +813,11 @@ mod tests {
     #[test]
     fn filter_and_tail_tail_zero() {
         let content = make_log(&["allow", "deny"]);
-        let all = VerdictFilter { show_allow: true, show_ask: true, show_deny: true };
+        let all = VerdictFilter {
+            show_allow: true,
+            show_ask: true,
+            show_deny: true,
+        };
         let result = filter_and_tail(&content, &all, Some(0));
         assert!(result.is_empty());
     }
@@ -768,7 +825,11 @@ mod tests {
     #[test]
     fn filter_and_tail_tail_exceeds_count() {
         let content = make_log(&["allow", "deny"]);
-        let all = VerdictFilter { show_allow: true, show_ask: true, show_deny: true };
+        let all = VerdictFilter {
+            show_allow: true,
+            show_ask: true,
+            show_deny: true,
+        };
         let result = filter_and_tail(&content, &all, Some(100));
         assert_eq!(result.len(), 2);
     }

@@ -309,7 +309,11 @@ mod tests {
         // Simulate what log_decision writes: "---\n{yaml}\n"
         let written = format!("---\n{yaml}\n");
         let docs = split_documents(&written);
-        assert_eq!(docs.len(), 1, "single entry should produce one doc, got: {docs:?}");
+        assert_eq!(
+            docs.len(),
+            1,
+            "single entry should produce one doc, got: {docs:?}"
+        );
         assert_eq!(extract_verdict(docs[0]), Some("allow".into()));
     }
 
@@ -335,7 +339,11 @@ mod tests {
         };
         let content = format!("{}{}", mk("allow"), mk("deny"));
         let docs = split_documents(&content);
-        assert_eq!(docs.len(), 2, "two entries should produce two docs, got: {docs:?}");
+        assert_eq!(
+            docs.len(),
+            2,
+            "two entries should produce two docs, got: {docs:?}"
+        );
         assert_eq!(extract_verdict(docs[0]), Some("allow".into()));
         assert_eq!(extract_verdict(docs[1]), Some("deny".into()));
     }
@@ -423,5 +431,4 @@ mod tests {
         let doc = "---\ncommand: ls\ntimestamp: '2025-01-01'\n\n";
         assert_eq!(extract_verdict(doc), None);
     }
-
 }

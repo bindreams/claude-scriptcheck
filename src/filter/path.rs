@@ -115,18 +115,9 @@ mod tests {
 
     #[test]
     fn rule_string_renders_kind_prefix() {
-        assert_eq!(
-            ReadFilter::new("/x".into()).to_rule_string(),
-            "Read(/x)"
-        );
-        assert_eq!(
-            WriteFilter::new("/y".into()).to_rule_string(),
-            "Write(/y)"
-        );
-        assert_eq!(
-            EditFilter::new("/z".into()).to_rule_string(),
-            "Edit(/z)"
-        );
+        assert_eq!(ReadFilter::new("/x".into()).to_rule_string(), "Read(/x)");
+        assert_eq!(WriteFilter::new("/y".into()).to_rule_string(), "Write(/y)");
+        assert_eq!(EditFilter::new("/z".into()).to_rule_string(), "Edit(/z)");
     }
 
     #[cfg(debug_assertions)]

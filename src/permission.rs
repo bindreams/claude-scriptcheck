@@ -1,37 +1,26 @@
+use crate::filter::{BashFilter, EditFilter, ReadFilter, RuleSet, Verdict, WriteFilter};
 use crate::permission_mode::PermissionMode;
 use crate::settings::{self, Permissions};
 
-/// A parsed Bash command permission rule.
-#[derive(Debug, Clone)]
-pub struct BashRule {
-    /// Tokens that must match the beginning of the command.
-    pub prefix_tokens: Vec<String>,
-    /// Whether a trailing `*` allows any additional arguments.
-    pub wildcard: bool,
-}
-
-/// Pre-parsed permission rules, separated by category.
-#[derive(Default)]
+/// Pre-parsed permission rules, separated by kind.
+///
+/// Each kind holds a `RuleSet<F>` with three buckets (`allow`, `deny`, `ask`).
+/// The verdict is orthogonal to the filter — it's decided by which JSON array
+/// in `permissions` the rule was parsed from.
+#[derive(Default, Debug)]
 pub struct ParsedPermissions {
-    pub allow_bash: Vec<BashRule>,
-    pub deny_bash: Vec<BashRule>,
-    pub ask_bash: Vec<BashRule>,
-    pub allow_read: Vec<String>,
-    pub deny_read: Vec<String>,
-    pub ask_read: Vec<String>,
-    pub allow_write: Vec<String>,
-    pub deny_write: Vec<String>,
-    pub ask_write: Vec<String>,
-    pub allow_edit: Vec<String>,
-    pub deny_edit: Vec<String>,
-    pub ask_edit: Vec<String>,
+    pub bash: RuleSet<BashFilter>,
+    pub read: RuleSet<ReadFilter>,
+    pub write: RuleSet<WriteFilter>,
+    pub edit: RuleSet<EditFilter>,
 }
 
-pub enum ParsedRule {
-    Bash(BashRule),
-    Read(String),
-    Write(String),
-    Edit(String),
+/// Result of parsing one rule string (e.g. `"Bash(git status *)"`).
+pub enum ParsedFilter {
+    Bash(BashFilter),
+    Read(ReadFilter),
+    Write(WriteFilter),
+    Edit(EditFilter),
 }
 
 pub fn parse_rules(perms: &Permissions) -> ParsedPermissions {
@@ -42,50 +31,40 @@ pub fn parse_rules(perms: &Permissions) -> ParsedPermissions {
     let mut parsed = ParsedPermissions::default();
 
     for rule_str in &perms.allow {
-        match parse_single_rule(rule_str, &home) {
-            Some(ParsedRule::Bash(br)) => parsed.allow_bash.push(br),
-            Some(ParsedRule::Read(pat)) => parsed.allow_read.push(pat),
-            Some(ParsedRule::Write(pat)) => parsed.allow_write.push(pat),
-            Some(ParsedRule::Edit(pat)) => parsed.allow_edit.push(pat),
-            None => {}
-        }
+        push_parsed(&mut parsed, Verdict::Allow, rule_str, &home);
     }
-
     for rule_str in &perms.deny {
-        match parse_single_rule(rule_str, &home) {
-            Some(ParsedRule::Bash(br)) => parsed.deny_bash.push(br),
-            Some(ParsedRule::Read(pat)) => parsed.deny_read.push(pat),
-            Some(ParsedRule::Write(pat)) => parsed.deny_write.push(pat),
-            Some(ParsedRule::Edit(pat)) => parsed.deny_edit.push(pat),
-            None => {}
-        }
+        push_parsed(&mut parsed, Verdict::Deny, rule_str, &home);
     }
-
     for rule_str in &perms.ask {
-        match parse_single_rule(rule_str, &home) {
-            Some(ParsedRule::Bash(br)) => parsed.ask_bash.push(br),
-            Some(ParsedRule::Read(pat)) => parsed.ask_read.push(pat),
-            Some(ParsedRule::Write(pat)) => parsed.ask_write.push(pat),
-            Some(ParsedRule::Edit(pat)) => parsed.ask_edit.push(pat),
-            None => {}
-        }
+        push_parsed(&mut parsed, Verdict::Ask, rule_str, &home);
     }
 
     parsed
 }
 
-pub fn parse_single_rule(rule: &str, home: &str) -> Option<ParsedRule> {
+fn push_parsed(parsed: &mut ParsedPermissions, verdict: Verdict, rule_str: &str, home: &str) {
+    match parse_single_rule(rule_str, home) {
+        Some(ParsedFilter::Bash(f)) => parsed.bash.push(verdict, f),
+        Some(ParsedFilter::Read(f)) => parsed.read.push(verdict, f),
+        Some(ParsedFilter::Write(f)) => parsed.write.push(verdict, f),
+        Some(ParsedFilter::Edit(f)) => parsed.edit.push(verdict, f),
+        None => {}
+    }
+}
+
+/// Parse one rule string into a `ParsedFilter`.
+///
+/// Returns `None` if the rule is malformed, unrecognized (e.g. `WebSearch`), or
+/// explicitly skipped (`readonly`). Malformed-input handling is silent-drop —
+/// same as the pre-refactor behavior.
+pub fn parse_single_rule(rule: &str, home: &str) -> Option<ParsedFilter> {
     // Bare tool-level wildcards (no parentheses)
     match rule {
-        "Bash" => {
-            return Some(ParsedRule::Bash(BashRule {
-                prefix_tokens: vec![],
-                wildcard: true,
-            }))
-        }
-        "Read" => return Some(ParsedRule::Read("**".to_string())),
-        "Write" => return Some(ParsedRule::Write("**".to_string())),
-        "Edit" => return Some(ParsedRule::Edit("**".to_string())),
+        "Bash" => return Some(ParsedFilter::Bash(BashFilter::wildcard_all())),
+        "Read" => return Some(ParsedFilter::Read(ReadFilter::new("**".to_string()))),
+        "Write" => return Some(ParsedFilter::Write(WriteFilter::new("**".to_string()))),
+        "Edit" => return Some(ParsedFilter::Edit(EditFilter::new("**".to_string()))),
         _ => {}
     }
 
@@ -106,100 +85,35 @@ pub fn parse_single_rule(rule: &str, home: &str) -> Option<ParsedRule> {
         if tokens.is_empty() {
             return None;
         }
-        // Skip "readonly" rules — handled by Claude itself
         if tokens[0] == "readonly" {
             return None;
         }
-        let (prefix, wildcard) =
-            if tokens.last().map(|s| s.as_str()) == Some("*") && tokens.len() > 1 {
-                (tokens[..tokens.len() - 1].to_vec(), true)
-            } else if tokens.len() == 1 && tokens[0] == "*" {
-                // Bash(*) — matches everything
-                (vec![], true)
-            } else {
-                (tokens, false)
-            };
-        Some(ParsedRule::Bash(BashRule {
-            prefix_tokens: prefix,
-            wildcard,
-        }))
-    } else if let Some(inner) = rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')')) {
-        Some(ParsedRule::Read(
-            crate::canonicalize::best_effort_canonicalize(&expand_tilde(inner, home)),
-        ))
-    } else if let Some(inner) = rule
+        let filter = if tokens.last().map(|s| s.as_str()) == Some("*") && tokens.len() > 1 {
+            BashFilter::new_wildcard(tokens[..tokens.len() - 1].to_vec())
+        } else if tokens.len() == 1 && tokens[0] == "*" {
+            BashFilter::wildcard_all()
+        } else {
+            BashFilter::new(tokens)
+        };
+        return Some(ParsedFilter::Bash(filter));
+    }
+
+    if let Some(inner) = rule.strip_prefix("Read(").and_then(|s| s.strip_suffix(')')) {
+        let pattern = crate::canonicalize::best_effort_canonicalize(&expand_tilde(inner, home));
+        return Some(ParsedFilter::Read(ReadFilter::new(pattern)));
+    }
+    if let Some(inner) = rule
         .strip_prefix("Write(")
         .and_then(|s| s.strip_suffix(')'))
     {
-        Some(ParsedRule::Write(
-            crate::canonicalize::best_effort_canonicalize(&expand_tilde(inner, home)),
-        ))
-    } else {
-        rule.strip_prefix("Edit(")
-            .and_then(|s| s.strip_suffix(')'))
-            .map(|inner| {
-                ParsedRule::Edit(crate::canonicalize::best_effort_canonicalize(
-                    &expand_tilde(inner, home),
-                ))
-            })
+        let pattern = crate::canonicalize::best_effort_canonicalize(&expand_tilde(inner, home));
+        return Some(ParsedFilter::Write(WriteFilter::new(pattern)));
     }
-}
-
-impl BashRule {
-    /// Reconstruct a human-readable rule string, e.g. `Bash(git status *)`.
-    pub fn to_rule_string(&self) -> String {
-        if self.prefix_tokens.is_empty() && self.wildcard {
-            "Bash(*)".to_string()
-        } else if self.wildcard {
-            format!("Bash({} *)", self.prefix_tokens.join(" "))
-        } else {
-            format!("Bash({})", self.prefix_tokens.join(" "))
-        }
+    if let Some(inner) = rule.strip_prefix("Edit(").and_then(|s| s.strip_suffix(')')) {
+        let pattern = crate::canonicalize::best_effort_canonicalize(&expand_tilde(inner, home));
+        return Some(ParsedFilter::Edit(EditFilter::new(pattern)));
     }
-}
-
-/// Check if a command (as tokens) matches a Bash rule.
-pub fn bash_rule_matches(rule: &BashRule, cmd_tokens: &[String]) -> bool {
-    match_tokens(&rule.prefix_tokens, cmd_tokens, rule.wildcard)
-}
-
-/// Recursive token matcher that supports `**` (matches zero or more tokens).
-fn match_tokens(rule_tokens: &[String], cmd_tokens: &[String], wildcard: bool) -> bool {
-    if rule_tokens.is_empty() {
-        return if wildcard {
-            true
-        } else {
-            cmd_tokens.is_empty()
-        };
-    }
-    if rule_tokens[0] == "**" {
-        // ** matches 0 or more command tokens
-        for skip in 0..=cmd_tokens.len() {
-            if match_tokens(&rule_tokens[1..], &cmd_tokens[skip..], wildcard) {
-                return true;
-            }
-        }
-        return false;
-    }
-    if cmd_tokens.is_empty() {
-        return false;
-    }
-    if !token_matches(&rule_tokens[0], &cmd_tokens[0]) {
-        return false;
-    }
-    match_tokens(&rule_tokens[1..], &cmd_tokens[1..], wildcard)
-}
-
-fn token_matches(pattern: &str, actual: &str) -> bool {
-    if pattern == "*" {
-        // Bare `*` matches any single token, including paths with `/`.
-        // (glob_match's `*` excludes `/`, which breaks rules like `git -C * status`.)
-        true
-    } else if pattern.contains('*') {
-        glob_match::glob_match(pattern, actual)
-    } else {
-        pattern == actual
-    }
+    None
 }
 
 /// Load settings from disk and parse them into `ParsedPermissions`, injecting
@@ -219,6 +133,10 @@ pub fn load_perms(
     if permission_mode == Some(PermissionMode::AcceptEdits) {
         let mut workspace_dirs = vec![project_root.to_string()];
         for dir in loaded.permissions.additional_directories {
+            // TODO: see plan how-are-file-filters-expressive-newell.md § deferred items (B6)
+            // The 4-tier prefix scheme (`//abs`, `~/home`, `/project-root`, cwd-relative)
+            // is applied to Read/Write/Edit rule strings but not here. Claude Code's own
+            // behavior for additionalDirectories paths is undocumented.
             let normalized = crate::path_util::normalize_separators(&dir);
             if normalized.starts_with('~')
                 || normalized.starts_with('/')
@@ -226,7 +144,6 @@ pub fn load_perms(
             {
                 workspace_dirs.push(normalized);
             } else {
-                // Relative path → resolve against project root
                 workspace_dirs.push(format!("{project_root}/{normalized}"));
             }
         }
@@ -254,13 +171,26 @@ pub fn inject_accept_edits_rules(perms: &mut ParsedPermissions, workspace_dirs: 
         let write_rule = format!("Write({base}/**)");
         let edit_rule = format!("Edit({base}/**)");
 
-        if let Some(ParsedRule::Write(pat)) = parse_single_rule(&write_rule, &home) {
-            perms.allow_write.push(pat);
+        if let Some(ParsedFilter::Write(f)) = parse_single_rule(&write_rule, &home) {
+            perms.write.allow.push(f);
         }
-        if let Some(ParsedRule::Edit(pat)) = parse_single_rule(&edit_rule, &home) {
-            perms.allow_edit.push(pat);
+        if let Some(ParsedFilter::Edit(f)) = parse_single_rule(&edit_rule, &home) {
+            perms.edit.allow.push(f);
         }
     }
+}
+
+/// Test-only helper: match a pattern against a path with separator normalization.
+///
+/// Production code uses `PathFilter::matches`, which assumes both sides are
+/// already canonical (forward-slash). This helper preserves the pre-refactor
+/// call-site ergonomics for tests that want to sanity-check glob semantics
+/// without threading a filter instance through.
+#[doc(hidden)]
+pub fn file_rule_matches(pattern: &str, path: &str) -> bool {
+    let pattern = crate::path_util::normalize_separators(pattern);
+    let path = crate::path_util::normalize_separators(path);
+    glob_match::glob_match(&pattern, &path)
 }
 
 /// Expand a leading `~/` or bare `~` to the home directory.
@@ -277,15 +207,4 @@ fn expand_tilde(path: &str, home: &str) -> String {
     } else {
         path.to_string()
     }
-}
-
-/// Check if a file path matches a file permission pattern.
-///
-/// Normalizes separators defensively — both inputs should already use forward
-/// slashes after ingress normalization and canonicalization, but user-authored
-/// rules may still contain backslashes on Windows.
-pub fn file_rule_matches(pattern: &str, file_path: &str) -> bool {
-    let pattern = crate::path_util::normalize_separators(pattern);
-    let file_path = crate::path_util::normalize_separators(file_path);
-    glob_match::glob_match(&pattern, &file_path)
 }

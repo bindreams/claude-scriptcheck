@@ -230,12 +230,7 @@ fn parse_global_options<'a>(args: &'a [&'a str], cwd: &str) -> GlobalOptions<'a>
         // `--man-path` / `--info-path` take no value at all.
         if matches!(
             arg,
-            "--version"
-                | "--help"
-                | "--exec-path"
-                | "--html-path"
-                | "--man-path"
-                | "--info-path"
+            "--version" | "--help" | "--exec-path" | "--html-path" | "--man-path" | "--info-path"
         ) {
             is_informational = true;
             i += 1;
@@ -381,7 +376,10 @@ fn parse_tag(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, Str
 
     // Any flag or positional = creating/deleting a tag
     for arg in args {
-        if matches!(*arg, "-d" | "--delete" | "-a" | "--annotate" | "-s" | "--sign") {
+        if matches!(
+            *arg,
+            "-d" | "--delete" | "-a" | "--annotate" | "-s" | "--sign"
+        ) {
             return Ok(ctx.write_git());
         }
     }
@@ -598,8 +596,7 @@ fn parse_clone(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, S
         // Skip value-taking flags
         if matches!(
             arg,
-            "-b"
-                | "--branch"
+            "-b" | "--branch"
                 | "--depth"
                 | "--jobs"
                 | "-j"

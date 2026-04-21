@@ -8,13 +8,7 @@ use super::builtins;
 use super::PythonAnalysis;
 
 // Modules whose mere import makes the script unanalyzable.
-const UNSAFE_IMPORT_MODULES: &[&str] = &[
-    "subprocess",
-    "ctypes",
-    "socket",
-    "importlib",
-    "shutil",
-];
+const UNSAFE_IMPORT_MODULES: &[&str] = &["subprocess", "ctypes", "socket", "importlib", "shutil"];
 
 // Submodules whose import makes the script unanalyzable.
 // Checked against the full dotted module name (with dot-boundary matching).
@@ -366,7 +360,8 @@ impl PythonVisitor {
                 .as_ref()
                 .map(|id| id.as_str())
                 .unwrap_or(module_name);
-            self.imports.insert(local_name.to_string(), module_name.to_string());
+            self.imports
+                .insert(local_name.to_string(), module_name.to_string());
 
             // Check if this shadows a builtin
             self.shadow_if_builtin(local_name);
@@ -676,9 +671,11 @@ impl PythonVisitor {
                     return;
                 }
             }
-        } else if let Some(kw) = call.keywords.iter().find(|k| {
-            k.arg.as_ref().is_some_and(|id| id.as_str() == "mode")
-        }) {
+        } else if let Some(kw) = call
+            .keywords
+            .iter()
+            .find(|k| k.arg.as_ref().is_some_and(|id| id.as_str() == "mode"))
+        {
             match try_extract_string(&kw.value) {
                 Some(s) => s,
                 None => {
@@ -707,7 +704,7 @@ fn try_extract_string(expr: &Expr) -> Option<String> {
 
 /// Check if a module name matches an unsafe submodule (dot-boundary matching).
 fn is_unsafe_submodule(module_name: &str) -> bool {
-    UNSAFE_IMPORT_SUBMODULES.iter().any(|prefix| {
-        module_name == *prefix || module_name.starts_with(&format!("{prefix}."))
-    })
+    UNSAFE_IMPORT_SUBMODULES
+        .iter()
+        .any(|prefix| module_name == *prefix || module_name.starts_with(&format!("{prefix}.")))
 }

@@ -53,9 +53,7 @@ macro_rules! impl_filter {
                 $kind
             }
             fn data(&self) -> ::std::borrow::Cow<'_, str> {
-                ::std::borrow::Cow::Borrowed(
-                    <Self as $crate::filter::PathFilter>::pattern(self),
-                )
+                ::std::borrow::Cow::Borrowed(<Self as $crate::filter::PathFilter>::pattern(self))
             }
         }
     };
@@ -83,11 +81,17 @@ pub enum Verdict {
 }
 
 /// A verdict-bucketed collection of filters of one kind.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RuleSet<F> {
     pub allow: Vec<F>,
     pub deny: Vec<F>,
     pub ask: Vec<F>,
+}
+
+impl<F> Default for RuleSet<F> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<F> RuleSet<F> {

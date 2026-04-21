@@ -117,10 +117,7 @@ mod tests {
 
     #[test]
     fn log_path_override_whitespace_only_returns_none() {
-        let result = log_path_override_with(env_reader(
-            "CLAUDE_SCRIPTCHECK_LOG_PATH",
-            Some("   "),
-        ));
+        let result = log_path_override_with(env_reader("CLAUDE_SCRIPTCHECK_LOG_PATH", Some("   ")));
         assert_eq!(result, None);
     }
 }

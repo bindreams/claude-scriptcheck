@@ -917,7 +917,9 @@ fn python_c_open_write_without_rule_asks_specific_path() {
         let rules = &d.missing_rules;
         // /tmp may be canonicalized to /private/tmp on macOS
         assert!(
-            rules.iter().any(|r| r.starts_with("Write(") && r.contains("/tmp/x")),
+            rules
+                .iter()
+                .any(|r| r.starts_with("Write(") && r.contains("/tmp/x")),
             "expected Write(.../tmp/x), got {rules:?}",
         );
         // Should NOT fall back to Bash(python3 -c *)
@@ -977,22 +979,13 @@ fn python_not_python3_also_analyzed() {
 #[skuld::test]
 fn python_c_bash_ask_rule_forces_ask() {
     // If there's an explicit Bash ask rule, Python analysis doesn't suppress it
-    let d = check_with_ask(
-        r#"python3 -c "print(42)""#,
-        &[],
-        &[],
-        &["Bash(python3 *)"],
-    );
+    let d = check_with_ask(r#"python3 -c "print(42)""#, &[], &[], &["Bash(python3 *)"]);
     assert_eq!(d.decision, Decision::Ask);
 }
 
 #[skuld::test]
 fn python_c_bash_deny_rule_still_denies() {
-    let d = check(
-        r#"python3 -c "print(42)""#,
-        &[],
-        &["Bash(python3 *)"],
-    );
+    let d = check(r#"python3 -c "print(42)""#, &[], &["Bash(python3 *)"]);
     assert!(matches!(d.decision, Decision::Deny(_)));
 }
 
@@ -1073,11 +1066,7 @@ fn deny_rule_matches_normalized_name() {
 
 #[skuld::test]
 fn uv_run_python_c_allows() {
-    let d = check(
-        r#"uv run python -c "import json; print(1)""#,
-        &[],
-        &[],
-    );
+    let d = check(r#"uv run python -c "import json; print(1)""#, &[], &[]);
     assert_eq!(d.decision, Decision::Allow);
 }
 
@@ -1093,11 +1082,7 @@ fn uv_run_with_flag_python_c_allows() {
 
 #[skuld::test]
 fn uv_run_python_c_unanalyzable_asks_for_bash() {
-    let d = check(
-        r#"uv run python -c "import subprocess""#,
-        &[],
-        &[],
-    );
+    let d = check(r#"uv run python -c "import subprocess""#, &[], &[]);
     if d.decision == Decision::Ask {
         let rules = &d.missing_rules;
         assert!(
@@ -1111,11 +1096,7 @@ fn uv_run_python_c_unanalyzable_asks_for_bash() {
 
 #[skuld::test]
 fn uv_run_python_versioned_allows() {
-    let d = check(
-        r#"uv run python3.12 -c "print(1)""#,
-        &[],
-        &[],
-    );
+    let d = check(r#"uv run python3.12 -c "print(1)""#, &[], &[]);
     assert_eq!(d.decision, Decision::Allow);
 }
 
@@ -1124,11 +1105,7 @@ fn uv_run_python_versioned_allows() {
 #[skuld::test]
 fn git_restore_allowed_by_write_rule() {
     // git restore . with Write rule covering cwd → should Allow without Bash rule
-    let d = check(
-        "git restore .",
-        &[&format!("Write({}/**)", c("/tmp"))],
-        &[],
-    );
+    let d = check("git restore .", &[&format!("Write({}/**)", c("/tmp"))], &[]);
     assert_eq!(d.decision, Decision::Allow);
 }
 
@@ -1207,10 +1184,7 @@ fn git_push_requires_bash_rule() {
 fn git_fetch_allowed_with_bash_and_write_rules() {
     let d = check(
         "git fetch origin",
-        &[
-            "Bash(git fetch *)",
-            &format!("Write({}/**)", c("/tmp")),
-        ],
+        &["Bash(git fetch *)", &format!("Write({}/**)", c("/tmp"))],
         &[],
     );
     assert_eq!(d.decision, Decision::Allow);
@@ -1277,11 +1251,7 @@ fn git_reset_hard_needs_write() {
 
 #[skuld::test]
 fn git_restore_denied() {
-    let d = check(
-        "git restore .",
-        &[],
-        &[&format!("Write({}/**)", c("/tmp"))],
-    );
+    let d = check("git restore .", &[], &[&format!("Write({}/**)", c("/tmp"))]);
     assert!(matches!(d.decision, Decision::Deny(_)));
 }
 

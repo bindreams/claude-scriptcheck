@@ -284,7 +284,11 @@ fn install_uninstall_roundtrip() {
         .current_dir(&dir)
         .output()
         .expect("Failed to run binary");
-    assert!(output.status.success(), "install failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "install failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let settings_path = dir.join(".claude/settings.json");
     let content = std::fs::read_to_string(&settings_path).unwrap();
@@ -313,9 +317,7 @@ fn install_uninstall_roundtrip() {
     // Verify all matchers are present
     for &matcher in SUPPORTED_MATCHERS {
         assert!(
-            hooks
-                .iter()
-                .any(|e| e["matcher"].as_str() == Some(matcher)),
+            hooks.iter().any(|e| e["matcher"].as_str() == Some(matcher)),
             "missing matcher: {matcher}"
         );
     }
@@ -326,7 +328,11 @@ fn install_uninstall_roundtrip() {
         .current_dir(&dir)
         .output()
         .expect("Failed to run binary");
-    assert!(output.status.success(), "uninstall failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "uninstall failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let content = std::fs::read_to_string(&settings_path).unwrap();
     let json: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -421,7 +427,11 @@ fn log_verdict_filter_public_api() {
     use claude_scriptcheck::cli::VerdictFilter;
 
     let content = make_log_content(&["allow", "deny", "ask", "allow"]);
-    let filter = VerdictFilter { show_allow: false, show_ask: true, show_deny: true };
+    let filter = VerdictFilter {
+        show_allow: false,
+        show_ask: true,
+        show_deny: true,
+    };
     let docs = logging::split_documents(&content);
     let filtered: Vec<_> = docs
         .into_iter()

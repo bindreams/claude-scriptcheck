@@ -323,10 +323,7 @@ mod tests {
 
     #[test]
     fn normalize_venv_path() {
-        assert_eq!(
-            normalize_cmd_name(".venv/Scripts/python.exe"),
-            "python"
-        );
+        assert_eq!(normalize_cmd_name(".venv/Scripts/python.exe"), "python");
     }
 
     #[test]

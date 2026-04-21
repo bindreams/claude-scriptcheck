@@ -3,7 +3,8 @@ use thaum::visit::Visit;
 
 use crate::cmd_parser::{self, CmdParseResult};
 use crate::file_access::{self, AccessKind, FileAccess};
-use crate::permission::{self, ParsedPermissions};
+use crate::filter::{BashFilter, Filter, PathFilter};
+use crate::permission::ParsedPermissions;
 use crate::permission_mode::PermissionMode;
 use crate::python_ast::{self, PythonAnalysis};
 
@@ -252,9 +253,9 @@ impl PermissionChecker<'_> {
             .collect();
 
         // Check against Bash() deny rules first
-        for rule in &self.perms.deny_bash {
-            if permission::bash_rule_matches(rule, &cmd_tokens) {
-                self.matched_deny.push(rule.to_rule_string());
+        for filter in &self.perms.bash.deny {
+            if filter.matches(&cmd_tokens) {
+                self.matched_deny.push(filter.to_rule_string());
                 self.deny(format!(
                     "Command '{}' matched deny rule",
                     cmd_tokens.join(" ")
@@ -266,16 +267,17 @@ impl PermissionChecker<'_> {
         // Check against Bash() ask rules — force ask even if allowed
         let bash_asked = self
             .perms
-            .ask_bash
+            .bash
+            .ask
             .iter()
-            .any(|rule| permission::bash_rule_matches(rule, &cmd_tokens));
+            .any(|filter| filter.matches(&cmd_tokens));
 
         // Check against Bash() allow rules (skip if ask matched)
         let bash_allowed = !bash_asked
-            && self.perms.allow_bash.iter().any(|rule| {
-                let matched = permission::bash_rule_matches(rule, &cmd_tokens);
+            && self.perms.bash.allow.iter().any(|filter| {
+                let matched = filter.matches(&cmd_tokens);
                 if matched {
-                    self.matched_allow.push(rule.to_rule_string());
+                    self.matched_allow.push(filter.to_rule_string());
                 }
                 matched
             });
@@ -377,21 +379,27 @@ impl PermissionChecker<'_> {
             } || (python_analyzed && !bash_asked);
 
             if !can_skip {
-                let rule = if let Some(idx) = inline_script_start {
+                let filter = if let Some(idx) = inline_script_start {
                     // Truncate before the inline script text, append wildcard.
                     // idx is 0-based into args (without cmd name), so in
                     // cmd_tokens (which has cmd name at [0]) it maps to idx+1.
                     let end = (idx + 1).min(cmd_tokens.len());
-                    format!("Bash({} *)", cmd_tokens[..end].join(" "))
+                    BashFilter::new_wildcard(cmd_tokens[..end].to_vec())
                 } else {
-                    format!("Bash({})", cmd_tokens.join(" "))
+                    BashFilter::new(cmd_tokens.clone())
                 };
-                self.unmatched.push(rule);
+                self.unmatched.push(filter.to_rule_string());
             }
         }
     }
 
     /// Check file access against Read/Write/Edit rules.
+    ///
+    /// Edit-over-Write fallback: for `AccessKind::Write`, each bucket (deny, ask,
+    /// allow) is tested first against `write.<bucket>` and then against
+    /// `edit.<bucket>`. `Edit(pat)` therefore also allows/denies/asks writes —
+    /// but not vice versa. The fallback is an intentional asymmetry; see
+    /// CLAUDE.md conventions.
     fn check_file_access(&mut self, access: &FileAccess) {
         if self.denied.is_some() {
             return;
@@ -400,27 +408,11 @@ impl PermissionChecker<'_> {
         // Canonicalize the query path before matching against rules
         let path = crate::canonicalize::best_effort_canonicalize(&access.path);
 
-        // Check deny first
-        let deny_matched = match access.kind {
-            AccessKind::Read => self
-                .perms
-                .deny_read
-                .iter()
-                .find(|pat| permission::file_rule_matches(pat, &path))
-                .map(|pat| format!("Read({pat})")),
-            AccessKind::Write => self
-                .perms
-                .deny_write
-                .iter()
-                .find(|pat| permission::file_rule_matches(pat, &path))
-                .map(|pat| format!("Write({pat})"))
-                .or_else(|| {
-                    self.perms
-                        .deny_edit
-                        .iter()
-                        .find(|pat| permission::file_rule_matches(pat, &path))
-                        .map(|pat| format!("Edit({pat})"))
-                }),
+        // Check deny first (Edit fallback for Write)
+        let deny_matched: Option<String> = match access.kind {
+            AccessKind::Read => find_match(&self.perms.read.deny, &path),
+            AccessKind::Write => find_match(&self.perms.write.deny, &path)
+                .or_else(|| find_match(&self.perms.edit.deny, &path)),
         };
         if let Some(rule_str) = deny_matched {
             self.matched_deny.push(rule_str);
@@ -431,23 +423,12 @@ impl PermissionChecker<'_> {
             return;
         }
 
-        // Check ask rules — force ask even if allowed
+        // Check ask rules — force ask even if allowed (Edit fallback for Write)
         let ask_matched = match access.kind {
-            AccessKind::Read => self
-                .perms
-                .ask_read
-                .iter()
-                .any(|pat| permission::file_rule_matches(pat, &path)),
+            AccessKind::Read => find_match(&self.perms.read.ask, &path).is_some(),
             AccessKind::Write => {
-                self.perms
-                    .ask_write
-                    .iter()
-                    .any(|pat| permission::file_rule_matches(pat, &path))
-                    || self
-                        .perms
-                        .ask_edit
-                        .iter()
-                        .any(|pat| permission::file_rule_matches(pat, &path))
+                find_match(&self.perms.write.ask, &path).is_some()
+                    || find_match(&self.perms.edit.ask, &path).is_some()
             }
         };
         if ask_matched {
@@ -459,27 +440,11 @@ impl PermissionChecker<'_> {
             return;
         }
 
-        // Check allow
-        let allow_matched = match access.kind {
-            AccessKind::Read => self
-                .perms
-                .allow_read
-                .iter()
-                .find(|pat| permission::file_rule_matches(pat, &path))
-                .map(|pat| format!("Read({pat})")),
-            AccessKind::Write => self
-                .perms
-                .allow_write
-                .iter()
-                .find(|pat| permission::file_rule_matches(pat, &path))
-                .map(|pat| format!("Write({pat})"))
-                .or_else(|| {
-                    self.perms
-                        .allow_edit
-                        .iter()
-                        .find(|pat| permission::file_rule_matches(pat, &path))
-                        .map(|pat| format!("Edit({pat})"))
-                }),
+        // Check allow (Edit fallback for Write)
+        let allow_matched: Option<String> = match access.kind {
+            AccessKind::Read => find_match(&self.perms.read.allow, &path),
+            AccessKind::Write => find_match(&self.perms.write.allow, &path)
+                .or_else(|| find_match(&self.perms.edit.allow, &path)),
         };
         if let Some(rule_str) = allow_matched {
             self.matched_allow.push(rule_str);
@@ -517,6 +482,16 @@ impl PermissionChecker<'_> {
             _ => {}
         }
     }
+}
+
+/// Scan a bucket of path filters for one that covers `path`; return its rule
+/// string form if found. Generic over `PathFilter` so the same helper serves
+/// Read/Write/Edit buckets.
+fn find_match<F: PathFilter>(bucket: &[F], path: &str) -> Option<String> {
+    bucket
+        .iter()
+        .find(|f| f.matches(path))
+        .map(|f| f.to_rule_string())
 }
 
 // ─── Redirect file access extraction ─────────────────────────────────────────
@@ -678,8 +653,7 @@ mod apply_mode_tests {
     #[test]
     fn idempotent_in_bypass() {
         let once = apply_permission_mode(ask_result(), Some(PermissionMode::BypassPermissions));
-        let twice =
-            apply_permission_mode(once.clone(), Some(PermissionMode::BypassPermissions));
+        let twice = apply_permission_mode(once.clone(), Some(PermissionMode::BypassPermissions));
         assert_eq!(once, twice);
     }
 

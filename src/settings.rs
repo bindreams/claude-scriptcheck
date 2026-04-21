@@ -136,9 +136,7 @@ fn compute_managed_settings_path(
     program_data: Option<std::ffi::OsString>,
 ) -> PathBuf {
     match target_os {
-        "macos" => {
-            PathBuf::from("/Library/Application Support/ClaudeCode/managed-settings.json")
-        }
+        "macos" => PathBuf::from("/Library/Application Support/ClaudeCode/managed-settings.json"),
         "windows" => {
             let base = program_data
                 .map(PathBuf::from)
@@ -149,12 +147,7 @@ fn compute_managed_settings_path(
     }
 }
 
-fn merge_from_with_base(
-    path: &Path,
-    cwd: &str,
-    project_root: &str,
-    result: &mut LoadedSettings,
-) {
+fn merge_from_with_base(path: &Path, cwd: &str, project_root: &str, result: &mut LoadedSettings) {
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
     };
@@ -240,10 +233,8 @@ mod tests {
 
     #[test]
     fn managed_path_windows_with_program_data() {
-        let p = compute_managed_settings_path(
-            "windows",
-            Some(OsString::from("D:/CustomProgramData")),
-        );
+        let p =
+            compute_managed_settings_path("windows", Some(OsString::from("D:/CustomProgramData")));
         let s = p.to_string_lossy().replace('\\', "/");
         assert_eq!(s, "D:/CustomProgramData/ClaudeCode/managed-settings.json");
     }

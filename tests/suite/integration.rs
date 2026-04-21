@@ -118,9 +118,7 @@ fn apply_test_isolation(cmd: &mut Command) -> IsolatedLog {
     let isolated_home = base.join(format!(
         "claude-scriptcheck-test-home-{pid}-{counter}-nonexistent"
     ));
-    let log_path = base.join(format!(
-        "claude-scriptcheck-test-log-{pid}-{counter}.yaml"
-    ));
+    let log_path = base.join(format!("claude-scriptcheck-test-log-{pid}-{counter}.yaml"));
     cmd.env("HOME", &isolated_home);
     cmd.env("CLAUDE_SCRIPTCHECK_HOOK_HOME", &isolated_home);
     cmd.env("CLAUDE_SCRIPTCHECK_LOG_PATH", &log_path);
@@ -347,12 +345,20 @@ fn accept_edits_allows_workspace_write(#[fixture(temp_dir)] dir: &std::path::Pat
     let file_in_workspace = format!("{project_root}/src/main.rs");
     std::fs::create_dir(dir.join("src")).unwrap();
 
-    let input = file_tool_json_with_mode("Edit", &file_in_workspace, &project_root, Some("acceptEdits"));
+    let input = file_tool_json_with_mode(
+        "Edit",
+        &file_in_workspace,
+        &project_root,
+        Some("acceptEdits"),
+    );
     let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
 
     assert_eq!(output.status.code(), Some(0));
     let decision = parse_decision(&output);
-    assert_eq!(decision, "allow", "acceptEdits should auto-allow workspace edit");
+    assert_eq!(
+        decision, "allow",
+        "acceptEdits should auto-allow workspace edit"
+    );
 }
 
 #[skuld::test]
@@ -360,12 +366,20 @@ fn accept_edits_allows_workspace_write_tool(#[fixture(temp_dir)] dir: &std::path
     let project_root = dir.to_string_lossy().to_string();
     let file_in_workspace = format!("{project_root}/output.txt");
 
-    let input = file_tool_json_with_mode("Write", &file_in_workspace, &project_root, Some("acceptEdits"));
+    let input = file_tool_json_with_mode(
+        "Write",
+        &file_in_workspace,
+        &project_root,
+        Some("acceptEdits"),
+    );
     let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
 
     assert_eq!(output.status.code(), Some(0));
     let decision = parse_decision(&output);
-    assert_eq!(decision, "allow", "acceptEdits should auto-allow workspace Write tool");
+    assert_eq!(
+        decision, "allow",
+        "acceptEdits should auto-allow workspace Write tool"
+    );
 }
 
 #[skuld::test]
@@ -378,7 +392,10 @@ fn accept_edits_asks_outside_workspace(#[fixture(temp_dir)] dir: &std::path::Pat
 
     assert_eq!(output.status.code(), Some(0));
     let decision = parse_decision(&output);
-    assert_eq!(decision, "ask", "acceptEdits should not auto-allow outside workspace");
+    assert_eq!(
+        decision, "ask",
+        "acceptEdits should not auto-allow outside workspace"
+    );
 }
 
 #[skuld::test]
@@ -421,10 +438,7 @@ fn hook_home_override_redirects_settings_loading(#[fixture(temp_dir)] dir: &std:
     let input = file_tool_json_with_mode("Read", "/etc/passwd", &project_root, None);
     let output = run_binary_with_env(
         &input,
-        &[(
-            "CLAUDE_SCRIPTCHECK_HOOK_HOME",
-            &mock_home.to_string_lossy(),
-        )],
+        &[("CLAUDE_SCRIPTCHECK_HOOK_HOME", &mock_home.to_string_lossy())],
     );
 
     assert_eq!(output.status.code(), Some(0));
@@ -445,7 +459,10 @@ fn missing_permission_mode_is_default(#[fixture(temp_dir)] dir: &std::path::Path
 
     assert_eq!(output.status.code(), Some(0));
     let decision = parse_decision(&output);
-    assert_eq!(decision, "ask", "without permission_mode, should ask for workspace edits");
+    assert_eq!(
+        decision, "ask",
+        "without permission_mode, should ask for workspace edits"
+    );
 }
 
 #[skuld::test]
@@ -453,12 +470,16 @@ fn default_mode_no_ephemeral_rules(#[fixture(temp_dir)] dir: &std::path::Path) {
     let project_root = dir.to_string_lossy().to_string();
     let file_in_workspace = format!("{project_root}/test.txt");
 
-    let input = file_tool_json_with_mode("Edit", &file_in_workspace, &project_root, Some("default"));
+    let input =
+        file_tool_json_with_mode("Edit", &file_in_workspace, &project_root, Some("default"));
     let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &project_root)]);
 
     assert_eq!(output.status.code(), Some(0));
     let decision = parse_decision(&output);
-    assert_eq!(decision, "ask", "default mode should ask for workspace edits");
+    assert_eq!(
+        decision, "ask",
+        "default mode should ask for workspace edits"
+    );
 }
 
 // ── Permission mode (bypassPermissions) tests ───────────────────────────────
@@ -521,8 +542,7 @@ fn bypass_allows_read() {
 
 #[skuld::test]
 fn bypass_allows_write() {
-    let input =
-        file_tool_json_with_mode("Write", "/etc/passwd", "/tmp", Some("bypassPermissions"));
+    let input = file_tool_json_with_mode("Write", "/etc/passwd", "/tmp", Some("bypassPermissions"));
     let output = run_binary_with_env(&input, &[]);
 
     assert_eq!(output.status.code(), Some(0));
@@ -531,8 +551,7 @@ fn bypass_allows_write() {
 
 #[skuld::test]
 fn bypass_allows_edit() {
-    let input =
-        file_tool_json_with_mode("Edit", "/etc/passwd", "/tmp", Some("bypassPermissions"));
+    let input = file_tool_json_with_mode("Edit", "/etc/passwd", "/tmp", Some("bypassPermissions"));
     let output = run_binary_with_env(&input, &[]);
 
     assert_eq!(output.status.code(), Some(0));
@@ -854,12 +873,7 @@ fn dont_ask_denies_grep_without_rule() {
 
 #[skuld::test]
 fn missing_file_path_in_dont_ask_denies() {
-    let input = hook_json_with_mode(
-        "Write",
-        serde_json::json!({}),
-        "/tmp",
-        Some("dontAsk"),
-    );
+    let input = hook_json_with_mode("Write", serde_json::json!({}), "/tmp", Some("dontAsk"));
     let output = run_binary_with_env(&input, &[]);
 
     assert_eq!(output.status.code(), Some(0));
@@ -900,9 +914,7 @@ fn bypass_respects_file_deny_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
     // `//path` is Claude Code's absolute-path escape.
     std::fs::write(
         canonical.join(".claude/settings.json"),
-        format!(
-            r#"{{"permissions":{{"deny":["Write(/{project_root}/forbidden.txt)"]}}}}"#,
-        ),
+        format!(r#"{{"permissions":{{"deny":["Write(/{project_root}/forbidden.txt)"]}}}}"#,),
     )
     .unwrap();
 

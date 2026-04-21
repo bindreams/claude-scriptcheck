@@ -87,7 +87,15 @@ fn main() {
             permission_mode,
         }) => cli::check(&command, &cwd, permission_mode),
         Some(Commands::Log {
-            clear, follow, tail, allow, no_allow, ask, no_ask, deny, no_deny,
+            clear,
+            follow,
+            tail,
+            allow,
+            no_allow,
+            ask,
+            no_ask,
+            deny,
+            no_deny,
         }) => {
             // Default is shown (when neither --flag nor --no-flag is passed).
             // `overrides_with` ensures last-one-wins when both are passed.
@@ -333,7 +341,10 @@ fn log_and_output(
         }
         checker::Decision::Ask => {
             let reason = result.custom_reason.clone().unwrap_or_else(|| {
-                format!("Missing permission rules: {}", result.missing_rules.join(", "))
+                format!(
+                    "Missing permission rules: {}",
+                    result.missing_rules.join(", ")
+                )
             });
             logging::log_decision(
                 session_id,
@@ -367,13 +378,19 @@ mod tests {
         full_args.extend_from_slice(args);
         let cli = Cli::try_parse_from(full_args).unwrap();
         match cli.command.unwrap() {
-            Commands::Log { allow, no_allow, ask, no_ask, deny, no_deny, .. } => {
-                cli::VerdictFilter {
-                    show_allow: allow || !no_allow,
-                    show_ask: ask || !no_ask,
-                    show_deny: deny || !no_deny,
-                }
-            }
+            Commands::Log {
+                allow,
+                no_allow,
+                ask,
+                no_ask,
+                deny,
+                no_deny,
+                ..
+            } => cli::VerdictFilter {
+                show_allow: allow || !no_allow,
+                show_ask: ask || !no_ask,
+                show_deny: deny || !no_deny,
+            },
             _ => unreachable!(),
         }
     }
