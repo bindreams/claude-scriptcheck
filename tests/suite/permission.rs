@@ -825,6 +825,48 @@ fn inject_root_dir_skipped() {
     assert!(perms.edit.allow.is_empty());
 }
 
+// ─── B7: drive-root / UNC-root skipping ──────────────────────────────────────
+
+#[skuld::test]
+fn inject_drive_root_forward_slash_skipped() {
+    // B7: C:/ as workspace would produce Write(C:/**), allowing everything on the drive.
+    let mut perms = ParsedPermissions::default();
+    inject_accept_edits_rules(&mut perms, &["C:/".to_string()]);
+    assert!(perms.write.allow.is_empty());
+    assert!(perms.edit.allow.is_empty());
+}
+
+#[skuld::test]
+fn inject_drive_root_backslash_skipped() {
+    // B7: C:\\ (backslash form) — same rationale.
+    let mut perms = ParsedPermissions::default();
+    inject_accept_edits_rules(&mut perms, &["C:\\".to_string()]);
+    assert!(perms.write.allow.is_empty());
+    assert!(perms.edit.allow.is_empty());
+}
+
+#[skuld::test]
+fn inject_unc_share_root_skipped() {
+    // B7: //server/share and \\server\share forms — same rationale.
+    let mut perms = ParsedPermissions::default();
+    inject_accept_edits_rules(&mut perms, &["//server/share".to_string()]);
+    assert!(perms.write.allow.is_empty());
+
+    let mut perms = ParsedPermissions::default();
+    inject_accept_edits_rules(&mut perms, &["\\\\server\\share".to_string()]);
+    assert!(perms.write.allow.is_empty());
+}
+
+#[skuld::test]
+fn inject_bare_drive_goes_through() {
+    // B7 guardrail: bare "C:" is relative (not a root) and must NOT be skipped.
+    // Preserves the pre-B7 behavior where bare `C:` produced a literal subdir rule.
+    let mut perms = ParsedPermissions::default();
+    inject_accept_edits_rules(&mut perms, &["C:".to_string()]);
+    assert_eq!(perms.write.allow.len(), 1);
+    assert_eq!(perms.edit.allow.len(), 1);
+}
+
 #[skuld::test]
 fn injected_rules_match_workspace_file(#[fixture(temp_dir)] dir: &Path) {
     let canonical = claude_scriptcheck::path_util::normalize_separators(

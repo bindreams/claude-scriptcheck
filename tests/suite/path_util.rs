@@ -84,3 +84,46 @@ fn unc_path_normalized() {
         "//server/share/file"
     );
 }
+
+// is_filesystem_root ==================================================================================================
+
+#[skuld::test]
+fn unix_root_is_filesystem_root() {
+    assert!(is_filesystem_root("/"));
+}
+
+#[skuld::test]
+fn drive_root_forward_slash_is_filesystem_root() {
+    assert!(is_filesystem_root("C:/"));
+    assert!(is_filesystem_root("d:/"));
+}
+
+#[skuld::test]
+fn drive_root_backslash_is_filesystem_root() {
+    assert!(is_filesystem_root("C:\\"));
+}
+
+#[skuld::test]
+fn unc_share_root_is_filesystem_root() {
+    assert!(is_filesystem_root("//server/share"));
+    assert!(is_filesystem_root("//server/share/"));
+    assert!(is_filesystem_root("\\\\server\\share"));
+    assert!(is_filesystem_root("\\\\server\\share\\"));
+}
+
+#[skuld::test]
+fn bare_drive_letter_is_not_filesystem_root() {
+    // bare "C:" is relative — not a root
+    assert!(!is_filesystem_root("C:"));
+}
+
+#[skuld::test]
+fn non_root_paths_are_not_filesystem_root() {
+    assert!(!is_filesystem_root("/foo"));
+    assert!(!is_filesystem_root("/foo/bar"));
+    assert!(!is_filesystem_root("C:/Users"));
+    assert!(!is_filesystem_root("//server/share/file"));
+    assert!(!is_filesystem_root("//server"));
+    assert!(!is_filesystem_root(""));
+    assert!(!is_filesystem_root("relative/path"));
+}

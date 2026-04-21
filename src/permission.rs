@@ -182,6 +182,11 @@ pub fn inject_accept_edits_rules(perms: &mut ParsedPermissions, workspace_dirs: 
         .unwrap_or_default();
 
     for dir in workspace_dirs {
+        // Skip filesystem roots: Write(<root>/**) would auto-allow the entire
+        // filesystem (or drive / UNC share). B7 — see CLAUDE.md conventions.
+        if crate::path_util::is_filesystem_root(dir) {
+            continue;
+        }
         let normalized = crate::path_util::normalize_separators(dir);
         let base = normalized.trim_end_matches('/');
         if base.is_empty() {
