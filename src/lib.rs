@@ -4,6 +4,7 @@ pub mod cli;
 pub mod cmd_parser;
 pub mod env_hooks;
 pub mod file_access;
+pub mod filter;
 pub mod hook;
 pub mod logging;
 pub mod path_util;
