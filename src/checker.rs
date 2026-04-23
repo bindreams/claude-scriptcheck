@@ -230,10 +230,18 @@ impl PermissionChecker<'_> {
         let raw_arg0 = match &arg_literals[0] {
             Some(name) => name.clone(),
             None => {
-                // Dynamic command name. Only universal Bash allow rules
-                // (`Bash(*)` / `Bash(**)`) match — anything with a concrete
-                // Arg0 item returns false from `matches_dynamic_arg0`.
-                let (_bash_asked, bash_allowed) = self.check_bash_rules(None, &[]);
+                // Dynamic command name. The matcher walks `items` against
+                // the static args only (arg0 is treated as missing); rules
+                // starting with a concrete `Arg0(...)` item can't match, but
+                // shapes like `Bash(** foo)` can still match if the static
+                // args align with the trailing items.
+                let dyn_static_args: Vec<String> = arg_literals[1..]
+                    .iter()
+                    .take_while(|a| a.is_some())
+                    .map(|a| a.clone().unwrap())
+                    .collect();
+                let (_bash_asked, bash_allowed) =
+                    self.check_bash_rules(None, &dyn_static_args);
                 if self.denied.is_some() {
                     return;
                 }
@@ -504,7 +512,7 @@ impl PermissionChecker<'_> {
         let cwd = self.cwd;
         let test = |f: &BashFilter| match raw_arg0 {
             Some(a) => f.matches(a, args, cwd),
-            None => f.matches_dynamic_arg0(),
+            None => f.matches_dynamic_arg0(args, cwd),
         };
 
         for filter in &self.perms.bash.deny {
@@ -525,7 +533,7 @@ impl PermissionChecker<'_> {
             }
         }
 
-        let asked = self.perms.bash.ask.iter().any(|f| test(f));
+        let asked = self.perms.bash.ask.iter().any(&test);
 
         let mut allowed = false;
         if !asked {

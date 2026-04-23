@@ -173,11 +173,17 @@ fn parse_bash_rule(inner: &str, ctx: &ParseCtx) -> Option<BashFilter> {
         } else if first {
             // Position 0 concrete token → Arg0(Name | Path).
             let pat = classify_arg0(tok, ctx)?;
-            // Readonly drop: symmetric across path-qualified forms so
-            // `Bash(/bin/readonly)` is dropped like bare `Bash(readonly)`.
+            // Readonly drop: symmetric across path-qualified *and* PATHEXT-
+            // suffixed forms. The Name branch already has PATHEXT stripped at
+            // classify time (line ~208); the Path branch's basename hasn't,
+            // so strip it here before the comparison — otherwise
+            // `Bash(/bin/readonly.exe)` would leak through and match a real
+            // invocation.
             let basename = match &pat {
                 Arg0Pattern::Name(n) => n.as_str(),
-                Arg0Pattern::Path(p) => basename_of_path(p),
+                Arg0Pattern::Path(p) => {
+                    crate::path_util::strip_pathext_suffix(basename_of_path(p))
+                }
             };
             if basename == "readonly" {
                 return None;
@@ -587,6 +593,33 @@ mod tests {
             parsed.is_none(),
             "path-qualified `/bin/readonly` → basename `readonly` → dropped"
         );
+    }
+
+    #[test]
+    fn parse_bash_readonly_with_path_and_pathext_dropped() {
+        // PATHEXT-suffixed forms in the Path branch also drop, matching the
+        // Name-branch behavior (Bash(readonly.exe) is dropped). Symmetric
+        // readonly drop: none of
+        //   Bash(readonly), Bash(readonly.exe), Bash(/bin/readonly),
+        //   Bash(/bin/readonly.exe), Bash(/bin/readonly.cmd)
+        // should survive parsing.
+        for rule in &[
+            "Bash(readonly.exe)",
+            "Bash(readonly.cmd)",
+            "Bash(/bin/readonly.exe)",
+            "Bash(/bin/readonly.cmd)",
+            "Bash(/bin/readonly.bat)",
+        ] {
+            let parsed = parse_single_rule(
+                rule,
+                &ParseCtx {
+                    home: "",
+                    cwd: "",
+                    project_root: "/project",
+                },
+            );
+            assert!(parsed.is_none(), "{rule} should be dropped");
+        }
     }
 
     #[test]

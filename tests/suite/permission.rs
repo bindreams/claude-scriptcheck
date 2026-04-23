@@ -40,11 +40,11 @@ fn tokens(s: &[&str]) -> Vec<String> {
 }
 
 /// Split a token list into `(raw_arg0, args)` and call `BashFilter::matches`.
-/// Empty token list goes through `matches_dynamic_arg0`.
+/// Empty token list goes through `matches_dynamic_arg0` with no args.
 fn match_tokens(rule: &BashFilter, ts: &[String]) -> bool {
     match ts.split_first() {
         Some((arg0, rest)) => rule.matches(arg0, rest, ""),
-        None => rule.matches_dynamic_arg0(),
+        None => rule.matches_dynamic_arg0(&[], ""),
     }
 }
 

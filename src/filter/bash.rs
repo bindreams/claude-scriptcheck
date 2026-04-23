@@ -67,10 +67,17 @@ impl BashFilter {
     }
 
     /// Returns true if this filter matches a dynamic-arg0 command (i.e. one
-    /// whose command name couldn't be statically resolved). Only universal
-    /// wildcard shapes like `Bash(*)` and `Bash(**)` qualify.
-    pub fn matches_dynamic_arg0(&self) -> bool {
-        match_items(&self.items, &[], "")
+    /// whose command name couldn't be statically resolved).
+    ///
+    /// The items list is walked against the *static args only* — arg0 is
+    /// treated as missing, so items starting with `Arg0(...)` (a concrete
+    /// name or path) cannot match. Items starting with `MatchZeroOrMore` can
+    /// still match if the remaining items align with `args` (so e.g.
+    /// `Bash(** foo)` with args `["foo"]` matches — `MatchZeroOrMore` skips
+    /// zero tokens, then `Arg("foo")` consumes `"foo"`).
+    pub fn matches_dynamic_arg0(&self, args: &[String], cwd: &str) -> bool {
+        let tokens: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        match_items(&self.items, &tokens, cwd)
     }
 
     /// Reconstruct the rule-string payload — e.g. `git status *` or
@@ -153,7 +160,7 @@ impl Arg0Pattern {
                 let lhs = lhs.trim_end_matches('/');
                 let rhs = rhs.trim_end_matches('/');
 
-                if paths_equal(lhs, rhs) {
+                if path_match(lhs, rhs) {
                     return true;
                 }
 
@@ -162,7 +169,7 @@ impl Arg0Pattern {
                 // `./bin/rg.cmd` and vice versa.
                 let lhs_stripped = strip_pathext_on_basename(lhs);
                 let rhs_stripped = strip_pathext_on_basename(rhs);
-                paths_equal(&lhs_stripped, &rhs_stripped)
+                path_match(&lhs_stripped, &rhs_stripped)
             }
         }
     }
@@ -242,6 +249,20 @@ fn paths_equal(a: &str, b: &str) -> bool {
 #[cfg(not(windows))]
 fn paths_equal(a: &str, b: &str) -> bool {
     a == b
+}
+
+/// Path-aware compare: delegates to `paths_equal` when `rule_pattern` has no
+/// wildcard, otherwise uses `glob_match` (which interprets `*` / `**` with
+/// the same semantics Read/Write/Edit rules use). Glob matching is always
+/// case-sensitive because `glob_match` has no case-fold option; that's
+/// consistent with Read/Write/Edit behavior. `lhs` is the command side,
+/// `rule_pattern` is the rule side.
+fn path_match(lhs: &str, rule_pattern: &str) -> bool {
+    if rule_pattern.contains('*') || rule_pattern.contains('?') {
+        glob_match::glob_match(rule_pattern, lhs)
+    } else {
+        paths_equal(lhs, rule_pattern)
+    }
 }
 
 #[cfg(test)]
@@ -352,6 +373,66 @@ mod tests {
         assert!(f.matches("./rg", &[], "/tmp/foo"));
     }
 
+    #[test]
+    fn arg0_path_with_glob_matches_via_glob_match() {
+        // Rules with glob segments in paths use glob_match (parallel to
+        // Read/Write/Edit). So `Bash(/opt/*/rg *)` matches any first-level
+        // subdirectory of /opt whose last component is `rg`.
+        let f = BashFilter::from_items(vec![path("/opt/*/rg")]);
+        assert!(f.matches("/opt/tools/rg", &[], "/cwd"));
+        assert!(f.matches("/opt/other/rg", &[], "/cwd"));
+        assert!(!f.matches("/opt/deep/nested/rg", &[], "/cwd")); // * is single-segment
+        assert!(!f.matches("/opt/tools/grep", &[], "/cwd"));
+    }
+
+    #[test]
+    fn arg0_path_with_double_star_glob_matches_nested() {
+        let f = BashFilter::from_items(vec![path("/opt/**/rg")]);
+        assert!(f.matches("/opt/rg", &[], "/cwd"));
+        assert!(f.matches("/opt/tools/rg", &[], "/cwd"));
+        assert!(f.matches("/opt/a/b/c/rg", &[], "/cwd"));
+        assert!(!f.matches("/usr/rg", &[], "/cwd"));
+    }
+
+    #[test]
+    fn arg0_path_trailing_slash_normalized() {
+        // Nonsense rule shape (directory path) — pinning behavior: after
+        // trim_end_matches('/'), `/tools/` and `/tools` compare equal, so an
+        // invocation of `/tools` (which would fail to exec as a directory
+        // anyway) does match. A real command under `/tools/` (like
+        // `/tools/rg`) doesn't match. Documented oddity, doesn't panic.
+        let f = BashFilter::from_items(vec![path("/tools/")]);
+        assert!(!f.matches("/tools/rg", &[], "/cwd"));
+        assert!(f.matches("/tools", &[], "/cwd"));
+    }
+
+    #[test]
+    fn arg0_path_drive_letter_absolute() {
+        // Windows drive-letter path: pins behavior cross-platform. On Unix
+        // this test still builds and runs because `path_clean` treats `C:`
+        // as just a component — the match is purely string-based.
+        let f = BashFilter::from_items(vec![path("C:/tools/rg.cmd")]);
+        assert!(f.matches("C:/tools/rg.cmd", &[], "/cwd"));
+        assert!(!f.matches("C:/tools/other", &[], "/cwd"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn arg0_name_case_insensitive_on_windows() {
+        let f = BashFilter::from_items(vec![name("git")]);
+        assert!(f.matches("GIT", &[], "/cwd"));
+        assert!(f.matches("Git.exe", &[], "/cwd"));
+        assert!(!f.matches("grep", &[], "/cwd"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn arg0_path_case_insensitive_on_windows() {
+        let f = BashFilter::from_items(vec![path("C:/Tools/Rg.cmd")]);
+        assert!(f.matches("c:/tools/rg.cmd", &[], "/cwd"));
+        assert!(f.matches("C:/TOOLS/RG.CMD", &[], "/cwd"));
+    }
+
     // Item-list matching =====
 
     #[test]
@@ -390,13 +471,36 @@ mod tests {
         let f = BashFilter::from_items(vec![BashFilterItem::MatchZeroOrMore]);
         assert!(f.matches("anything", &strs(&["at", "all"]), "/cwd"));
         assert!(f.matches("x", &[], "/cwd"));
-        assert!(f.matches_dynamic_arg0());
+        assert!(f.matches_dynamic_arg0(&[], "/cwd"));
+        assert!(f.matches_dynamic_arg0(&strs(&["args"]), "/cwd"));
     }
 
     #[test]
     fn matches_dynamic_arg0_rejects_concrete_arg0() {
         let f = BashFilter::from_items(vec![name("rg")]);
-        assert!(!f.matches_dynamic_arg0());
+        assert!(!f.matches_dynamic_arg0(&[], "/cwd"));
+        assert!(!f.matches_dynamic_arg0(&strs(&["foo"]), "/cwd"));
+    }
+
+    #[test]
+    fn matches_dynamic_arg0_mzm_then_arg_can_match_args() {
+        // `Bash(** foo)` with dynamic arg0 + args=["foo"] → MZM consumes 0,
+        // then Arg("foo") consumes "foo". Match.
+        let f = BashFilter::from_items(vec![BashFilterItem::MatchZeroOrMore, arg("foo")]);
+        assert!(f.matches_dynamic_arg0(&strs(&["foo"]), "/cwd"));
+        assert!(!f.matches_dynamic_arg0(&strs(&["bar"]), "/cwd"));
+        assert!(!f.matches_dynamic_arg0(&[], "/cwd"));
+    }
+
+    #[test]
+    fn matches_dynamic_arg0_rejects_path_and_match_one() {
+        let p = BashFilter::from_items(vec![path("/abs")]);
+        assert!(!p.matches_dynamic_arg0(&[], "/cwd"));
+        let m = BashFilter::from_items(vec![BashFilterItem::MatchOne]);
+        // MatchOne requires one token — no tokens (dynamic arg0, no args) → fail.
+        assert!(!m.matches_dynamic_arg0(&[], "/cwd"));
+        // With one arg, MatchOne consumes it → match.
+        assert!(m.matches_dynamic_arg0(&strs(&["x"]), "/cwd"));
     }
 
     // arg_matches glob =====
