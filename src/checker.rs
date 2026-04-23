@@ -107,7 +107,7 @@ pub fn check_file_accesses(
         matched_deny: Vec::new(),
     };
     for access in accesses {
-        checker.check_file_access(access);
+        checker.check_file_access(access, false);
         if checker.denied.is_some() {
             break;
         }
@@ -143,13 +143,16 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
     }
 
     fn visit_redirect(&mut self, redirect: &'ast Redirect) {
-        // Handles redirects for compound / function-def contexts.
-        // Command redirects are handled inside check_command.
+        // Handles redirects for compound / function-def contexts (e.g.
+        // `{ ...; } > /log`). Simple-command redirects are handled inside
+        // `check_command` via `extract_redirect_accesses`. Compound redirects
+        // are not bound to a single command, so no Bash allow rule can
+        // suppress them.
         if self.denied.is_some() {
             return;
         }
         if let Some(access) = extract_redirect_access(redirect, self.cwd) {
-            self.check_file_access(&access);
+            self.check_file_access(&access, false);
         }
     }
 
@@ -221,24 +224,27 @@ impl PermissionChecker<'_> {
         let cmd_name = match &arg_literals[0] {
             Some(name) => cmd_parser::normalize_cmd_name(name).to_string(),
             None => {
-                // Dynamic command name — can't determine identity
-                self.unmatched.push("Bash(<dynamic command>)".to_string());
-                // Still check redirects
+                // Dynamic command name. Only a truly universal Bash allow rule
+                // (`Bash(*)` / `Bash(**)`) can match empty tokens; anything
+                // prefix-anchored returns false from `BashFilter::matches(&[])`.
+                let (_bash_asked, bash_allowed) = self.check_bash_rules(&[]);
+                if self.denied.is_some() {
+                    return;
+                }
+                if !bash_allowed {
+                    self.unmatched.push("Bash(<dynamic command>)".to_string());
+                }
                 for redirect in &cmd.redirects {
                     if let Some(access) = extract_redirect_access(redirect, self.cwd) {
-                        self.check_file_access(&access);
+                        self.check_file_access(&access, bash_allowed);
+                        if self.denied.is_some() {
+                            return;
+                        }
                     }
                 }
                 return;
             }
         };
-
-        // eval — always ask
-        if cmd_name == "eval" {
-            self.unmatched
-                .push("Bash(eval ...) -- cannot statically analyze eval".to_string());
-            return;
-        }
 
         // Build token list for Bash() rule matching — only static tokens.
         // The first token uses the normalized command name so rules like
@@ -252,35 +258,21 @@ impl PermissionChecker<'_> {
             )
             .collect();
 
-        // Check against Bash() deny rules first
-        for filter in &self.perms.bash.deny {
-            if filter.matches(&cmd_tokens) {
-                self.matched_deny.push(filter.to_rule_string());
-                self.deny(format!(
-                    "Command '{}' matched deny rule",
-                    cmd_tokens.join(" ")
-                ));
-                return;
-            }
+        // Run Bash deny/ask/allow matching. Deny short-circuits the whole
+        // command; allow enables secondary-demand suppression downstream.
+        let (bash_asked, bash_allowed) = self.check_bash_rules(&cmd_tokens);
+        if self.denied.is_some() {
+            return;
         }
 
-        // Check against Bash() ask rules — force ask even if allowed
-        let bash_asked = self
-            .perms
-            .bash
-            .ask
-            .iter()
-            .any(|filter| filter.matches(&cmd_tokens));
-
-        // Check against Bash() allow rules (skip if ask matched)
-        let bash_allowed = !bash_asked
-            && self.perms.bash.allow.iter().any(|filter| {
-                let matched = filter.matches(&cmd_tokens);
-                if matched {
-                    self.matched_allow.push(filter.to_rule_string());
-                }
-                matched
-            });
+        // eval — always ask (unless a Bash allow rule explicitly covers it).
+        if cmd_name == "eval" {
+            if !bash_allowed {
+                self.unmatched
+                    .push("Bash(eval ...) -- cannot statically analyze eval".to_string());
+            }
+            return;
+        }
 
         // Extract file accesses from redirects
         let redirect_accesses = extract_redirect_accesses(&cmd.redirects, self.cwd);
@@ -312,10 +304,12 @@ impl PermissionChecker<'_> {
                     cmd_name: cn,
                     message,
                 } => {
-                    let cmd_str = cmd_tokens.join(" ");
-                    self.unmatched.push(format!(
-                        "Bash({cmd_str}) -- failed to parse arguments for `{cn}`: {message}"
-                    ));
+                    if !bash_allowed {
+                        let cmd_str = cmd_tokens.join(" ");
+                        self.unmatched.push(format!(
+                            "Bash({cmd_str}) -- failed to parse arguments for `{cn}`: {message}"
+                        ));
+                    }
                     (vec![], true, None, None, None)
                 }
             };
@@ -344,9 +338,11 @@ impl PermissionChecker<'_> {
             }
         }
 
-        // Check all file accesses
+        // Check all file accesses. A matching Bash allow rule suppresses ask-
+        // and missing-allow-driven `unmatched` pushes; file Deny rules still
+        // fire because `check_file_access` runs the deny scan unconditionally.
         for access in redirect_accesses.iter().chain(cmd_accesses.iter()) {
-            self.check_file_access(access);
+            self.check_file_access(access, bash_allowed);
             if self.denied.is_some() {
                 return;
             }
@@ -400,7 +396,12 @@ impl PermissionChecker<'_> {
     /// `edit.<bucket>`. `Edit(pat)` therefore also allows/denies/asks writes —
     /// but not vice versa. The fallback is an intentional asymmetry; see
     /// CLAUDE.md conventions.
-    fn check_file_access(&mut self, access: &FileAccess) {
+    ///
+    /// `suppress_unmatched`: when true, ask-matches and missing-allow results
+    /// do not push to `self.unmatched` (used when a Bash allow rule already
+    /// covers the owning command). Deny rules still fire unconditionally and
+    /// `matched_allow` still records matching allow rules for the log.
+    fn check_file_access(&mut self, access: &FileAccess, suppress_unmatched: bool) {
         if self.denied.is_some() {
             return;
         }
@@ -408,7 +409,8 @@ impl PermissionChecker<'_> {
         // Canonicalize the query path before matching against rules
         let path = crate::canonicalize::best_effort_canonicalize(&access.path);
 
-        // Check deny first (Edit fallback for Write)
+        // Check deny first (Edit fallback for Write) — always runs, even when
+        // suppressing, because file Deny is authoritative.
         let deny_matched: Option<String> = match access.kind {
             AccessKind::Read => find_match(&self.perms.read.deny, &path),
             AccessKind::Write => find_match(&self.perms.write.deny, &path)
@@ -432,11 +434,13 @@ impl PermissionChecker<'_> {
             }
         };
         if ask_matched {
-            let rule_needed = match access.kind {
-                AccessKind::Read => format!("Read({path})"),
-                AccessKind::Write => format!("Write({path})"),
-            };
-            self.unmatched.push(rule_needed);
+            if !suppress_unmatched {
+                let rule_needed = match access.kind {
+                    AccessKind::Read => format!("Read({path})"),
+                    AccessKind::Write => format!("Write({path})"),
+                };
+                self.unmatched.push(rule_needed);
+            }
             return;
         }
 
@@ -448,13 +452,56 @@ impl PermissionChecker<'_> {
         };
         if let Some(rule_str) = allow_matched {
             self.matched_allow.push(rule_str);
-        } else {
+        } else if !suppress_unmatched {
             let rule_needed = match access.kind {
                 AccessKind::Read => format!("Read({path})"),
                 AccessKind::Write => format!("Write({path})"),
             };
             self.unmatched.push(rule_needed);
         }
+    }
+
+    /// Scan Bash allow/ask/deny rules against `cmd_tokens`.
+    ///
+    /// Returns `(bash_asked, bash_allowed)`. If a deny rule matches, records
+    /// it via `self.deny(...)` and `self.matched_deny`; callers should check
+    /// `self.denied` after the call. Pushes the first matching allow rule's
+    /// string into `self.matched_allow` (mirroring the pre-refactor `.any`
+    /// short-circuit). When `bash_asked` is true, the allow scan is skipped
+    /// entirely — so no allow rule is recorded in that case, matching prior
+    /// behavior.
+    fn check_bash_rules(&mut self, cmd_tokens: &[String]) -> (bool, bool) {
+        for filter in &self.perms.bash.deny {
+            if filter.matches(cmd_tokens) {
+                let rule_str = filter.to_rule_string();
+                self.matched_deny.push(rule_str);
+                self.deny(if cmd_tokens.is_empty() {
+                    "Dynamic command name matched deny rule".to_string()
+                } else {
+                    format!("Command '{}' matched deny rule", cmd_tokens.join(" "))
+                });
+                return (false, false);
+            }
+        }
+
+        let asked = self
+            .perms
+            .bash
+            .ask
+            .iter()
+            .any(|f| f.matches(cmd_tokens));
+
+        let mut allowed = false;
+        if !asked {
+            for f in &self.perms.bash.allow {
+                if f.matches(cmd_tokens) {
+                    self.matched_allow.push(f.to_rule_string());
+                    allowed = true;
+                    break;
+                }
+            }
+        }
+        (asked, allowed)
     }
 
     /// Walk word fragments for command substitutions.

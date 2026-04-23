@@ -55,13 +55,15 @@ fn denied_command() {
 }
 
 #[skuld::test]
-fn pipeline_both_allowed() {
+fn pipeline_both_bash_allowed_suppresses_file_rules() {
+    // Both `cat` and `grep` have Bash allow rules → parser-emitted Read(file.txt)
+    // requirement is suppressed. Matches the "Bash allow respects user trust" principle.
     let d = check(
         "cat file.txt | grep foo",
         &["Bash(cat *)", "Bash(grep *)"],
         &[],
     );
-    assert_eq!(d.decision, Decision::Ask);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -85,19 +87,19 @@ fn redirect_write_allowed() {
 }
 
 #[skuld::test]
-fn redirect_write_no_rule() {
+fn redirect_write_allowed_by_bash_rule_alone() {
+    // Bash(echo *) allow suppresses the redirect-emitted Write(/etc/passwd)
+    // requirement. A Deny(Write(/etc/**)) would still fire — see
+    // redirect_write_deny_still_fires_under_bash_allow.
     let d = check("echo hello > /etc/passwd", &["Bash(echo *)"], &[]);
-    assert_eq!(d.decision, Decision::Ask);
-    if d.decision == Decision::Ask {
-        let missing = &d.missing_rules;
-        assert!(missing.iter().any(|r| r.contains("Write(")));
-    }
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
-fn eval_always_asks() {
+fn eval_allowed_by_bash_eval_rule() {
+    // Bash(eval *) explicitly accepts eval's dynamic nature. Suppression applies.
     let d = check("eval echo hello", &["Bash(eval *)", "Bash(echo *)"], &[]);
-    assert_eq!(d.decision, Decision::Ask);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
@@ -119,10 +121,9 @@ fn and_chain_partial_deny() {
 }
 
 #[skuld::test]
-fn redirect_to_dev_null_needs_write_rule() {
+fn redirect_to_dev_null_allowed_by_bash_rule_alone() {
     let d = check("echo hello 2>/dev/null", &["Bash(echo *)"], &[]);
-    assert_eq!(d.decision, Decision::Ask);
-    assert!(d.missing_rules.iter().any(|r| r.contains("Write(")));
+    assert_eq!(d.decision, Decision::Allow);
 
     let d = check(
         "echo hello 2>/dev/null",
@@ -130,6 +131,14 @@ fn redirect_to_dev_null_needs_write_rule() {
         &[],
     );
     assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn redirect_to_dev_null_no_bash_rule_asks_for_write() {
+    // Without Bash allow, the redirect still drives a Write rule requirement.
+    let d = check("echo hello 2>/dev/null", &[], &[]);
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(d.missing_rules.iter().any(|r| r.contains("Write(")));
 }
 
 #[skuld::test]
@@ -149,13 +158,17 @@ fn compound_for() {
 }
 
 #[skuld::test]
-fn source_reads_file() {
+fn source_allowed_by_bash_rule_alone() {
+    // Bash(source *) suppresses the parser-emitted Read(/tmp/script.sh) requirement.
     let d = check("source /tmp/script.sh", &["Bash(source *)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn source_without_bash_rule_asks_for_read() {
+    let d = check("source /tmp/script.sh", &[], &[]);
     assert_eq!(d.decision, Decision::Ask);
-    if d.decision == Decision::Ask {
-        let missing = &d.missing_rules;
-        assert!(missing.iter().any(|r| r.contains("Read(")));
-    }
+    assert!(d.missing_rules.iter().any(|r| r.contains("Read(")));
 }
 
 #[skuld::test]
@@ -209,17 +222,26 @@ fn cp_read_and_write() {
 }
 
 #[skuld::test]
-fn cp_missing_write_rule() {
+fn cp_bash_allow_suppresses_write_requirement() {
+    // Bash(cp *) allow suppresses the parser-emitted Write(/home/user/b.txt)
+    // requirement. Deny(Write(/home/**)) would still fire.
     let d = check(
         "cp /tmp/a.txt /home/user/b.txt",
         &["Bash(cp *)", "Read(/tmp/**)"],
         &[],
     );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn cp_without_bash_rule_asks_for_missing_write() {
+    let d = check(
+        "cp /tmp/a.txt /home/user/b.txt",
+        &["Read(/tmp/**)"],
+        &[],
+    );
     assert_eq!(d.decision, Decision::Ask);
-    if d.decision == Decision::Ask {
-        let missing = &d.missing_rules;
-        assert!(missing.iter().any(|r| r.contains("Write(")));
-    }
+    assert!(d.missing_rules.iter().any(|r| r.contains("Write(")));
 }
 
 #[skuld::test]
@@ -578,17 +600,20 @@ fn sh_c_logs_wildcard_rule() {
 }
 
 #[skuld::test]
-fn bash_script_file_reads() {
+fn bash_script_file_reads_allowed_by_bash_rule_alone() {
     let d = check("bash script.sh", &["Bash(bash *)"], &[]);
-    if d.decision == Decision::Ask {
-        let rules = &d.missing_rules;
-        assert!(
-            rules.iter().any(|r| r.starts_with("Read(")),
-            "expected Read rule, got {rules:?}",
-        );
-    } else {
-        panic!("expected Ask for Read rule, got {d:?}");
-    }
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn bash_script_file_reads_without_bash_rule_asks_for_read() {
+    let d = check("bash script.sh", &[], &[]);
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(
+        d.missing_rules.iter().any(|r| r.starts_with("Read(")),
+        "expected Read rule, got {:?}",
+        d.missing_rules,
+    );
 }
 
 #[skuld::test]
@@ -612,23 +637,38 @@ fn ask_rule_does_not_override_deny() {
 }
 
 #[skuld::test]
-fn ask_rule_overrides_allow_file_read() {
+fn bash_allow_overrides_file_read_ask() {
+    // Design decision: a matching Bash(...) allow rule suppresses file Ask rules.
+    // Users who explicitly allowed the command at the Bash level are not re-prompted
+    // for its file accesses, matching the consistent "Bash allow = trust" principle.
     let d = check_with_ask(
         "cat /tmp/secret.txt",
         &["Bash(cat *)", "Read(/tmp/**)"],
         &[],
         &["Read(/tmp/secret.txt)"],
     );
-    assert_eq!(d.decision, Decision::Ask);
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 #[skuld::test]
-fn ask_rule_overrides_allow_file_write() {
+fn bash_allow_overrides_file_write_ask() {
     let d = check_with_ask(
         "echo hello > /tmp/out.txt",
         &["Bash(echo *)", "Write(/tmp/**)"],
         &[],
         &["Write(/tmp/out.txt)"],
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn file_ask_still_fires_without_bash_allow() {
+    // Without Bash allow, file Ask rules still force Ask (existing behavior).
+    let d = check_with_ask(
+        "cat /tmp/secret.txt",
+        &["Read(/tmp/**)"],
+        &[],
+        &["Read(/tmp/secret.txt)"],
     );
     assert_eq!(d.decision, Decision::Ask);
 }
@@ -1272,4 +1312,355 @@ fn git_restore_missing_write_asks_for_write() {
     } else {
         panic!("expected Ask, got {d:?}");
     }
+}
+
+// ── Bash allow suppresses secondary rule demands ─────────────────────────────
+// When a matching Bash(...) allow rule fires, the parser-emitted, redirect-
+// derived, parse-failure, eval, and dynamic-cmd-name secondary rule demands
+// are suppressed. File Deny rules still fire; Ask(Bash(...)) still prevents
+// suppression by forcing bash_allowed=false.
+
+#[skuld::test]
+fn git_fetch_with_bash_rule_alone_is_allow() {
+    // Primary regression test for the 2026-04-23 report.
+    let d = check("git fetch origin", &["Bash(git fetch *)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn git_fetch_bash_rule_does_not_bypass_write_deny() {
+    let d = check(
+        "git fetch origin",
+        &["Bash(git fetch *)"],
+        &[&format!("Write({}/**)", c("/tmp"))],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "expected Deny, got {d:?}");
+}
+
+#[skuld::test]
+fn git_push_with_bash_rule_alone_is_allow() {
+    let d = check("git push origin main", &["Bash(git push *)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn bash_allow_suppresses_file_read_ask_with_matched_allow_logged() {
+    let d = check_with_ask(
+        "cat /tmp/x",
+        &["Bash(cat *)"],
+        &[],
+        &["Read(/tmp/x)"],
+    );
+    assert_eq!(d.decision, Decision::Allow);
+    assert!(
+        d.matched_allow.iter().any(|r| r == "Bash(cat *)"),
+        "expected Bash(cat *) in matched_allow, got {:?}",
+        d.matched_allow,
+    );
+}
+
+#[skuld::test]
+fn bash_ask_rule_prevents_suppression_of_write_rule_demand() {
+    let d = check_with_ask(
+        "git fetch origin",
+        &["Bash(git fetch *)"],
+        &[],
+        &["Bash(git fetch *)"],
+    );
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(
+        d.missing_rules.iter().any(|r| r.starts_with("Write(")),
+        "expected Write rule in missing, got {:?}",
+        d.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn python_inline_script_with_bash_rule_alone_is_allow() {
+    let d = check(
+        r#"python3 -c "open('/tmp/x').read()""#,
+        &["Bash(python3 -c *)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn python_bash_ask_plus_allow_still_asks() {
+    // Ask(Bash(python3 -c *)) forces bash_allowed=false, so file accesses matter.
+    let d = check_with_ask(
+        r#"python3 -c "open('/tmp/x').read()""#,
+        &["Bash(python3 -c *)"],
+        &[],
+        &["Bash(python3 -c *)"],
+    );
+    assert_eq!(d.decision, Decision::Ask);
+}
+
+#[skuld::test]
+fn echo_stdout_redirect_with_bash_rule_alone_is_allow() {
+    let d = check("echo x > /etc/hosts", &["Bash(echo *)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn echo_append_redirect_suppressed() {
+    let d = check("echo x >> /etc/hosts", &["Bash(echo *)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn cat_input_redirect_suppressed() {
+    let d = check("cat < /etc/hosts", &["Bash(cat *)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn redirect_write_deny_still_fires_under_bash_allow() {
+    let d = check(
+        "echo x > /etc/hosts",
+        &["Bash(echo *)"],
+        &["Write(/etc/**)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "expected Deny, got {d:?}");
+}
+
+#[skuld::test]
+fn cat_with_bash_rule_alone_is_allow() {
+    let d = check("cat /tmp/x", &["Bash(cat *)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+// Parse failure
+
+#[skuld::test]
+fn parse_failure_suppressed_by_bash_allow() {
+    // `git worktree add <path>` with an unrecognized value-taking flag triggers
+    // clap parse failure. Under Bash(git *) allow, the failure is suppressed.
+    let d = check(
+        "git worktree add --notaflag something",
+        &["Bash(git *)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn parse_failure_without_bash_allow_still_asks() {
+    let d = check("git worktree add --notaflag something", &[], &[]);
+    assert_eq!(d.decision, Decision::Ask);
+}
+
+// Eval
+
+#[skuld::test]
+fn eval_bash_deny_fires_now() {
+    // Behavior improvement: eval early-return used to mask Bash deny rules.
+    // With the restructure, Deny(Bash(eval *)) now correctly fires as Deny.
+    let d = check("eval $X", &[], &["Bash(eval *)"]);
+    assert!(matches!(d.decision, Decision::Deny(_)), "expected Deny, got {d:?}");
+}
+
+#[skuld::test]
+fn eval_without_rules_still_asks() {
+    let d = check("eval $X", &[], &[]);
+    assert_eq!(d.decision, Decision::Ask);
+}
+
+// Dynamic command name
+
+#[skuld::test]
+fn dynamic_cmd_name_allowed_by_bash_wildcard() {
+    let d = check("$CMD arg", &["Bash(*)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
+    assert!(
+        d.matched_allow.iter().any(|r| r == "Bash(*)"),
+        "expected Bash(*) in matched_allow, got {:?}",
+        d.matched_allow,
+    );
+}
+
+#[skuld::test]
+fn dynamic_cmd_name_allowed_by_bash_double_star() {
+    let d = check("$CMD arg", &["Bash(**)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn dynamic_cmd_name_blocked_by_bash_wildcard_deny() {
+    // New behavior: Deny(Bash(*)) now blocks dynamic-cmd-name invocations.
+    // Previously the dynamic path short-circuited before any deny scan.
+    let d = check("$CMD arg", &[], &["Bash(*)"]);
+    assert!(matches!(d.decision, Decision::Deny(_)), "expected Deny, got {d:?}");
+}
+
+#[skuld::test]
+fn dynamic_cmd_name_redirect_deny_fires_under_wildcard_allow() {
+    let d = check(
+        "$CMD arg > /etc/hosts",
+        &["Bash(*)"],
+        &["Write(/etc/**)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "expected Deny, got {d:?}");
+}
+
+#[skuld::test]
+fn dynamic_cmd_name_narrow_bash_rule_does_not_match() {
+    // Bash(ls *) has prefix ["ls"] — does NOT match empty tokens.
+    let d = check("$CMD arg", &["Bash(ls *)"], &[]);
+    assert_eq!(d.decision, Decision::Ask);
+}
+
+// Nested contexts (command substitution, process substitution)
+
+#[skuld::test]
+fn command_substitution_inner_bash_allow_suppresses_inner_file_access() {
+    let d = check(
+        "echo $(git fetch origin)",
+        &["Bash(echo *)", "Bash(git fetch *)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn command_substitution_outer_allow_does_not_leak_to_inner() {
+    let d = check("echo $(git fetch origin)", &["Bash(echo *)"], &[]);
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(
+        d.missing_rules
+            .iter()
+            .any(|r| r == "Bash(git fetch *)" || r.starts_with("Bash(git fetch")),
+        "expected Bash(git fetch *) in missing, got {:?}",
+        d.missing_rules,
+    );
+    assert!(
+        d.missing_rules.iter().any(|r| r.starts_with("Write(")),
+        "expected Write(.git) in missing, got {:?}",
+        d.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn process_substitution_inner_bash_allow_suppresses_inner_file_access() {
+    let d = check(
+        "diff <(git fetch origin) /tmp/x",
+        &["Bash(diff *)", "Bash(git fetch *)", &format!("Read({}/**)", c("/tmp"))],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn compound_redirect_not_suppressed_by_inner_bash_allow() {
+    // Inner `git fetch` suppresses its own Write(.git) via inner bash_allowed.
+    // The compound-level redirect to /tmp/out runs through visit_redirect with
+    // suppress=false and still requires a Write rule.
+    let d = check(
+        "{ git fetch origin; } > /tmp/out",
+        &["Bash(git fetch *)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(
+        d.missing_rules.iter().any(|r| r.starts_with("Write(")),
+        "expected Write rule in missing, got {:?}",
+        d.missing_rules,
+    );
+}
+
+// Bash(*) wildcard
+
+#[skuld::test]
+fn bash_wildcard_suppresses_file_accesses() {
+    let d = check("git fetch origin", &["Bash(*)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn bash_wildcard_does_not_override_file_deny() {
+    let d = check(
+        "git fetch origin",
+        &["Bash(*)"],
+        &[&format!("Write({}/**)", c("/tmp"))],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "expected Deny, got {d:?}");
+}
+
+// Security tradeoff — documented in CLAUDE.md
+
+#[skuld::test]
+fn bash_git_wildcard_allows_c_flag_injection() {
+    // Documented tradeoff: Bash(git *) trusts all git, including -c config overrides
+    // that register hooks, aliases, or external diff/pager/credential handlers.
+    let d = check(
+        "git -c core.hooksPath=/evil fetch origin",
+        &["Bash(git *)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn bash_git_fetch_allow_does_not_cover_c_flag_injection() {
+    // Narrow Bash(git fetch *) does NOT match tokens starting "git -c ... fetch ...".
+    // The -c guardrail still fires for users with narrow rules.
+    let d = check(
+        "git -c core.hooksPath=/evil fetch origin",
+        &["Bash(git fetch *)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(
+        d.missing_rules.iter().any(|r| r.starts_with("Bash(")),
+        "expected Bash rule in missing, got {:?}",
+        d.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn git_config_dangerous_write_under_bash_wildcard_allow() {
+    // Documented tradeoff: Bash(git config *) suppresses the git-config-write guardrail.
+    let d = check(
+        "git config core.pager '!evil'",
+        &["Bash(git config *)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn herestring_no_op_for_bash_allow_suppression() {
+    // Here-strings (`<<<`) emit no file access; the fix is a no-op here.
+    let d = check(r#"cat <<< "hi""#, &["Bash(cat *)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn parse_failure_redirect_also_suppressed_under_bash_allow() {
+    // Parse failure + redirect under Bash allow: both suppressed → Allow.
+    let d = check(
+        "git worktree add --notaflag something > /etc/test-output.txt",
+        &["Bash(git *)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn parse_failure_redirect_deny_still_fires_under_bash_allow() {
+    let d = check(
+        "git worktree add --notaflag something > /etc/test-output.txt",
+        &["Bash(git *)"],
+        &["Write(/etc/**)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "expected Deny, got {d:?}");
+}
+
+#[skuld::test]
+fn dynamic_cmd_name_allowed_by_bash_double_star_space_star() {
+    // `Bash(** *)` also matches empty tokens (the `**` recursive-skip loop in
+    // BashFilter::matches falls through to empty-prefix + wildcard).
+    let d = check("$CMD arg", &["Bash(** *)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
 }

@@ -36,8 +36,11 @@ fn redirect_to_allowed_path() {
 }
 
 #[skuld::test]
-fn redirect_to_disallowed_path() {
-    let result = check_command("echo hello > /etc/test-output.txt", "/tmp");
+fn redirect_to_disallowed_path_without_bash_rule_asks_for_write() {
+    // Use a command unlikely to appear in user settings so the "no Bash allow"
+    // path is exercised regardless of local settings. A matching Bash(...)
+    // allow rule would suppress the Write demand (see checker.rs tests).
+    let result = check_command("my-totally-unknown-command hi > /etc/test-output.txt", "/tmp");
     assert_eq!(result.decision, Decision::Ask);
     assert!(
         result.missing_rules.iter().any(|r| r.contains("Write(")),
