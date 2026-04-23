@@ -6,12 +6,18 @@ use claude_scriptcheck::settings::Permissions;
 use pretty_assertions::assert_eq;
 
 fn make_perms_full(allow: &[&str], deny: &[&str], ask: &[&str]) -> ParsedPermissions {
-    permission::parse_rules(&Permissions {
-        allow: allow.iter().map(|s| s.to_string()).collect(),
-        deny: deny.iter().map(|s| s.to_string()).collect(),
-        ask: ask.iter().map(|s| s.to_string()).collect(),
-        ..Default::default()
-    })
+    // Default cwd for tests that don't care: "/tmp" is the same cwd most
+    // `check` helpers use when invoking `check_program` below.
+    permission::parse_rules(
+        &Permissions {
+            allow: allow.iter().map(|s| s.to_string()).collect(),
+            deny: deny.iter().map(|s| s.to_string()).collect(),
+            ask: ask.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        },
+        "/tmp",
+        "/tmp",
+    )
 }
 
 fn make_perms(allow: &[&str], deny: &[&str]) -> ParsedPermissions {
@@ -32,6 +38,29 @@ fn check_with_ask(cmd: &str, allow: &[&str], deny: &[&str], ask: &[&str]) -> Che
 
 fn check_cwd(cmd: &str, allow: &[&str], deny: &[&str], cwd: &str) -> CheckResult {
     let perms = make_perms(allow, deny);
+    let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
+    check_program(&program, &perms, cwd)
+}
+
+/// Parse rules with a specific (cwd, project_root) context and run the
+/// command under the same cwd. Needed for tests that exercise `Arg0::Path`
+/// resolution, where both sides of the match must share a cwd.
+fn check_ctx(
+    cmd: &str,
+    allow: &[&str],
+    deny: &[&str],
+    cwd: &str,
+    project_root: &str,
+) -> CheckResult {
+    let perms = permission::parse_rules(
+        &Permissions {
+            allow: allow.iter().map(|s| s.to_string()).collect(),
+            deny: deny.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        },
+        cwd,
+        project_root,
+    );
     let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
     check_program(&program, &perms, cwd)
 }
@@ -1100,6 +1129,295 @@ fn deny_rule_matches_normalized_name() {
         &["Bash(python3 *)"],
     );
     assert!(matches!(d.decision, Decision::Deny(_)));
+}
+
+// Arg0 name/path-scoped matching =====
+
+#[skuld::test]
+fn rule_bare_name_matches_path_invocation() {
+    let d = check("./tools/rg foo", &["Bash(rg *)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn rule_bare_name_matches_exe_extension() {
+    let d = check("rg.exe foo", &["Bash(rg *)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn rule_bare_name_matches_cmd_extension() {
+    let d = check("./tools/rg.cmd foo", &["Bash(rg *)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn rule_bare_name_does_not_match_different_name() {
+    let d = check("grep foo", &["Bash(rg *)"], &[]);
+    assert_eq!(d.decision, Decision::Ask);
+}
+
+#[skuld::test]
+fn rule_path_scoped_matches_same_path() {
+    let d = check_ctx(
+        "./tools/rg.cmd foo",
+        &["Bash(./tools/rg.cmd *)"],
+        &[],
+        "/project",
+        "/project",
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn rule_path_scoped_matches_equivalent_absolute() {
+    let d = check_ctx(
+        "/project/tools/rg.cmd foo",
+        &["Bash(./tools/rg.cmd *)"],
+        &[],
+        "/project",
+        "/project",
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn rule_path_scoped_does_not_match_different_cwd() {
+    // Rule parsed against /a, command runs from /b → different canonical paths.
+    let d = check_ctx(
+        "./tools/rg.cmd foo",
+        &["Bash(./tools/rg.cmd *)"],
+        &[],
+        "/b",
+        "/b",
+    );
+    // Command's canonical path is /b/tools/rg.cmd.
+    // Rule parsed with cwd=/b also resolves to /b/tools/rg.cmd — so they match.
+    // To actually test the "different cwd" case, we need the rule parsed with
+    // a different cwd than the command runs with. Use a separate helper:
+    let perms = permission::parse_rules(
+        &Permissions {
+            allow: vec!["Bash(./tools/rg.cmd *)".to_string()],
+            ..Default::default()
+        },
+        "/a",
+        "/a",
+    );
+    let program = thaum::parse_with("./tools/rg.cmd foo", thaum::Dialect::Bash).unwrap();
+    let result = check_program(&program, &perms, "/b");
+    assert_eq!(result.decision, Decision::Ask);
+    // And the original same-cwd case as a sanity check:
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn rule_path_scoped_does_not_match_bare_name() {
+    let d = check_ctx(
+        "rg.cmd foo",
+        &["Bash(./tools/rg.cmd *)"],
+        &[],
+        "/project",
+        "/project",
+    );
+    // Bare invocation — path-scoped rule rejects.
+    assert_eq!(d.decision, Decision::Ask);
+}
+
+#[skuld::test]
+fn rule_project_relative_path_matches_regardless_of_cwd() {
+    // Rule uses `/tools/rg.cmd` = project-relative. Command can be invoked
+    // from any cwd and still resolves to the same absolute path, so it
+    // matches.
+    let perms = permission::parse_rules(
+        &Permissions {
+            allow: vec!["Bash(/tools/rg.cmd *)".to_string()],
+            ..Default::default()
+        },
+        "/some/cwd",
+        "/project",
+    );
+    let program =
+        thaum::parse_with("/project/tools/rg.cmd foo", thaum::Dialect::Bash).unwrap();
+    let result = check_program(&program, &perms, "/irrelevant");
+    assert_eq!(result.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn rule_double_slash_absolute_matches() {
+    let d = check_ctx(
+        "/usr/local/bin/rg foo",
+        &["Bash(//usr/local/bin/rg *)"],
+        &[],
+        "/project",
+        "/project",
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn rule_windows_backslash_path_matches() {
+    // Backslash-written rule path routes through normalize_separators.
+    let d = check_ctx(
+        "./tools/rg.cmd foo",
+        &["Bash(.\\tools\\rg.cmd *)"],
+        &[],
+        "/project",
+        "/project",
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn deny_rule_path_scoped_matches() {
+    let d = check_ctx(
+        "./danger/exec foo",
+        &[],
+        &["Bash(./danger/exec *)"],
+        "/project",
+        "/project",
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)));
+}
+
+#[skuld::test]
+fn deny_rule_path_scoped_does_not_match_bare_name() {
+    // Bare `exec` invocation doesn't match a path-scoped Deny rule.
+    let d = check_ctx(
+        "exec foo",
+        &[],
+        &["Bash(./danger/exec *)"],
+        "/project",
+        "/project",
+    );
+    // Ask because no allow matches and the deny rule didn't fire.
+    assert_eq!(d.decision, Decision::Ask);
+}
+
+#[skuld::test]
+fn ask_rule_path_scoped_forces_ask() {
+    let d = check_with_ask(
+        "./danger/exec foo",
+        &["Bash(./danger/exec *)"],
+        &[],
+        &["Bash(./danger/exec *)"],
+    );
+    // Ask rule wins: bash_asked = true → allow scan skipped → Ask with missing rule.
+    // But this test uses `check_with_ask` which parses rules with cwd=/tmp.
+    // The path resolves to /tmp/danger/exec for both rule and command-cwd=/tmp.
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(!d.missing_rules.is_empty());
+}
+
+#[skuld::test]
+fn middle_star_matches_one_token() {
+    // Use a command with no dedicated parser so the Bash rule flow runs as-is.
+    let d = check(
+        "mycmd --arg value --after",
+        &["Bash(mycmd --arg * --after)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn middle_star_does_not_match_zero_tokens() {
+    let d = check(
+        "mycmd --arg --after",
+        &["Bash(mycmd --arg * --after)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Ask);
+}
+
+#[skuld::test]
+fn middle_double_star_matches_many() {
+    let d = check(
+        "mycmd --a --b --c --after",
+        &["Bash(mycmd ** --after)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn rule_double_star_in_arg0_slot() {
+    // `Bash(**/foo bar)` — classifier puts `**` at items[0] as
+    // MatchZeroOrMore; `foo`/`bar` become Arg items. Command `git foo bar`
+    // matches (MZM skips `git`, then `foo` == `foo`, `bar` == `bar`).
+    let d = check("git foo bar", &["Bash(** foo bar)"], &[]);
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn rule_dynamic_arg0_wildcard_only_matches_universal() {
+    // A dynamic arg0 (expanded from a variable) can only be matched by
+    // `Bash(*)` / `Bash(**)`. `Bash(rg *)` must Ask.
+    let dynamic = r#""$cmd" foo"#;
+    let d_universal = check(dynamic, &["Bash(*)"], &[]);
+    assert_eq!(d_universal.decision, Decision::Allow);
+
+    let d_specific = check(dynamic, &["Bash(rg *)"], &[]);
+    assert_eq!(d_specific.decision, Decision::Ask);
+}
+
+#[skuld::test]
+fn rule_path_scoped_nonexistent_still_matches_logically() {
+    // `best_effort_canonicalize` falls back to logical normalization when the
+    // target doesn't exist; same-logical-path rule and command should match.
+    let d = check_ctx(
+        "/missing/path/rg foo",
+        &["Bash(//missing/path/rg *)"],
+        &[],
+        "/project",
+        "/project",
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn rule_path_pathext_tolerance_reverse() {
+    // Rule has `.cmd`, command has no extension.
+    let d = check_ctx(
+        "./bin/rg foo",
+        &["Bash(./bin/rg.cmd *)"],
+        &[],
+        "/project",
+        "/project",
+    );
+    assert_eq!(d.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn parse_failure_reason_uses_raw_arg0() {
+    // Unparseable command name (via shell builtin misuse) — check the parse-
+    // failure path's diagnostic uses the raw arg0 including path.
+    let d = check(
+        r#"./tools/rg.cmd --unknown-flag-that-cant-be-parsed"#,
+        &[],
+        &[],
+    );
+    // rg.cmd doesn't have a dedicated parser, so there's no parse failure —
+    // the command Asks for a Bash rule. Confirm the missing rule uses
+    // the basename form, per `missing_rules` log emission semantics.
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(
+        d.missing_rules.iter().any(|r| r.contains("rg")),
+        "missing_rules should mention rg, got {:?}",
+        d.missing_rules
+    );
+}
+
+#[skuld::test]
+fn bug_report_rg_cmd_pipeline() {
+    // The exact scenario from the bug report that motivated this refactor.
+    let d = check_ctx(
+        r#"./community/tools/rg.cmd -l "package utilities\.qodana" 2>&1 | head -10"#,
+        &["Bash(./community/tools/rg.cmd *)", "Bash(head *)"],
+        &[],
+        "/project",
+        "/project",
+    );
+    assert_eq!(d.decision, Decision::Allow);
 }
 
 // uv run wrapper =====

@@ -12,7 +12,7 @@ pub mod path;
 
 use std::borrow::Cow;
 
-pub use bash::BashFilter;
+pub use bash::{Arg0Pattern, BashFilter, BashFilterItem};
 pub use path::{EditFilter, ReadFilter, WriteFilter};
 
 /// A permission filter: matches a class of tool invocations.
@@ -144,7 +144,11 @@ mod tests {
 
     #[test]
     fn bash_filter_renders_as_kind_paren_data() {
-        let f = BashFilter::new_wildcard(vec!["git".to_string(), "status".to_string()]);
+        let f = BashFilter::from_items(vec![
+            BashFilterItem::Arg0(Arg0Pattern::Name("git".to_string())),
+            BashFilterItem::Arg("status".to_string()),
+            BashFilterItem::MatchZeroOrMore,
+        ]);
         assert_eq!(f.to_rule_string(), "Bash(git status *)");
     }
 

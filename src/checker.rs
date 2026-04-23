@@ -3,7 +3,7 @@ use thaum::visit::Visit;
 
 use crate::cmd_parser::{self, CmdParseResult};
 use crate::file_access::{self, AccessKind, FileAccess};
-use crate::filter::{BashFilter, Filter, PathFilter};
+use crate::filter::{Arg0Pattern, BashFilter, BashFilterItem, Filter, PathFilter};
 use crate::permission::ParsedPermissions;
 use crate::permission_mode::PermissionMode;
 use crate::python_ast::{self, PythonAnalysis};
@@ -220,14 +220,20 @@ impl PermissionChecker<'_> {
             .map(|a| a.try_to_static_string())
             .collect();
 
-        // Get command name (normalized: basename, no .exe suffix)
-        let cmd_name = match &arg_literals[0] {
-            Some(name) => cmd_parser::normalize_cmd_name(name).to_string(),
+        // Get command name. Two forms are kept:
+        //   - `raw_arg0`: the command as written (e.g. `./tools/rg.cmd`). Used
+        //     for Bash rule matching so path-scoped rules like
+        //     `Bash(./tools/rg.cmd *)` can compare against the invocation path.
+        //   - `cmd_name`: normalized (basename + PATHEXT strip). Used for
+        //     parser dispatch, eval/Python short-circuits, and missing-rule
+        //     emission (keeps the log's rule suggestion short and name-form).
+        let raw_arg0 = match &arg_literals[0] {
+            Some(name) => name.clone(),
             None => {
-                // Dynamic command name. Only a truly universal Bash allow rule
-                // (`Bash(*)` / `Bash(**)`) can match empty tokens; anything
-                // prefix-anchored returns false from `BashFilter::matches(&[])`.
-                let (_bash_asked, bash_allowed) = self.check_bash_rules(&[]);
+                // Dynamic command name. Only universal Bash allow rules
+                // (`Bash(*)` / `Bash(**)`) match — anything with a concrete
+                // Arg0 item returns false from `matches_dynamic_arg0`.
+                let (_bash_asked, bash_allowed) = self.check_bash_rules(None, &[]);
                 if self.denied.is_some() {
                     return;
                 }
@@ -245,22 +251,18 @@ impl PermissionChecker<'_> {
                 return;
             }
         };
+        let cmd_name = cmd_parser::normalize_cmd_name(&raw_arg0).to_string();
 
-        // Build token list for Bash() rule matching — only static tokens.
-        // The first token uses the normalized command name so rules like
-        // `Bash(python3 *)` match `/usr/bin/python3 script.py`.
-        let cmd_tokens: Vec<String> = std::iter::once(cmd_name.clone())
-            .chain(
-                arg_literals[1..]
-                    .iter()
-                    .take_while(|a| a.is_some())
-                    .map(|a| a.clone().unwrap()),
-            )
+        // Static arg list — only consecutive static arg literals after arg0.
+        let static_args: Vec<String> = arg_literals[1..]
+            .iter()
+            .take_while(|a| a.is_some())
+            .map(|a| a.clone().unwrap())
             .collect();
 
         // Run Bash deny/ask/allow matching. Deny short-circuits the whole
         // command; allow enables secondary-demand suppression downstream.
-        let (bash_asked, bash_allowed) = self.check_bash_rules(&cmd_tokens);
+        let (bash_asked, bash_allowed) = self.check_bash_rules(Some(&raw_arg0), &static_args);
         if self.denied.is_some() {
             return;
         }
@@ -305,7 +307,13 @@ impl PermissionChecker<'_> {
                     message,
                 } => {
                     if !bash_allowed {
-                        let cmd_str = cmd_tokens.join(" ");
+                        // Use raw arg0 (not normalized) so the diagnostic
+                        // shows the user's actual command, e.g.
+                        // `./tools/rg.cmd -l …` rather than `rg -l …`.
+                        let cmd_str = std::iter::once(raw_arg0.as_str())
+                            .chain(static_args.iter().map(|s| s.as_str()))
+                            .collect::<Vec<_>>()
+                            .join(" ");
                         self.unmatched.push(format!(
                             "Bash({cmd_str}) -- failed to parse arguments for `{cn}`: {message}"
                         ));
@@ -375,15 +383,28 @@ impl PermissionChecker<'_> {
             } || (python_analyzed && !bash_asked);
 
             if !can_skip {
-                let filter = if let Some(idx) = inline_script_start {
-                    // Truncate before the inline script text, append wildcard.
-                    // idx is 0-based into args (without cmd name), so in
-                    // cmd_tokens (which has cmd name at [0]) it maps to idx+1.
-                    let end = (idx + 1).min(cmd_tokens.len());
-                    BashFilter::new_wildcard(cmd_tokens[..end].to_vec())
-                } else {
-                    BashFilter::new(cmd_tokens.clone())
+                // Build a name-form suggestion filter: `Arg0::Name(stripped
+                // basename of raw_arg0)` + `Arg` items for each static arg,
+                // optionally truncated at the inline-script index with a
+                // trailing `MatchZeroOrMore`. Name form is the friendliest
+                // rule shape to copy-paste into settings.json.
+                let arg0_name = cmd_name.clone();
+                let mut items: Vec<BashFilterItem> =
+                    vec![BashFilterItem::Arg0(Arg0Pattern::Name(arg0_name))];
+                let (arg_count, trailing_wildcard) = match inline_script_start {
+                    // `idx` is 0-based into args (without arg0). Truncate
+                    // before the inline script text and emit a wildcard so
+                    // the suggestion reads e.g. `python -c *`.
+                    Some(idx) => (idx.min(static_args.len()), true),
+                    None => (static_args.len(), false),
                 };
+                for s in &static_args[..arg_count] {
+                    items.push(BashFilterItem::Arg(s.clone()));
+                }
+                if trailing_wildcard {
+                    items.push(BashFilterItem::MatchZeroOrMore);
+                }
+                let filter = BashFilter::from_items(items);
                 self.unmatched.push(filter.to_rule_string());
             }
         }
@@ -461,7 +482,12 @@ impl PermissionChecker<'_> {
         }
     }
 
-    /// Scan Bash allow/ask/deny rules against `cmd_tokens`.
+    /// Scan Bash allow/ask/deny rules against the given command invocation.
+    ///
+    /// `raw_arg0` is `Some(name)` for a statically-resolvable command name (as
+    /// written, not normalized — `./tools/rg.cmd` rather than `rg`), or `None`
+    /// when the arg0 was dynamic. In the dynamic case, only universal wildcard
+    /// rules (`Bash(*)` / `Bash(**)`) can match.
     ///
     /// Returns `(bash_asked, bash_allowed)`. If a deny rule matches, records
     /// it via `self.deny(...)` and `self.matched_deny`; callers should check
@@ -470,31 +496,41 @@ impl PermissionChecker<'_> {
     /// short-circuit). When `bash_asked` is true, the allow scan is skipped
     /// entirely — so no allow rule is recorded in that case, matching prior
     /// behavior.
-    fn check_bash_rules(&mut self, cmd_tokens: &[String]) -> (bool, bool) {
+    fn check_bash_rules(
+        &mut self,
+        raw_arg0: Option<&str>,
+        args: &[String],
+    ) -> (bool, bool) {
+        let cwd = self.cwd;
+        let test = |f: &BashFilter| match raw_arg0 {
+            Some(a) => f.matches(a, args, cwd),
+            None => f.matches_dynamic_arg0(),
+        };
+
         for filter in &self.perms.bash.deny {
-            if filter.matches(cmd_tokens) {
+            if test(filter) {
                 let rule_str = filter.to_rule_string();
                 self.matched_deny.push(rule_str);
-                self.deny(if cmd_tokens.is_empty() {
-                    "Dynamic command name matched deny rule".to_string()
-                } else {
-                    format!("Command '{}' matched deny rule", cmd_tokens.join(" "))
+                self.deny(match raw_arg0 {
+                    None => "Dynamic command name matched deny rule".to_string(),
+                    Some(a) => {
+                        let cmd_str = std::iter::once(a)
+                            .chain(args.iter().map(|s| s.as_str()))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        format!("Command '{cmd_str}' matched deny rule")
+                    }
                 });
                 return (false, false);
             }
         }
 
-        let asked = self
-            .perms
-            .bash
-            .ask
-            .iter()
-            .any(|f| f.matches(cmd_tokens));
+        let asked = self.perms.bash.ask.iter().any(|f| test(f));
 
         let mut allowed = false;
         if !asked {
             for f in &self.perms.bash.allow {
-                if f.matches(cmd_tokens) {
+                if test(f) {
                     self.matched_allow.push(f.to_rule_string());
                     allowed = true;
                     break;

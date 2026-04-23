@@ -4,7 +4,7 @@ use claude_scriptcheck::{checker, permission, settings};
 /// Parse and check a command against the user's actual settings.
 fn check_command(command: &str, cwd: &str) -> CheckResult {
     let loaded = settings::load_settings(cwd, cwd);
-    let parsed_perms = permission::parse_rules(&loaded.permissions);
+    let parsed_perms = permission::parse_rules(&loaded.permissions, cwd, cwd);
     let program = thaum::parse_with(command, thaum::Dialect::Bash).unwrap();
     checker::check_program(&program, &parsed_perms, cwd)
 }
