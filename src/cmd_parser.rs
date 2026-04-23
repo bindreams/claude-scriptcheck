@@ -249,18 +249,21 @@ pub fn get_parser(cmd_name: &str) -> Option<&'static dyn CommandParser> {
     }
 }
 
-/// Normalize a command name by extracting its basename and stripping `.exe`.
+/// Normalize a command name by extracting its basename and stripping any
+/// Windows PATHEXT suffix (`.com .exe .bat .cmd .vbs .vbe .js .jse .wsf .wsh
+/// .msc`, case-insensitive). Applied unconditionally on every OS so settings
+/// files port across Windows / WSL / Unix without platform-specific rewrites.
 ///
 /// `/usr/bin/python3` → `python3`, `C:\Python312\python.exe` → `python`,
-/// `bash.exe` → `bash`, `cat` → `cat`.
+/// `bash.exe` → `bash`, `./tools/rg.cmd` → `rg`, `cat` → `cat`.
 pub fn normalize_cmd_name(name: &str) -> &str {
     // Extract basename (after last path separator)
     let basename = match name.rfind('/').or_else(|| name.rfind('\\')) {
         Some(i) => &name[i + 1..],
         None => name,
     };
-    // Strip .exe suffix
-    basename.strip_suffix(".exe").unwrap_or(basename)
+    // Strip any PATHEXT suffix (case-insensitive)
+    crate::path_util::strip_pathext_suffix(basename)
 }
 
 /// Returns true if `name` (already normalized) looks like a Python interpreter.
@@ -339,6 +342,46 @@ mod tests {
     #[test]
     fn normalize_just_exe() {
         assert_eq!(normalize_cmd_name(".exe"), "");
+    }
+
+    #[test]
+    fn normalize_cmd_suffix() {
+        assert_eq!(normalize_cmd_name("foo.cmd"), "foo");
+    }
+
+    #[test]
+    fn normalize_bat_suffix() {
+        assert_eq!(normalize_cmd_name("foo.bat"), "foo");
+    }
+
+    #[test]
+    fn normalize_com_suffix() {
+        assert_eq!(normalize_cmd_name("foo.com"), "foo");
+    }
+
+    #[test]
+    fn normalize_vbs_suffix() {
+        assert_eq!(normalize_cmd_name("foo.vbs"), "foo");
+    }
+
+    #[test]
+    fn normalize_js_suffix_case_insensitive() {
+        assert_eq!(normalize_cmd_name("foo.JS"), "foo");
+    }
+
+    #[test]
+    fn normalize_no_strip_for_unknown_suffix() {
+        assert_eq!(normalize_cmd_name("foo.py"), "foo.py");
+    }
+
+    #[test]
+    fn normalize_windows_path_with_cmd_suffix() {
+        assert_eq!(normalize_cmd_name("C:\\tools\\foo.cmd"), "foo");
+    }
+
+    #[test]
+    fn normalize_relative_path_with_cmd_suffix() {
+        assert_eq!(normalize_cmd_name("./tools/rg.cmd"), "rg");
     }
 
     // is_python_cmd tests =====

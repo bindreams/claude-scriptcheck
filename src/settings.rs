@@ -185,42 +185,62 @@ pub fn resolve_rule_relative_paths(rules: &mut [String], cwd: &str, project_root
     }
 }
 
+/// Apply Claude Code's 4-tier path resolution to a bare path string (no
+/// `Read(`/`Write(`/`Edit(`/`Bash(` wrapping). Returns:
+///
+/// - `//path` → absolute filesystem path (strip one `/`)
+/// - `~/path` → home-relative (left as-is, expanded later in
+///   `permission::expand_tilde_or_warn`)
+/// - `/path`  → project-root-relative (prepend `project_root`)
+/// - `C:/path` or `C:\path` → absolute (unchanged)
+/// - bare path or `./path` → CWD-relative (prepend `cwd`)
+///
+/// Separators are normalized to forward slashes via
+/// `path_util::normalize_separators` before dispatch so backslash-written
+/// forms route to the correct branch.
+///
+/// Shared between file-rule resolution (`resolve_one_rule`) and Bash-rule
+/// arg0 path resolution (`permission::parse_single_rule` Bash branch).
+pub fn resolve_rule_path(raw_inner: &str, cwd: &str, project_root: &str) -> String {
+    // B1/B2: normalize separators on `inner` before prefix dispatch so
+    // backslash-written forms (`\\C:\…` for `//C:/…`, `\project\src` for
+    // `/project/src`) take the correct branch. Rule strings on disk may
+    // come from users writing Windows-native paths.
+    let inner = crate::path_util::normalize_separators(raw_inner);
+
+    if let Some(abs) = inner.strip_prefix("//") {
+        // //path → absolute filesystem path
+        // On Windows, //C:/foo strips to C:/foo which is already absolute
+        if crate::path_util::is_absolute(abs) {
+            return abs.to_string();
+        }
+        return format!("/{abs}");
+    }
+    if inner.starts_with('~') {
+        // ~/path → home-relative, expanded later in parse_single_rule.
+        // Normalize separators so downstream parsing sees forward slashes.
+        return inner;
+    }
+    if inner.starts_with('/') {
+        // /path → project-root-relative (inner already has leading /)
+        return format!("{project_root}{inner}");
+    }
+    // Check for Windows drive-letter paths (C:/...).
+    // After normalization, UNC paths `//server/share` are handled by the
+    // `//`-absolute branch above.
+    if crate::path_util::is_absolute(&inner) {
+        return inner;
+    }
+    // bare path or ./path → CWD-relative
+    format!("{cwd}/{inner}")
+}
+
 fn resolve_one_rule(rule: &str, cwd: &str, project_root: &str) -> String {
     for prefix in ["Read(", "Write(", "Edit("] {
         if let Some(raw_inner) = rule.strip_prefix(prefix).and_then(|s| s.strip_suffix(')')) {
             let kind = &prefix[..prefix.len() - 1]; // "Read", "Write", or "Edit"
-
-            // B1/B2: normalize separators on `inner` before prefix dispatch so
-            // backslash-written forms (`\\C:\…` for `//C:/…`, `\project\src` for
-            // `/project/src`) take the correct branch. Rule strings on disk may
-            // come from users writing Windows-native paths.
-            let inner = crate::path_util::normalize_separators(raw_inner);
-
-            if let Some(abs) = inner.strip_prefix("//") {
-                // //path → absolute filesystem path
-                // On Windows, //C:/foo strips to C:/foo which is already absolute
-                if crate::path_util::is_absolute(abs) {
-                    return format!("{kind}({abs})");
-                }
-                return format!("{kind}(/{abs})");
-            }
-            if inner.starts_with('~') {
-                // ~/path → home-relative, expanded later in parse_single_rule.
-                // Normalize separators so downstream parsing sees forward slashes.
-                return format!("{kind}({inner})");
-            }
-            if inner.starts_with('/') {
-                // /path → project-root-relative (inner already has leading /)
-                return format!("{kind}({project_root}{inner})");
-            }
-            // Check for Windows drive-letter paths (C:/...).
-            // After normalization, UNC paths `//server/share` are handled by the
-            // `//`-absolute branch above.
-            if crate::path_util::is_absolute(&inner) {
-                return format!("{kind}({inner})");
-            }
-            // bare path or ./path → CWD-relative
-            return format!("{kind}({cwd}/{inner})");
+            let resolved = resolve_rule_path(raw_inner, cwd, project_root);
+            return format!("{kind}({resolved})");
         }
     }
     rule.to_string()

@@ -1,3 +1,24 @@
+/// Default Windows CMD `PATHEXT` suffixes (Vista+), lowercased. Applied
+/// unconditionally on every OS so settings files port across Windows / WSL /
+/// Unix without platform-specific rewrites.
+pub const PATHEXT_SUFFIXES: &[&str] = &[
+    ".com", ".exe", ".bat", ".cmd", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".msc",
+];
+
+/// If `name` ends with any PATHEXT suffix (case-insensitive), return the
+/// stem; otherwise return `name` unchanged.
+pub fn strip_pathext_suffix(name: &str) -> &str {
+    for suffix in PATHEXT_SUFFIXES {
+        if name.len() >= suffix.len() {
+            let tail = &name[name.len() - suffix.len()..];
+            if tail.eq_ignore_ascii_case(suffix) {
+                return &name[..name.len() - suffix.len()];
+            }
+        }
+    }
+    name
+}
+
 /// Returns true if `path` is an absolute path on any platform.
 ///
 /// Handles Unix (`/foo`), Windows drive-letter (`C:/foo`, `C:\foo`),
@@ -55,4 +76,53 @@ pub fn is_filesystem_root(path: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_pathext_suffix_all_variants() {
+        for suffix in PATHEXT_SUFFIXES {
+            let name = format!("foo{suffix}");
+            assert_eq!(strip_pathext_suffix(&name), "foo", "failed on `{name}`");
+        }
+    }
+
+    #[test]
+    fn strip_pathext_suffix_case_insensitive() {
+        assert_eq!(strip_pathext_suffix("RG.CMD"), "RG");
+        assert_eq!(strip_pathext_suffix("RG.cmd"), "RG");
+        assert_eq!(strip_pathext_suffix("rg.CMD"), "rg");
+        assert_eq!(strip_pathext_suffix("Foo.ExE"), "Foo");
+    }
+
+    #[test]
+    fn strip_pathext_suffix_no_match() {
+        assert_eq!(strip_pathext_suffix("foo.py"), "foo.py");
+        assert_eq!(strip_pathext_suffix("foo"), "foo");
+        assert_eq!(strip_pathext_suffix(""), "");
+        assert_eq!(strip_pathext_suffix("."), ".");
+    }
+
+    #[test]
+    fn strip_pathext_suffix_leaves_stem_containing_dot() {
+        // A program named `my.foo.exe` → stem is `my.foo`.
+        assert_eq!(strip_pathext_suffix("my.foo.exe"), "my.foo");
+    }
+
+    #[test]
+    fn strip_pathext_suffix_dot_ext_alone_becomes_empty() {
+        // `.exe` has an empty stem; consistent with today's normalize_cmd_name(".exe") == "".
+        assert_eq!(strip_pathext_suffix(".exe"), "");
+    }
+
+    #[test]
+    fn strip_pathext_suffix_leaves_multichar_overlap() {
+        // `.jse` should match (and strip), not get confused with `.js`.
+        assert_eq!(strip_pathext_suffix("foo.jse"), "foo");
+        // `.js` also matches.
+        assert_eq!(strip_pathext_suffix("foo.js"), "foo");
+    }
 }
