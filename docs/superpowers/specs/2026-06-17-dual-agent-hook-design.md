@@ -104,9 +104,9 @@ The Codex adapter maps the shared engine result as follows:
 
 - `Deny -> deny`
 - `Ask -> no verdict`
-- `Allow -> no verdict`
+- `Allow -> allow`
 
-Returning no verdict means `claude-scriptcheck` declines to intervene and Codex continues with its native behavior. This keeps Codex approval flow outside this tool except for authoritative denials.
+Returning no verdict means `claude-scriptcheck` declines to decide and Codex continues with its native behavior for unresolved cases. Returning `allow` means `claude-scriptcheck` is explicitly taking over approval for cases the shared engine fully permits.
 
 The Codex adapter does not use `PermissionRequest` in this design.
 
@@ -166,7 +166,7 @@ Add tests for:
 - Claude hook input and output behavior preserving current semantics
 - Codex `PreToolUse` input parsing and output mapping
 - Codex `Ask -> no verdict`
-- Codex `Allow -> no verdict`
+- Codex `Allow -> allow`
 - Claude configuration loading using Claude config sources
 - Codex configuration loading using Codex config sources
 - Claude install and uninstall writing the Claude command line
@@ -202,7 +202,7 @@ These decisions are fixed for implementation:
 - no autodetection
 - Codex uses `PreToolUse` only
 - Codex `Ask -> no verdict`
-- Codex `Allow -> no verdict`
+- Codex `Allow -> allow`
 - Claude preserves current semantics
 
 Implementation may still choose the exact module layout and type names as long as those choices preserve the boundaries defined in this document.
