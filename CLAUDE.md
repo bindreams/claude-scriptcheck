@@ -1,7 +1,7 @@
 # claude-scriptcheck
 
-Permission checker for Claude Code pre-tool-use hooks.
-Checks Bash commands (AST-aware, parsed with [thaum](https://github.com/bindreams/thaum)) and file-access tools (Read, Write, Edit, Grep, Glob) against permission rules in Claude's `settings.json`.
+Permission checker for Claude Code and Codex pre-tool hooks.
+Checks Bash commands (AST-aware, parsed with [thaum](https://github.com/bindreams/thaum)) and file-access tools against agent-specific permission sources: Claude `settings.json` and Codex `config.toml`.
 
 ## Build & test
 
@@ -17,8 +17,10 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git  # insta
 | File                 | Role                                                                                                               |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `src/lib.rs`         | Library crate root. Re-exports all modules so they are usable without spawning the binary.                         |
-| `src/main.rs`        | Binary: CLI routing (clap), hook-mode dispatch (Bash/Monitor/Grep/Glob/Read/Write/Edit), I/O (stdin JSON → decision JSON). |
-| `src/cli.rs`         | Subcommand implementations: `install`, `uninstall`, `check`, `log`, `log-path`, `upgrade`. `VerdictFilter` type.   |
+| `src/main.rs`        | Binary: CLI routing (clap), agent-specific hook dispatch, and agent-specific output mapping. Claude handles `Bash`/`Monitor`/`Grep`/`Glob`/`Read`/`Write`/`Edit`; Codex handles `Bash` and `apply_patch`. |
+| `src/args.rs`        | Clap parser for explicit hook-mode `--agent` and positional agent subcommands (`install`, `uninstall`, `check`).   |
+| `src/cli.rs`         | Claude subcommand implementations plus shared install-command ownership helpers and `VerdictFilter`.                |
+| `src/codex_settings.rs` | Codex config loading (`[scriptcheck.permissions]`), project-root/trust detection, and inline `config.toml` hook install/uninstall helpers for Codex `PreToolUse`. |
 | `src/checker.rs`     | Core logic. `check_program()` for Bash AST, `check_file_accesses()` for non-Bash tools. Returns `CheckResult`. `find_match<F: PathFilter>()` is the generic per-verdict scan. End-stage `apply_permission_mode()` transforms verdicts per mode. |
 | `src/filter.rs`      | `Filter` / `PathFilter` traits, `RuleSet<F>` bucketed by verdict, `Verdict` enum, `impl_filter!` macro. Sub-modules under `src/filter/`. |
 | `src/filter/bash.rs` | `BashFilter { items: Vec<BashFilterItem> }` — item-based command filter. Items: `Arg0(Name | Path)`, `Arg(String)`, `MatchOne`, `MatchZeroOrMore`. `matches(raw_arg0, args, cwd)` walks items with backtracking for `MatchZeroOrMore`. |
@@ -27,6 +29,7 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git  # insta
 | `src/permission_mode.rs` | `PermissionMode` enum with `ValueEnum` (clap) and `from_hook_str` for the hook JSON field.                     |
 | `src/file_access.rs` | Maps well-known commands to file-access semantics (read/write args, redirects). ~25 unit tests.                    |
 | `src/hook.rs`        | `HookInput` / `HookOutput` serde structs for JSON protocol with Claude Code.                                       |
+| `src/apply_patch.rs` | Parses Codex `apply_patch` payloads into `FileAccess` writes so Codex can reuse the shared file-rule checker.     |
 | `src/settings.rs`    | Loads and merges permission rules + `additionalDirectories` (both nested inside `permissions` and top-level) from settings files. Returns `LoadedSettings`. `resolve_rule_path` is the shared 4-tier path dispatch (used by Read/Write/Edit rule wrapping and Bash arg0 path resolution); it normalizes separators before dispatch so backslash-written paths route correctly. |
 | `src/logging.rs`     | Appends decisions to platform-specific log file. Read-back helpers: `split_documents()`, `extract_verdict()`.       |
 | `src/path_util.rs`   | Cross-platform path helpers: `is_absolute()`, `normalize_separators()`, `is_filesystem_root()`, `strip_pathext_suffix()`, `PATHEXT_SUFFIXES`. |

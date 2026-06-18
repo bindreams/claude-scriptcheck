@@ -1,6 +1,9 @@
+pub mod apply_patch;
+pub mod args;
 pub mod canonicalize;
 pub mod checker;
 pub mod cli;
+pub mod codex_settings;
 pub mod cmd_parser;
 pub mod env_hooks;
 pub mod file_access;
