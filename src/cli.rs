@@ -681,7 +681,11 @@ pub(crate) enum HookCommandKind {
 }
 
 pub(crate) fn classify_hook_command(command: &str, binary_path: &str) -> Option<HookCommandKind> {
-    let program = thaum::parse_with(command, thaum::Dialect::Bash).ok()?;
+    // Hook commands may be stored as Windows paths with `\` separators, which
+    // the bash parser would treat as escapes. Normalize separators first so the
+    // command's arg0 survives parsing and can match the (normalized) binary.
+    let normalized = path_util::normalize_separators(command);
+    let program = thaum::parse_with(&normalized, thaum::Dialect::Bash).ok()?;
     if program.statements.len() != 1 {
         return None;
     }
@@ -1137,5 +1141,30 @@ mod tests {
 
         let result = ExeRenameGuard::new(path);
         assert!(result.is_err());
+    }
+
+    // Hook-command classification -------------------------------------------------------------------------------------
+
+    #[test]
+    fn classify_hook_command_handles_windows_backslash_path() {
+        // A hook command stored as a Windows path uses backslashes, which the
+        // bash parser treats as escape characters. The command must be
+        // separator-normalized before parsing or arg0 never matches the binary.
+        let win_path = r"C:\bin\scriptcheck\claude-scriptcheck.exe";
+        assert_eq!(
+            classify_hook_command(win_path, win_path),
+            Some(HookCommandKind::Legacy),
+            "a bare Windows-path hook command should be recognized as our own (legacy) hook",
+        );
+        let with_agent = format!(r"{win_path} --agent claude");
+        assert_eq!(
+            classify_hook_command(&with_agent, win_path),
+            Some(HookCommandKind::Claude),
+        );
+        let codex = format!(r"{win_path} --agent codex");
+        assert_eq!(
+            classify_hook_command(&codex, win_path),
+            Some(HookCommandKind::Codex),
+        );
     }
 }

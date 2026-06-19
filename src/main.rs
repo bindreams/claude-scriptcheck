@@ -193,7 +193,11 @@ fn rewrite_installed_hook_commands(project: bool, agent: Agent) {
 }
 
 fn rewrite_hook_command(command: &str, agent: Agent) -> Option<String> {
-    let cmd = parse_rewritable_hook_command(command)?;
+    // Parse against separator-normalized text so Windows `\` paths aren't
+    // mangled by the bash parser, and slice the rewritten args from that same
+    // normalized string so the spans stay valid.
+    let normalized = path_util::normalize_separators(command);
+    let cmd = parse_rewritable_hook_command(&normalized)?;
     if cmd.agent != HookCommandAgent::Missing {
         return None;
     }
@@ -201,7 +205,7 @@ fn rewrite_hook_command(command: &str, agent: Agent) -> Option<String> {
     let mut rewritten: Vec<&str> = cmd
         .arguments
         .iter()
-        .map(|span| &command[span.start.0..span.end.0])
+        .map(|span| &normalized[span.start.0..span.end.0])
         .collect();
     rewritten.push("--agent");
     rewritten.push(agent.as_str());
