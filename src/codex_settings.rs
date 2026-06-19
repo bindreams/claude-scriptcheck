@@ -267,10 +267,10 @@ fn project_is_trusted(user_content: Option<&str>, project_root: &str) -> bool {
     config.projects.iter().any(|(path, project)| {
         let normalized_path = crate::path_util::normalize_separators(path);
         let canonical_path = crate::canonicalize::best_effort_canonicalize(&normalized_path);
-        (normalized_path == project_root
-            || normalized_path == canonical_project_root
-            || canonical_path == project_root
-            || canonical_path == canonical_project_root)
+        (crate::path_util::paths_equal_for_platform(&normalized_path, &project_root)
+            || crate::path_util::paths_equal_for_platform(&normalized_path, &canonical_project_root)
+            || crate::path_util::paths_equal_for_platform(&canonical_path, &project_root)
+            || crate::path_util::paths_equal_for_platform(&canonical_path, &canonical_project_root))
             && project.trust_level.as_deref() == Some("trusted")
     })
 }

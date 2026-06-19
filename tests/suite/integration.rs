@@ -621,7 +621,8 @@ fn install_codex_project_writes_project_root_config_and_preserves_claude_setting
             [projects."{}"]
             trust_level = "trusted"
             "#,
-            repo.to_string_lossy()
+            // Forward-slash: a TOML quoted key would mangle Windows `\` as escapes.
+            repo.to_string_lossy().replace('\\', "/")
         ),
     )
     .unwrap();
@@ -724,7 +725,8 @@ fn uninstall_codex_project_removes_only_owned_hooks() {
             [projects."{}"]
             trust_level = "trusted"
             "#,
-            repo.to_string_lossy()
+            // Forward-slash: a TOML quoted key would mangle Windows `\` as escapes.
+            repo.to_string_lossy().replace('\\', "/")
         ),
     )
     .unwrap();
