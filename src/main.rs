@@ -193,10 +193,11 @@ fn rewrite_installed_hook_commands(project: bool, agent: Agent) {
 }
 
 fn rewrite_hook_command(command: &str, agent: Agent) -> Option<String> {
-    // Parse against separator-normalized text so Windows `\` paths aren't
-    // mangled by the bash parser, and slice the rewritten args from that same
-    // normalized string so the spans stay valid.
-    let normalized = path_util::normalize_separators(command);
+    // Parse against a `\`-to-`/` copy so Windows path separators aren't mangled
+    // by the bash parser. That replacement is 1 byte for 1 byte, so the parsed
+    // spans stay byte-aligned with `command`; slice the original to preserve the
+    // user's path separators in the rewritten hook.
+    let normalized = command.replace('\\', "/");
     let cmd = parse_rewritable_hook_command(&normalized)?;
     if cmd.agent != HookCommandAgent::Missing {
         return None;
@@ -205,7 +206,7 @@ fn rewrite_hook_command(command: &str, agent: Agent) -> Option<String> {
     let mut rewritten: Vec<&str> = cmd
         .arguments
         .iter()
-        .map(|span| &normalized[span.start.0..span.end.0])
+        .map(|span| &command[span.start.0..span.end.0])
         .collect();
     rewritten.push("--agent");
     rewritten.push(agent.as_str());
@@ -814,6 +815,20 @@ mod tests {
         assert_eq!(
             rewrite_hook_command(&command, Agent::Claude),
             Some(format!("{command} --agent claude"))
+        );
+    }
+
+    #[test]
+    fn rewrite_hook_command_preserves_backslash_separators() {
+        // A Windows-style hook command uses `\` separators. The rewrite must
+        // parse it (the bash parser would otherwise mangle the backslashes) AND
+        // keep the original separators in the output, not rewrite them to `/`.
+        let binary = std::env::current_exe().unwrap();
+        let backslashed = binary.to_string_lossy().replace('/', "\\");
+        let command = format!("'{backslashed}'");
+        assert_eq!(
+            rewrite_hook_command(&command, Agent::Claude),
+            Some(format!("{command} --agent claude")),
         );
     }
 
