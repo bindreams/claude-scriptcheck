@@ -170,26 +170,14 @@ fn codex_settings_merge_system_user_and_trusted_project_layers() {
         "/repo/apps",
     );
 
-    assert_eq!(
-        loaded.permissions.allow,
-        vec![
-            "Bash(system-allow *)",
-            "Bash(user-allow *)",
-            "Bash(root-allow *)",
-        ]
-    );
-    assert_eq!(
-        loaded.permissions.deny,
-        vec!["Bash(system-deny *)", "Bash(app-deny *)"]
-    );
-    assert_eq!(
-        loaded.permissions.ask,
-        vec!["Bash(user-ask *)", "Bash(app-ask *)"]
-    );
-    assert_eq!(
-        loaded.permissions.additional_directories,
-        vec!["/user/dir", "/app/dir"]
-    );
+    // Codex override-merge: the highest-precedence layer that SETS a field wins
+    // (array-replace), unlike Claude's additive merge. Layers fold low->high:
+    // system, user, /repo, /repo/apps. So allow's last setter is /repo
+    // (root-allow); deny/ask/additional_directories' last setter is /repo/apps.
+    assert_eq!(loaded.permissions.allow, vec!["Bash(root-allow *)"]);
+    assert_eq!(loaded.permissions.deny, vec!["Bash(app-deny *)"]);
+    assert_eq!(loaded.permissions.ask, vec!["Bash(app-ask *)"]);
+    assert_eq!(loaded.permissions.additional_directories, vec!["/app/dir"]);
 }
 
 #[skuld::test]

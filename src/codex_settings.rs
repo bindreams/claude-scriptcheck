@@ -41,14 +41,17 @@ struct CodexScriptcheckConfig {
 
 #[derive(Default, Deserialize)]
 struct CodexPermissions {
+    // `Option` distinguishes "key set" from "key absent" so override-merge can
+    // replace only fields a higher layer actually sets (Codex array-replace
+    // semantics, vs Claude's additive merge).
     #[serde(default)]
-    allow: Vec<String>,
+    allow: Option<Vec<String>>,
     #[serde(default)]
-    deny: Vec<String>,
+    deny: Option<Vec<String>>,
     #[serde(default)]
-    ask: Vec<String>,
+    ask: Option<Vec<String>>,
     #[serde(default, alias = "additionalDirectories")]
-    additional_directories: Vec<String>,
+    additional_directories: Option<Vec<String>>,
 }
 
 pub fn load_codex_settings(cwd: &str) -> LoadedSettings {
@@ -291,12 +294,23 @@ fn parse_document(content: Option<&str>) -> Option<CodexConfig> {
 }
 
 fn merge_permissions(merged: &mut Permissions, perms: CodexPermissions) {
-    merged.allow.extend(perms.allow);
-    merged.deny.extend(perms.deny);
-    merged.ask.extend(perms.ask);
-    merged
-        .additional_directories
-        .extend(perms.additional_directories);
+    // Codex override-merge: a higher-precedence layer's array REPLACES the
+    // lower's wholesale (Codex merge_toml_values array-replace), unlike Claude's
+    // additive merge. A field a layer does not set leaves the accumulator
+    // unchanged. Layers are folded low->high (system, user, project root..cwd),
+    // so the highest layer that sets a field wins.
+    if let Some(allow) = perms.allow {
+        merged.allow = allow;
+    }
+    if let Some(deny) = perms.deny {
+        merged.deny = deny;
+    }
+    if let Some(ask) = perms.ask {
+        merged.ask = ask;
+    }
+    if let Some(dirs) = perms.additional_directories {
+        merged.additional_directories = dirs;
+    }
 }
 
 fn codex_user_config_path() -> Option<PathBuf> {
