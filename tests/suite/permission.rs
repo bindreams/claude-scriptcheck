@@ -816,18 +816,33 @@ fn parse_colon_wildcard_multi_token() {
 }
 
 #[skuld::test]
-fn parse_colon_wildcard_relative_path() {
+fn parse_colon_wildcard_relative_path(#[fixture(temp_dir)] dir: &Path) {
     // Path-containing first token becomes `Arg0::Path`, resolved against cwd
-    // and canonicalized. Confirms colon-wildcard normalization happens before
-    // classification.
+    // and canonicalized. Use a real cwd so the canonical form is stable on
+    // both Unix and Windows.
+    let cwd = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
+    );
+    let expected_path = format!("{cwd}/bazel.cmd");
     let parsed = parse_single_rule(
         "Bash(./bazel.cmd build:*)",
-        &ctx_full("/home/test", "/work", "/project"),
+        &ctx_full("/home/test", &cwd, &cwd),
     )
     .unwrap();
     match parsed {
         ParsedFilter::Bash(rule) => {
-            assert_eq!(rule.reconstruct_data(), "//work/bazel.cmd build *");
+            assert!(matches!(
+                rule.items.as_slice(),
+                [
+                    BashFilterItem::Arg0(Arg0Pattern::Path(path)),
+                    BashFilterItem::Arg(build),
+                    BashFilterItem::MatchZeroOrMore,
+                ] if path == &expected_path && build == "build"
+            ));
+            assert_eq!(
+                rule.reconstruct_data(),
+                format!("//{} build *", expected_path.trim_start_matches('/'))
+            );
         }
         _ => panic!("expected Bash rule"),
     }
