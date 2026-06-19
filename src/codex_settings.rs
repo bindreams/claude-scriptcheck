@@ -316,7 +316,9 @@ fn resolve_repo_root_for_trust(start: &str) -> Option<String> {
     loop {
         let dot_git = dir.join(".git");
         if dot_git.is_dir() {
-            return Some(crate::path_util::normalize_separators(&dir.to_string_lossy()));
+            return Some(crate::path_util::normalize_separators(
+                &dir.to_string_lossy(),
+            ));
         }
         if dot_git.is_file() {
             let content = std::fs::read_to_string(&dot_git).ok()?;
@@ -425,7 +427,12 @@ fn codex_system_config_path() -> Option<PathBuf> {
         let program_data = std::env::var_os("ProgramData")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
-        Some(program_data.join("OpenAI").join("Codex").join("config.toml"))
+        Some(
+            program_data
+                .join("OpenAI")
+                .join("Codex")
+                .join("config.toml"),
+        )
     }
     #[cfg(not(windows))]
     {
@@ -975,7 +982,9 @@ mod tests {
         let resolved = resolve_repo_root_for_trust(&repo.to_string_lossy());
         assert_eq!(
             resolved.map(|r| crate::path_util::normalize_path_key(&r)),
-            Some(crate::path_util::normalize_path_key(&repo.to_string_lossy()))
+            Some(crate::path_util::normalize_path_key(
+                &repo.to_string_lossy()
+            ))
         );
     }
 
@@ -991,16 +1000,15 @@ mod tests {
         std::fs::create_dir_all(&wt).unwrap();
         std::fs::write(
             wt.join(".git"),
-            format!(
-                "gitdir: {}\n",
-                gitdir.to_string_lossy().replace('\\', "/")
-            ),
+            format!("gitdir: {}\n", gitdir.to_string_lossy().replace('\\', "/")),
         )
         .unwrap();
         let resolved = resolve_repo_root_for_trust(&wt.to_string_lossy());
         assert_eq!(
             resolved.map(|r| crate::path_util::normalize_path_key(&r)),
-            Some(crate::path_util::normalize_path_key(&main.to_string_lossy())),
+            Some(crate::path_util::normalize_path_key(
+                &main.to_string_lossy()
+            )),
             "worktree should resolve to the main repo root"
         );
     }
@@ -1017,10 +1025,7 @@ mod tests {
     fn codex_home_valid_dir_is_used() {
         let dir = tempfile::tempdir().unwrap();
         let value = std::ffi::OsString::from(dir.path());
-        assert_eq!(
-            resolve_codex_home(Some(value)).as_deref(),
-            Some(dir.path())
-        );
+        assert_eq!(resolve_codex_home(Some(value)).as_deref(), Some(dir.path()));
     }
 
     #[test]
