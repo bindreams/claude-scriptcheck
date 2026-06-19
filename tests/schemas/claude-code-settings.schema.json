@@ -36,10 +36,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "type",
-        "command"
-      ]
+      "required": ["type", "command"]
     },
     "respectGitignore": {
       "description": "Whether file picker should respect .gitignore files (default: true). Note: .ignore files are always respected.",
@@ -123,9 +120,7 @@
         "disableBypassPermissionsMode": {
           "description": "Disable the ability to bypass permission prompts",
           "type": "string",
-          "enum": [
-            "disable"
-          ]
+          "enum": ["disable"]
         },
         "additionalDirectories": {
           "description": "Additional directories to include in the permission scope",
@@ -303,10 +298,7 @@
                       "shell": {
                         "description": "Shell interpreter. 'bash' uses your $SHELL (bash/zsh/sh); 'powershell' uses pwsh. Defaults to bash.",
                         "type": "string",
-                        "enum": [
-                          "bash",
-                          "powershell"
-                        ]
+                        "enum": ["bash", "powershell"]
                       },
                       "timeout": {
                         "description": "Timeout in seconds for this specific command",
@@ -335,10 +327,7 @@
                         "minLength": 1
                       }
                     },
-                    "required": [
-                      "type",
-                      "command"
-                    ]
+                    "required": ["type", "command"]
                   },
                   {
                     "type": "object",
@@ -374,10 +363,7 @@
                         "type": "boolean"
                       }
                     },
-                    "required": [
-                      "type",
-                      "prompt"
-                    ]
+                    "required": ["type", "prompt"]
                   },
                   {
                     "type": "object",
@@ -413,10 +399,7 @@
                         "type": "boolean"
                       }
                     },
-                    "required": [
-                      "type",
-                      "prompt"
-                    ]
+                    "required": ["type", "prompt"]
                   },
                   {
                     "type": "object",
@@ -466,18 +449,13 @@
                         "type": "boolean"
                       }
                     },
-                    "required": [
-                      "type",
-                      "url"
-                    ]
+                    "required": ["type", "url"]
                   }
                 ]
               }
             }
           },
-          "required": [
-            "hooks"
-          ]
+          "required": ["hooks"]
         }
       }
     },
@@ -512,10 +490,7 @@
     "defaultShell": {
       "description": "Default shell for input-box ! commands. Defaults to 'bash' on all platforms (no Windows auto-flip).",
       "type": "string",
-      "enum": [
-        "bash",
-        "powershell"
-      ]
+      "enum": ["bash", "powershell"]
     },
     "allowManagedHooksOnly": {
       "description": "When true (and set in managed settings), only hooks from managed settings run. User, project, and local hooks are ignored.",
@@ -553,12 +528,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": [
-              "skills",
-              "agents",
-              "hooks",
-              "mcp"
-            ]
+            "enum": ["skills", "agents", "hooks", "mcp"]
           }
         }
       ]
@@ -583,10 +553,7 @@
           "minimum": 1
         }
       },
-      "required": [
-        "type",
-        "command"
-      ]
+      "required": ["type", "command"]
     },
     "enabledPlugins": {
       "description": "Enabled plugins using plugin-id@marketplace-id format. Example: { \"formatter@anthropic-tools\": true }. Also supports extended format with version constraints.",
@@ -646,10 +613,7 @@
                     }
                   }
                 },
-                "required": [
-                  "source",
-                  "url"
-                ]
+                "required": ["source", "url"]
               },
               {
                 "type": "object",
@@ -678,10 +642,7 @@
                     }
                   }
                 },
-                "required": [
-                  "source",
-                  "repo"
-                ]
+                "required": ["source", "repo"]
               },
               {
                 "type": "object",
@@ -710,10 +671,7 @@
                     }
                   }
                 },
-                "required": [
-                  "source",
-                  "url"
-                ]
+                "required": ["source", "url"]
               },
               {
                 "type": "object",
@@ -727,10 +685,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "source",
-                  "package"
-                ]
+                "required": ["source", "package"]
               },
               {
                 "type": "object",
@@ -744,10 +699,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "source",
-                  "path"
-                ]
+                "required": ["source", "path"]
               },
               {
                 "type": "object",
@@ -761,10 +713,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "source",
-                  "path"
-                ]
+                "required": ["source", "path"]
               },
               {
                 "type": "object",
@@ -778,10 +727,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "source",
-                  "hostPattern"
-                ]
+                "required": ["source", "hostPattern"]
               },
               {
                 "type": "object",
@@ -795,10 +741,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "source",
-                  "pathPattern"
-                ]
+                "required": ["source", "pathPattern"]
               },
               {
                 "description": "Inline marketplace manifest defined directly in settings.json. The reconciler writes a synthetic marketplace.json to the cache; diffMarketplaces detects edits via isEqual on the stored source (the plugins array is inside this object, so edits surface as sourceChanged).",
@@ -861,10 +804,7 @@
                                   "format": "uri"
                                 }
                               },
-                              "required": [
-                                "source",
-                                "package"
-                              ]
+                              "required": ["source", "package"]
                             },
                             {
                               "description": "Python package as plugin source",
@@ -888,10 +828,7 @@
                                   "format": "uri"
                                 }
                               },
-                              "required": [
-                                "source",
-                                "package"
-                              ]
+                              "required": ["source", "package"]
                             },
                             {
                               "type": "object",
@@ -916,10 +853,7 @@
                                   "pattern": "^[a-f0-9]{40}$"
                                 }
                               },
-                              "required": [
-                                "source",
-                                "url"
-                              ]
+                              "required": ["source", "url"]
                             },
                             {
                               "type": "object",
@@ -944,10 +878,7 @@
                                   "pattern": "^[a-f0-9]{40}$"
                                 }
                               },
-                              "required": [
-                                "source",
-                                "repo"
-                              ]
+                              "required": ["source", "repo"]
                             },
                             {
                               "description": "Plugin located in a subdirectory of a larger repository (monorepo). Only the specified subdirectory is materialized; the rest of the repo is not downloaded.",
@@ -978,11 +909,7 @@
                                   "pattern": "^[a-f0-9]{40}$"
                                 }
                               },
-                              "required": [
-                                "source",
-                                "url",
-                                "path"
-                              ]
+                              "required": ["source", "url", "path"]
                             }
                           ]
                         },
@@ -996,10 +923,7 @@
                           "type": "boolean"
                         }
                       },
-                      "required": [
-                        "name",
-                        "source"
-                      ]
+                      "required": ["name", "source"]
                     }
                   },
                   "owner": {
@@ -1019,16 +943,10 @@
                         "type": "string"
                       }
                     },
-                    "required": [
-                      "name"
-                    ]
+                    "required": ["name"]
                   }
                 },
-                "required": [
-                  "source",
-                  "name",
-                  "plugins"
-                ]
+                "required": ["source", "name", "plugins"]
               }
             ]
           },
@@ -1041,9 +959,7 @@
             "type": "boolean"
           }
         },
-        "required": [
-          "source"
-        ]
+        "required": ["source"]
       }
     },
     "strictKnownMarketplaces": {
@@ -1074,10 +990,7 @@
                 }
               }
             },
-            "required": [
-              "source",
-              "url"
-            ]
+            "required": ["source", "url"]
           },
           {
             "type": "object",
@@ -1106,10 +1019,7 @@
                 }
               }
             },
-            "required": [
-              "source",
-              "repo"
-            ]
+            "required": ["source", "repo"]
           },
           {
             "type": "object",
@@ -1138,10 +1048,7 @@
                 }
               }
             },
-            "required": [
-              "source",
-              "url"
-            ]
+            "required": ["source", "url"]
           },
           {
             "type": "object",
@@ -1155,10 +1062,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "source",
-              "package"
-            ]
+            "required": ["source", "package"]
           },
           {
             "type": "object",
@@ -1172,10 +1076,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "source",
-              "path"
-            ]
+            "required": ["source", "path"]
           },
           {
             "type": "object",
@@ -1189,10 +1090,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "source",
-              "path"
-            ]
+            "required": ["source", "path"]
           },
           {
             "type": "object",
@@ -1206,10 +1104,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "source",
-              "hostPattern"
-            ]
+            "required": ["source", "hostPattern"]
           },
           {
             "type": "object",
@@ -1223,10 +1118,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "source",
-              "pathPattern"
-            ]
+            "required": ["source", "pathPattern"]
           },
           {
             "description": "Inline marketplace manifest defined directly in settings.json. The reconciler writes a synthetic marketplace.json to the cache; diffMarketplaces detects edits via isEqual on the stored source (the plugins array is inside this object, so edits surface as sourceChanged).",
@@ -1289,10 +1181,7 @@
                               "format": "uri"
                             }
                           },
-                          "required": [
-                            "source",
-                            "package"
-                          ]
+                          "required": ["source", "package"]
                         },
                         {
                           "description": "Python package as plugin source",
@@ -1316,10 +1205,7 @@
                               "format": "uri"
                             }
                           },
-                          "required": [
-                            "source",
-                            "package"
-                          ]
+                          "required": ["source", "package"]
                         },
                         {
                           "type": "object",
@@ -1344,10 +1230,7 @@
                               "pattern": "^[a-f0-9]{40}$"
                             }
                           },
-                          "required": [
-                            "source",
-                            "url"
-                          ]
+                          "required": ["source", "url"]
                         },
                         {
                           "type": "object",
@@ -1372,10 +1255,7 @@
                               "pattern": "^[a-f0-9]{40}$"
                             }
                           },
-                          "required": [
-                            "source",
-                            "repo"
-                          ]
+                          "required": ["source", "repo"]
                         },
                         {
                           "description": "Plugin located in a subdirectory of a larger repository (monorepo). Only the specified subdirectory is materialized; the rest of the repo is not downloaded.",
@@ -1406,11 +1286,7 @@
                               "pattern": "^[a-f0-9]{40}$"
                             }
                           },
-                          "required": [
-                            "source",
-                            "url",
-                            "path"
-                          ]
+                          "required": ["source", "url", "path"]
                         }
                       ]
                     },
@@ -1424,10 +1300,7 @@
                       "type": "boolean"
                     }
                   },
-                  "required": [
-                    "name",
-                    "source"
-                  ]
+                  "required": ["name", "source"]
                 }
               },
               "owner": {
@@ -1447,16 +1320,10 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "name"
-                ]
+                "required": ["name"]
               }
             },
-            "required": [
-              "source",
-              "name",
-              "plugins"
-            ]
+            "required": ["source", "name", "plugins"]
           }
         ]
       }
@@ -1489,10 +1356,7 @@
                 }
               }
             },
-            "required": [
-              "source",
-              "url"
-            ]
+            "required": ["source", "url"]
           },
           {
             "type": "object",
@@ -1521,10 +1385,7 @@
                 }
               }
             },
-            "required": [
-              "source",
-              "repo"
-            ]
+            "required": ["source", "repo"]
           },
           {
             "type": "object",
@@ -1553,10 +1414,7 @@
                 }
               }
             },
-            "required": [
-              "source",
-              "url"
-            ]
+            "required": ["source", "url"]
           },
           {
             "type": "object",
@@ -1570,10 +1428,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "source",
-              "package"
-            ]
+            "required": ["source", "package"]
           },
           {
             "type": "object",
@@ -1587,10 +1442,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "source",
-              "path"
-            ]
+            "required": ["source", "path"]
           },
           {
             "type": "object",
@@ -1604,10 +1456,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "source",
-              "path"
-            ]
+            "required": ["source", "path"]
           },
           {
             "type": "object",
@@ -1621,10 +1470,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "source",
-              "hostPattern"
-            ]
+            "required": ["source", "hostPattern"]
           },
           {
             "type": "object",
@@ -1638,10 +1484,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "source",
-              "pathPattern"
-            ]
+            "required": ["source", "pathPattern"]
           },
           {
             "description": "Inline marketplace manifest defined directly in settings.json. The reconciler writes a synthetic marketplace.json to the cache; diffMarketplaces detects edits via isEqual on the stored source (the plugins array is inside this object, so edits surface as sourceChanged).",
@@ -1704,10 +1547,7 @@
                               "format": "uri"
                             }
                           },
-                          "required": [
-                            "source",
-                            "package"
-                          ]
+                          "required": ["source", "package"]
                         },
                         {
                           "description": "Python package as plugin source",
@@ -1731,10 +1571,7 @@
                               "format": "uri"
                             }
                           },
-                          "required": [
-                            "source",
-                            "package"
-                          ]
+                          "required": ["source", "package"]
                         },
                         {
                           "type": "object",
@@ -1759,10 +1596,7 @@
                               "pattern": "^[a-f0-9]{40}$"
                             }
                           },
-                          "required": [
-                            "source",
-                            "url"
-                          ]
+                          "required": ["source", "url"]
                         },
                         {
                           "type": "object",
@@ -1787,10 +1621,7 @@
                               "pattern": "^[a-f0-9]{40}$"
                             }
                           },
-                          "required": [
-                            "source",
-                            "repo"
-                          ]
+                          "required": ["source", "repo"]
                         },
                         {
                           "description": "Plugin located in a subdirectory of a larger repository (monorepo). Only the specified subdirectory is materialized; the rest of the repo is not downloaded.",
@@ -1821,11 +1652,7 @@
                               "pattern": "^[a-f0-9]{40}$"
                             }
                           },
-                          "required": [
-                            "source",
-                            "url",
-                            "path"
-                          ]
+                          "required": ["source", "url", "path"]
                         }
                       ]
                     },
@@ -1839,10 +1666,7 @@
                       "type": "boolean"
                     }
                   },
-                  "required": [
-                    "name",
-                    "source"
-                  ]
+                  "required": ["name", "source"]
                 }
               },
               "owner": {
@@ -1862,16 +1686,10 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "name"
-                ]
+                "required": ["name"]
               }
             },
-            "required": [
-              "source",
-              "name",
-              "plugins"
-            ]
+            "required": ["source", "name", "plugins"]
           }
         ]
       }
@@ -1879,10 +1697,7 @@
     "forceLoginMethod": {
       "description": "Force a specific login method: \"claudeai\" for Claude Pro/Max, \"console\" for Console billing",
       "type": "string",
-      "enum": [
-        "claudeai",
-        "console"
-      ]
+      "enum": ["claudeai", "console"]
     },
     "forceLoginOrgUUID": {
       "description": "Organization UUID to require for OAuth login. Accepts a single UUID string or an array of UUIDs (any one is permitted). When set in managed settings, login fails if the authenticated account does not belong to a listed organization.",
@@ -1913,11 +1728,7 @@
     "viewMode": {
       "description": "Default transcript view mode on startup",
       "type": "string",
-      "enum": [
-        "default",
-        "verbose",
-        "focus"
-      ]
+      "enum": ["default", "verbose", "focus"]
     },
     "language": {
       "description": "Preferred language for Claude responses and voice dictation (e.g., \"japanese\", \"spanish\")",
@@ -2062,9 +1873,7 @@
               }
             }
           },
-          "required": [
-            "command"
-          ]
+          "required": ["command"]
         }
       },
       "additionalProperties": {}
@@ -2085,10 +1894,7 @@
       "properties": {
         "mode": {
           "type": "string",
-          "enum": [
-            "append",
-            "replace"
-          ]
+          "enum": ["append", "replace"]
         },
         "verbs": {
           "type": "array",
@@ -2097,10 +1903,7 @@
           }
         }
       },
-      "required": [
-        "mode",
-        "verbs"
-      ]
+      "required": ["mode", "verbs"]
     },
     "spinnerTipsOverride": {
       "description": "Override spinner tips. tips: array of tip strings. excludeDefault: if true, only show custom tips (default: false).",
@@ -2116,9 +1919,7 @@
           }
         }
       },
-      "required": [
-        "tips"
-      ]
+      "required": ["tips"]
     },
     "syntaxHighlightingDisabled": {
       "description": "Whether to disable syntax highlighting in diffs",
@@ -2135,11 +1936,7 @@
     "effortLevel": {
       "description": "Persisted effort level for supported models.",
       "type": "string",
-      "enum": [
-        "low",
-        "medium",
-        "high"
-      ]
+      "enum": ["low", "medium", "high"]
     },
     "autoCompactWindow": {
       "description": "Auto-compact window size",
@@ -2261,10 +2058,7 @@
     "autoUpdatesChannel": {
       "description": "Release channel for auto-updates (latest or stable)",
       "type": "string",
-      "enum": [
-        "latest",
-        "stable"
-      ]
+      "enum": ["latest", "stable"]
     },
     "minimumVersion": {
       "description": "Minimum version to stay on - prevents downgrades when switching to stable channel",
@@ -2301,10 +2095,7 @@
         "mode": {
           "description": "'hold' (default): hold to talk. 'tap': tap to start, tap to stop+submit.",
           "type": "string",
-          "enum": [
-            "hold",
-            "tap"
-          ]
+          "enum": ["hold", "tap"]
         },
         "autoSubmit": {
           "description": "Submit the prompt when hold-to-talk is released (hold mode only)",
@@ -2329,10 +2120,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "marketplace",
-          "plugin"
-        ]
+        "required": ["marketplace", "plugin"]
       }
     },
     "prefersReducedMotion": {
@@ -2362,9 +2150,7 @@
     "disableAutoMode": {
       "description": "Disable auto mode",
       "type": "string",
-      "enum": [
-        "disable"
-      ]
+      "enum": ["disable"]
     },
     "sshConfigs": {
       "description": "SSH connection configurations for remote environments. Typically set in managed settings by enterprise administrators to pre-configure SSH connections for team members.",
@@ -2399,11 +2185,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "id",
-          "name",
-          "sshHost"
-        ]
+        "required": ["id", "name", "sshHost"]
       }
     },
     "claudeMdExcludes": {
