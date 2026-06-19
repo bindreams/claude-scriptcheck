@@ -16,6 +16,10 @@ rustpython-parser = "0.4.0"
 rustpython-ast = "0.4.0"
 skuld = { git = "https://github.com/bindreams/skuld.git" }
 pretty_assertions = "1"
+which = "8.0.4"
+toml = "0.8"
+toml_edit = "0.22"
+tempfile = "3"
 
 [dev-dependencies]
 json5 = "0.4"

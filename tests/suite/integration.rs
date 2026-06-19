@@ -112,12 +112,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Monotonic counter for allocating unique ephemeral log paths per subprocess call.
 static TEST_LOG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// RAII cleanup for the ephemeral log file written by an isolated subprocess.
-struct IsolatedLog(PathBuf);
+/// RAII cleanup for the ephemeral files/directories created for an isolated subprocess.
+struct IsolatedLog {
+    log_path: PathBuf,
+    project_root: PathBuf,
+}
 
 impl Drop for IsolatedLog {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        let _ = std::fs::remove_file(&self.log_path);
+        let _ = std::fs::remove_dir_all(&self.project_root);
     }
 }
 
@@ -128,8 +132,9 @@ impl Drop for IsolatedLog {
 ///
 /// `HOME` isolation works on Unix (via `dirs::home_dir()`). On Windows, `dirs`
 /// uses `SHGetKnownFolderPath(FOLDERID_Profile)` and ignores `HOME`, so the hook
-/// also consults `CLAUDE_SCRIPTCHECK_HOOK_HOME` — which we set here. Callers may
-/// set `CLAUDE_PROJECT_DIR` themselves; this helper never touches it.
+/// also consults `CLAUDE_SCRIPTCHECK_HOOK_HOME` — which we set here. We also set
+/// an empty, isolated `CLAUDE_PROJECT_DIR` so project-level settings cannot leak
+/// in from the hook payload's `cwd`. Callers may still override that env var.
 fn apply_test_isolation(cmd: &mut Command) -> IsolatedLog {
     let pid = std::process::id();
     let counter = TEST_LOG_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -137,17 +142,56 @@ fn apply_test_isolation(cmd: &mut Command) -> IsolatedLog {
     let isolated_home = base.join(format!(
         "claude-scriptcheck-test-home-{pid}-{counter}-nonexistent"
     ));
+    let isolated_codex_home = base.join(format!(
+        "claude-scriptcheck-test-codex-home-{pid}-{counter}-nonexistent"
+    ));
     let log_path = base.join(format!("claude-scriptcheck-test-log-{pid}-{counter}.yaml"));
+    let project_root = base.join(format!("claude-scriptcheck-test-project-{pid}-{counter}"));
+    std::fs::create_dir_all(&project_root).unwrap();
     cmd.env("HOME", &isolated_home);
     cmd.env("CLAUDE_SCRIPTCHECK_HOOK_HOME", &isolated_home);
+    cmd.env("CODEX_HOME", &isolated_codex_home);
     cmd.env("CLAUDE_SCRIPTCHECK_LOG_PATH", &log_path);
-    IsolatedLog(log_path)
+    cmd.env("CLAUDE_PROJECT_DIR", &project_root);
+    IsolatedLog {
+        log_path,
+        project_root,
+    }
 }
 
 fn run_binary(stdin_bytes: &[u8]) -> std::process::Output {
+    run_binary_for_agent("claude", stdin_bytes)
+}
+
+fn run_binary_for_agent(agent: &str, stdin_bytes: &[u8]) -> std::process::Output {
     let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
     let mut cmd = Command::new(binary);
     let _log_guard = apply_test_isolation(&mut cmd);
+    cmd.args(["--agent", agent]);
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to start binary");
+
+    child.stdin.take().unwrap().write_all(stdin_bytes).unwrap();
+
+    child.wait_with_output().unwrap()
+}
+
+fn run_binary_for_agent_with_env(
+    agent: &str,
+    stdin_bytes: &[u8],
+    env: &[(&str, &str)],
+) -> std::process::Output {
+    let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
+    let mut cmd = Command::new(binary);
+    let _log_guard = apply_test_isolation(&mut cmd);
+    cmd.args(["--agent", agent]);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -203,17 +247,35 @@ fn search_tool_json(tool_name: &str, path: Option<&str>, pattern: &str) -> Vec<u
     .into_bytes()
 }
 
-fn parse_decision(output: &std::process::Output) -> String {
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+fn parse_output_json(output: &std::process::Output) -> serde_json::Value {
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
         panic!(
             "stdout is not valid JSON: {e}\nstdout: {}",
             String::from_utf8_lossy(&output.stdout)
         )
-    });
+    })
+}
+
+fn parse_decision(output: &std::process::Output) -> String {
+    let json = parse_output_json(output);
     json["hookSpecificOutput"]["permissionDecision"]
         .as_str()
         .expect("missing permissionDecision field")
         .to_string()
+}
+
+fn parse_updated_command(output: &std::process::Output) -> Option<String> {
+    let json = parse_output_json(output);
+    json["hookSpecificOutput"]["updatedInput"]["command"]
+        .as_str()
+        .map(ToString::to_string)
+}
+
+fn parse_additional_context(output: &std::process::Output) -> Option<String> {
+    let json = parse_output_json(output);
+    json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .map(ToString::to_string)
 }
 
 #[skuld::test]
@@ -221,6 +283,577 @@ fn unsupported_tool_exits_cleanly() {
     let output = run_binary(&hook_json("Agent", "anything"));
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
+}
+
+#[skuld::test]
+fn codex_allow_outputs_allow_with_unchanged_updated_input() {
+    let codex_home = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-home-allow-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&codex_home);
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(
+        codex_home.join("config.toml"),
+        r#"
+        [scriptcheck.permissions]
+        allow = ["Bash(ls *)"]
+        "#,
+    )
+    .unwrap();
+
+    let codex_home = codex_home.to_string_lossy().to_string();
+    let output = run_binary_for_agent_with_env(
+        "codex",
+        &hook_json("Bash", "ls -la"),
+        &[("CODEX_HOME", &codex_home)],
+    );
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+    assert_eq!(parse_updated_command(&output).as_deref(), Some("ls -la"));
+
+    let _ = std::fs::remove_dir_all(&codex_home);
+}
+
+#[skuld::test]
+fn codex_deny_outputs_deny_json() {
+    let codex_home = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-home-deny-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&codex_home);
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(
+        codex_home.join("config.toml"),
+        r#"
+        [scriptcheck.permissions]
+        deny = ["Bash(rm *)"]
+        "#,
+    )
+    .unwrap();
+
+    let codex_home = codex_home.to_string_lossy().to_string();
+    let output = run_binary_for_agent_with_env(
+        "codex",
+        &hook_json("Bash", "rm -rf tmp"),
+        &[("CODEX_HOME", &codex_home)],
+    );
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "deny");
+    assert!(parse_reason(&output).contains("matched deny rule"));
+
+    let _ = std::fs::remove_dir_all(&codex_home);
+}
+
+#[skuld::test]
+fn codex_missing_rule_emits_no_stdout_and_logs_ask() {
+    let codex_home = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-home-ask-{}",
+        std::process::id()
+    ));
+    let log_path = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-log-{}.yaml",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&codex_home);
+    let _ = std::fs::remove_file(&log_path);
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(codex_home.join("config.toml"), "").unwrap();
+
+    let codex_home = codex_home.to_string_lossy().to_string();
+    let log_path_str = log_path.to_string_lossy().to_string();
+    let output = run_binary_for_agent_with_env(
+        "codex",
+        &hook_json("Bash", "unknown-command --flag"),
+        &[
+            ("CODEX_HOME", &codex_home),
+            ("CLAUDE_SCRIPTCHECK_LOG_PATH", &log_path_str),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+
+    let log = std::fs::read_to_string(&log_path).unwrap();
+    assert!(log.contains("verdict: ask"), "unexpected log:\n{log}");
+    assert!(log.contains("missing_rules:"), "unexpected log:\n{log}");
+
+    let _ = std::fs::remove_dir_all(&codex_home);
+    let _ = std::fs::remove_file(&log_path);
+}
+
+#[skuld::test]
+fn codex_apply_patch_missing_write_rule_emits_no_stdout() {
+    let codex_home = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-home-patch-ask-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&codex_home);
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(codex_home.join("config.toml"), "").unwrap();
+
+    let codex_home = codex_home.to_string_lossy().to_string();
+    let patch = r#"*** Begin Patch
+*** Update File: src/demo.rs
+@@
+-old
++new
+*** End Patch
+"#;
+    let output = run_binary_for_agent_with_env(
+        "codex",
+        &hook_json("apply_patch", patch),
+        &[("CODEX_HOME", &codex_home)],
+    );
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+
+    let _ = std::fs::remove_dir_all(&codex_home);
+}
+
+#[skuld::test]
+fn codex_apply_patch_with_write_rule_allows() {
+    let codex_home = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-home-patch-allow-{}",
+        std::process::id()
+    ));
+    let log_path = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-patch-allow-log-{}.yaml",
+        std::process::id()
+    ));
+    let cwd = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-cwd-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&codex_home);
+    let _ = std::fs::remove_dir_all(&cwd);
+    let _ = std::fs::remove_file(&log_path);
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+    let canonical_cwd = std::fs::canonicalize(&cwd).unwrap();
+    // Forward-slash the path: this rule lives in a TOML *basic* string, where a
+    // Windows `\\?\C:\…` path would be mangled as escape sequences. Codex config
+    // paths likewise use forward slashes (or TOML literal strings).
+    let allowed_path = format!(
+        "{}/src/demo.rs",
+        canonical_cwd.to_string_lossy().replace('\\', "/")
+    );
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"
+        [scriptcheck.permissions]
+        allow = ["Write({allowed_path})"]
+        "#
+        ),
+    )
+    .unwrap();
+
+    let codex_home = codex_home.to_string_lossy().to_string();
+    let log_path_str = log_path.to_string_lossy().to_string();
+    let patch = r#"*** Begin Patch
+*** Update File: src/demo.rs
+@@
+-old
++new
+*** End Patch
+"#;
+    let input = serde_json::json!({
+        "session_id": "test-session",
+        "cwd": cwd.to_string_lossy(),
+        "hook_event_name": "PreToolUse",
+        "tool_name": "apply_patch",
+        "tool_input": { "command": patch },
+        "tool_use_id": "toolu_test"
+    })
+    .to_string()
+    .into_bytes();
+    let output = run_binary_for_agent_with_env(
+        "codex",
+        &input,
+        &[
+            ("CODEX_HOME", &codex_home),
+            ("CLAUDE_SCRIPTCHECK_LOG_PATH", &log_path_str),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+    assert_eq!(parse_updated_command(&output).as_deref(), Some(patch));
+    let log = std::fs::read_to_string(&log_path).unwrap();
+    assert!(
+        log.contains("command: apply_patch"),
+        "unexpected log:\n{log}"
+    );
+
+    let _ = std::fs::remove_dir_all(&codex_home);
+    let _ = std::fs::remove_dir_all(&cwd);
+    let _ = std::fs::remove_file(&log_path);
+}
+
+#[skuld::test]
+fn hook_mode_requires_explicit_agent() {
+    use std::process::Command;
+
+    let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
+    let output = Command::new(binary)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(&hook_json("Bash", "ls"))?;
+            child.wait_with_output()
+        })
+        .expect("Failed to run binary");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--agent"));
+}
+
+#[skuld::test]
+fn install_and_uninstall_preserve_foreign_scriptcheck_subcommand_hooks() {
+    use std::process::Command;
+
+    let dir = std::env::temp_dir()
+        .join("claude-scriptcheck-tests")
+        .join("preserve-foreign-subcommands");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".claude")).unwrap();
+
+    let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
+    std::fs::write(
+        dir.join(".claude/settings.json"),
+        serde_json::json!({
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            { "type": "command", "command": format!("{binary} log") },
+                            { "type": "command", "command": format!("{binary} check claude ls") }
+                        ]
+                    }
+                ]
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let install_output = Command::new(binary)
+        .args(["install", "claude", "--project"])
+        .current_dir(&dir)
+        .output()
+        .expect("Failed to run install");
+    assert!(
+        install_output.status.success(),
+        "install failed: {}",
+        String::from_utf8_lossy(&install_output.stderr)
+    );
+
+    let installed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join(".claude/settings.json")).unwrap())
+            .unwrap();
+    let commands_after_install: Vec<String> = installed["hooks"]["PreToolUse"][0]["hooks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|hook| hook["command"].as_str().map(str::to_owned))
+        .collect();
+    assert!(commands_after_install.contains(&format!("{binary} log")));
+    assert!(commands_after_install.contains(&format!("{binary} check claude ls")));
+
+    let uninstall_output = Command::new(binary)
+        .args(["uninstall", "claude", "--project"])
+        .current_dir(&dir)
+        .output()
+        .expect("Failed to run uninstall");
+    assert!(
+        uninstall_output.status.success(),
+        "uninstall failed: {}",
+        String::from_utf8_lossy(&uninstall_output.stderr)
+    );
+
+    let uninstalled: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join(".claude/settings.json")).unwrap())
+            .unwrap();
+    let commands_after_uninstall: Vec<String> = uninstalled["hooks"]["PreToolUse"][0]["hooks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|hook| hook["command"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(
+        commands_after_uninstall,
+        vec![format!("{binary} log"), format!("{binary} check claude ls")]
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[skuld::test]
+fn install_codex_project_writes_project_root_config_and_preserves_claude_settings() {
+    use std::process::Command;
+
+    let temp = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-project-install-{}",
+        std::process::id()
+    ));
+    let repo = temp.join("repo");
+    let nested = repo.join("apps").join("service");
+    let codex_home = temp.join("codex-home");
+    let claude_settings_path = repo.join(".claude/settings.json");
+    let project_config_path = repo.join(".codex/config.toml");
+    let nested_config_path = nested.join(".codex/config.toml");
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir_all(repo.join(".claude")).unwrap();
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(&claude_settings_path, "{\"hooks\":{}}").unwrap();
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"
+            [projects."{}"]
+            trust_level = "trusted"
+            "#,
+            // Forward-slash: a TOML quoted key would mangle Windows `\` as escapes.
+            repo.to_string_lossy().replace('\\', "/")
+        ),
+    )
+    .unwrap();
+
+    let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
+    let codex_home = codex_home.to_string_lossy().to_string();
+    let output = Command::new(binary)
+        .args(["install", "codex", "--project"])
+        .env("CODEX_HOME", &codex_home)
+        .current_dir(&nested)
+        .output()
+        .expect("Failed to run codex install");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "install failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        project_config_path.exists(),
+        "expected project config at {}",
+        project_config_path.display()
+    );
+    assert!(
+        !nested_config_path.exists(),
+        "did not expect nested config at {}",
+        nested_config_path.display()
+    );
+    let config = std::fs::read_to_string(&project_config_path).unwrap();
+    assert!(config.contains(r#"matcher = "^Bash$""#), "{config}");
+    assert!(config.contains(r#"matcher = "^apply_patch$""#), "{config}");
+    assert!(config.contains("--agent codex"), "{config}");
+    assert_eq!(
+        std::fs::read_to_string(&claude_settings_path).unwrap(),
+        "{\"hooks\":{}}"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[skuld::test]
+fn install_codex_project_requires_trusted_project() {
+    use std::process::Command;
+
+    let temp = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-project-untrusted-{}",
+        std::process::id()
+    ));
+    let repo = temp.join("repo");
+    let nested = repo.join("apps").join("service");
+    let codex_home = temp.join("codex-home");
+    let project_config_path = repo.join(".codex/config.toml");
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(codex_home.join("config.toml"), "").unwrap();
+
+    let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
+    let codex_home = codex_home.to_string_lossy().to_string();
+    let output = Command::new(binary)
+        .args(["install", "codex", "--project"])
+        .env("CODEX_HOME", &codex_home)
+        .current_dir(&nested)
+        .output()
+        .expect("Failed to run codex install");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("trusted"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!project_config_path.exists());
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[skuld::test]
+fn uninstall_codex_project_removes_only_owned_hooks() {
+    use std::process::Command;
+
+    let temp = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-project-uninstall-{}",
+        std::process::id()
+    ));
+    let repo = temp.join("repo");
+    let nested = repo.join("apps").join("service");
+    let codex_home = temp.join("codex-home");
+    let project_config_path = repo.join(".codex/config.toml");
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    std::fs::create_dir_all(project_config_path.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"
+            [projects."{}"]
+            trust_level = "trusted"
+            "#,
+            // Forward-slash: a TOML quoted key would mangle Windows `\` as escapes.
+            repo.to_string_lossy().replace('\\', "/")
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &project_config_path,
+        r#"
+        [features]
+        hooks = true
+
+        [[hooks.PreToolUse]]
+        matcher = "^Bash$"
+
+        [[hooks.PreToolUse.hooks]]
+        type = "command"
+        command = "claude-scriptcheck --agent codex"
+
+        [[hooks.PreToolUse.hooks]]
+        type = "command"
+        command = "other-tool"
+        "#,
+    )
+    .unwrap();
+
+    let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
+    let codex_home = codex_home.to_string_lossy().to_string();
+    let output = Command::new(binary)
+        .args(["uninstall", "codex", "--project"])
+        .env("CODEX_HOME", &codex_home)
+        .current_dir(&nested)
+        .output()
+        .expect("Failed to run codex uninstall");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "uninstall failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let config = std::fs::read_to_string(&project_config_path).unwrap();
+    assert!(!config.contains("--agent codex"), "{config}");
+    assert!(config.contains(r#"command = "other-tool""#), "{config}");
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[skuld::test]
+fn uninstall_codex_project_allows_untrusted_project() {
+    use std::process::Command;
+
+    let temp = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-project-uninstall-untrusted-{}",
+        std::process::id()
+    ));
+    let repo = temp.join("repo");
+    let nested = repo.join("apps").join("service");
+    let codex_home = temp.join("codex-home");
+    let project_config_path = repo.join(".codex/config.toml");
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    std::fs::create_dir_all(project_config_path.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(codex_home.join("config.toml"), "").unwrap();
+    std::fs::write(
+        &project_config_path,
+        r#"
+        [[hooks.PreToolUse]]
+        matcher = "^Bash$"
+
+        [[hooks.PreToolUse.hooks]]
+        type = "command"
+        command = "claude-scriptcheck --agent codex"
+        "#,
+    )
+    .unwrap();
+
+    let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
+    let codex_home = codex_home.to_string_lossy().to_string();
+    let output = Command::new(binary)
+        .args(["uninstall", "codex", "--project"])
+        .env("CODEX_HOME", &codex_home)
+        .current_dir(&nested)
+        .output()
+        .expect("Failed to run codex uninstall");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "uninstall failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let config = std::fs::read_to_string(&project_config_path).unwrap();
+    assert!(!config.contains("--agent codex"), "{config}");
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[skuld::test]
+fn install_codex_global_fails_when_hooks_json_exists() {
+    use std::process::Command;
+
+    let temp = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-global-hooks-json-{}",
+        std::process::id()
+    ));
+    let codex_home = temp.join("codex-home");
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(codex_home.join("config.toml"), "").unwrap();
+    std::fs::write(codex_home.join("hooks.json"), "[]").unwrap();
+
+    let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
+    let codex_home = codex_home.to_string_lossy().to_string();
+    let output = Command::new(binary)
+        .args(["install", "codex"])
+        .env("CODEX_HOME", &codex_home)
+        .output()
+        .expect("Failed to run codex install");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("hooks.json"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = std::fs::remove_dir_all(&temp);
 }
 
 #[skuld::test]
@@ -322,6 +955,7 @@ fn run_binary_with_env(stdin_bytes: &[u8], env: &[(&str, &str)]) -> std::process
     let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
     let mut cmd = Command::new(binary);
     let _log_guard = apply_test_isolation(&mut cmd);
+    cmd.args(["--agent", "claude"]);
     // Caller-provided env vars are applied last so they can override isolation
     // (e.g. CLAUDE_PROJECT_DIR).
     for (k, v) in env {
@@ -524,16 +1158,45 @@ fn hook_json_with_mode(
 }
 
 fn parse_reason(output: &std::process::Output) -> String {
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
-        panic!(
-            "stdout is not valid JSON: {e}\nstdout: {}",
-            String::from_utf8_lossy(&output.stdout)
-        )
-    });
+    let json = parse_output_json(output);
     json["hookSpecificOutput"]["permissionDecisionReason"]
         .as_str()
         .expect("missing permissionDecisionReason field")
         .to_string()
+}
+
+#[skuld::test]
+fn codex_bypass_parse_failure_allows_with_additional_context() {
+    let codex_home = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-home-bypass-parse-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&codex_home);
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(codex_home.join("config.toml"), "").unwrap();
+
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({"command": "if then fi else"}),
+        "/tmp",
+        Some("bypassPermissions"),
+    );
+    let codex_home = codex_home.to_string_lossy().to_string();
+    let output = run_binary_for_agent_with_env("codex", &input, &[("CODEX_HOME", &codex_home)]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(parse_decision(&output), "allow");
+    assert_eq!(
+        parse_updated_command(&output).as_deref(),
+        Some("if then fi else")
+    );
+    let context = parse_additional_context(&output).expect("missing additionalContext");
+    assert!(
+        context.to_lowercase().contains("parse"),
+        "expected parse-failure context, got: {context}"
+    );
+
+    let _ = std::fs::remove_dir_all(&codex_home);
 }
 
 #[skuld::test]
@@ -758,6 +1421,7 @@ fn auto_preserves_missing_rules_after_transform(#[fixture(temp_dir)] dir: &std::
         Some("auto"),
     );
     let output = Command::new(binary)
+        .args(["--agent", "claude"])
         .env("CLAUDE_SCRIPTCHECK_HOOK_HOME", dir)
         .env("CLAUDE_SCRIPTCHECK_LOG_PATH", &log_path)
         .env("CLAUDE_PROJECT_DIR", &project_root)
@@ -789,14 +1453,16 @@ fn auto_preserves_missing_rules_after_transform(#[fixture(temp_dir)] dir: &std::
 fn auto_respects_read_deny_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
     let canonical = std::fs::canonicalize(dir).unwrap();
     let project_root = canonical.to_string_lossy().replace('\\', "/");
+    // `//path` is Claude's absolute-path escape. Strip a Windows `\\?\` verbatim
+    // prefix (`//?/` after slash-normalization) first so the escape forms a
+    // clean absolute path rather than `///?/…`.
+    let abs_root = project_root.strip_prefix("//?/").unwrap_or(&project_root);
     let secret_path = format!("{project_root}/secret.txt");
     std::fs::write(&secret_path, "secret").unwrap();
     std::fs::create_dir_all(canonical.join(".claude")).unwrap();
-    // `//path` is Claude Code's absolute-path escape; bare `/path` is
-    // interpreted as project-root-relative.
     std::fs::write(
         canonical.join(".claude/settings.json"),
-        format!(r#"{{"permissions":{{"deny":["Read(/{project_root}/secret.txt)"]}}}}"#),
+        format!(r#"{{"permissions":{{"deny":["Read(//{abs_root}/secret.txt)"]}}}}"#),
     )
     .unwrap();
 
@@ -928,12 +1594,14 @@ fn bypass_respects_bash_deny_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
 fn bypass_respects_file_deny_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
     let canonical = std::fs::canonicalize(dir).unwrap();
     let project_root = canonical.to_string_lossy().replace('\\', "/");
+    // `//path` is Claude's absolute-path escape; strip a Windows `\\?\` verbatim
+    // prefix (`//?/`) first so it forms a clean absolute path, not `///?/…`.
+    let abs_root = project_root.strip_prefix("//?/").unwrap_or(&project_root);
     let forbidden_path = format!("{project_root}/forbidden.txt");
     std::fs::create_dir_all(canonical.join(".claude")).unwrap();
-    // `//path` is Claude Code's absolute-path escape.
     std::fs::write(
         canonical.join(".claude/settings.json"),
-        format!(r#"{{"permissions":{{"deny":["Write(/{project_root}/forbidden.txt)"]}}}}"#,),
+        format!(r#"{{"permissions":{{"deny":["Write(//{abs_root}/forbidden.txt)"]}}}}"#,),
     )
     .unwrap();
 
@@ -1083,6 +1751,7 @@ fn dont_ask_preserves_missing_rules_in_log(#[fixture(temp_dir)] dir: &std::path:
         Some("dontAsk"),
     );
     let output = Command::new(binary)
+        .args(["--agent", "claude"])
         .env("CLAUDE_SCRIPTCHECK_HOOK_HOME", dir)
         .env("CLAUDE_SCRIPTCHECK_LOG_PATH", &log_path)
         .env("CLAUDE_PROJECT_DIR", &project_root)
@@ -1332,11 +2001,22 @@ fn accept_edits_allows_monitor_workspace_write(#[fixture(temp_dir)] dir: &std::p
 // ── CLI dry-run (--permission-mode) tests ───────────────────────────────────
 
 fn run_check_cli(args: &[&str]) -> std::process::Output {
+    run_check_cli_for_agent("claude", args, &[])
+}
+
+fn run_check_cli_for_agent(
+    agent: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> std::process::Output {
     let binary = env!("CARGO_BIN_EXE_claude-scriptcheck");
     let mut cmd = Command::new(binary);
     let _log_guard = apply_test_isolation(&mut cmd);
-    cmd.arg("check");
+    cmd.args(["check", agent]);
     cmd.args(args);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -1392,6 +2072,39 @@ fn cli_check_default_mode_asks_unmatched() {
         stdout.starts_with("ASK"),
         "expected ASK for default mode, got: {stdout}",
     );
+}
+
+#[skuld::test]
+fn cli_check_codex_uses_codex_settings() {
+    let codex_home = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-home-check-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&codex_home);
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(
+        codex_home.join("config.toml"),
+        r#"
+        [scriptcheck.permissions]
+        allow = ["Bash(ls *)"]
+        "#,
+    )
+    .unwrap();
+
+    let codex_home = codex_home.to_string_lossy().to_string();
+    let output = run_check_cli_for_agent(
+        "codex",
+        &["ls -la", "--cwd", "/tmp"],
+        &[("CODEX_HOME", &codex_home)],
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("ALLOW"),
+        "expected ALLOW for codex check, got: {stdout}",
+    );
+
+    let _ = std::fs::remove_dir_all(&codex_home);
 }
 
 #[skuld::test]

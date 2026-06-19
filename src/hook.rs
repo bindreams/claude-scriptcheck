@@ -20,6 +20,7 @@ pub struct HookInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn permission_mode_snake_case() {
@@ -52,6 +53,75 @@ mod tests {
         let input: HookInput = serde_json::from_str(json).unwrap();
         assert_eq!(input.permission_mode, None);
     }
+
+    #[test]
+    fn claude_hook_output_serializes_permission_reason() {
+        let json = serde_json::to_value(ClaudeHookOutput::new("allow", "ok")).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "permissionDecisionReason": "ok"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn codex_allow_output_serializes_updated_input() {
+        let json = serde_json::to_value(CodexHookOutput::allow_command("ls -la")).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "updatedInput": {
+                        "command": "ls -la"
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn codex_allow_output_serializes_additional_context_when_present() {
+        let json = serde_json::to_value(CodexHookOutput::allow_command_with_context(
+            "ls -la",
+            Some("ok"),
+        ))
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "updatedInput": {
+                        "command": "ls -la"
+                    },
+                    "additionalContext": "ok"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn codex_deny_output_serializes_permission_reason() {
+        let json = serde_json::to_value(CodexHookOutput::deny("blocked")).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "blocked"
+                }
+            })
+        );
+    }
 }
 
 #[derive(Deserialize)]
@@ -62,13 +132,15 @@ pub struct ToolInput {
 }
 
 #[derive(Serialize)]
-pub struct HookOutput {
+pub struct ClaudeHookOutput {
     #[serde(rename = "hookSpecificOutput")]
-    pub hook_specific_output: HookSpecificOutput,
+    pub hook_specific_output: ClaudeHookSpecificOutput,
 }
 
+pub type HookOutput = ClaudeHookOutput;
+
 #[derive(Serialize)]
-pub struct HookSpecificOutput {
+pub struct ClaudeHookSpecificOutput {
     #[serde(rename = "hookEventName")]
     pub hook_event_name: String,
     #[serde(rename = "permissionDecision")]
@@ -77,13 +149,75 @@ pub struct HookSpecificOutput {
     pub permission_decision_reason: String,
 }
 
-impl HookOutput {
+pub type HookSpecificOutput = ClaudeHookSpecificOutput;
+
+impl ClaudeHookOutput {
     pub fn new(decision: &str, reason: &str) -> Self {
         Self {
-            hook_specific_output: HookSpecificOutput {
+            hook_specific_output: ClaudeHookSpecificOutput {
                 hook_event_name: "PreToolUse".to_string(),
                 permission_decision: decision.to_string(),
                 permission_decision_reason: reason.to_string(),
+            },
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct CodexHookOutput {
+    #[serde(rename = "hookSpecificOutput")]
+    pub hook_specific_output: CodexHookSpecificOutput,
+}
+
+#[derive(Serialize)]
+pub struct CodexHookSpecificOutput {
+    #[serde(rename = "hookEventName")]
+    pub hook_event_name: String,
+    #[serde(rename = "permissionDecision")]
+    pub permission_decision: String,
+    #[serde(
+        rename = "permissionDecisionReason",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub permission_decision_reason: Option<String>,
+    #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
+    pub updated_input: Option<CodexUpdatedInput>,
+    #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct CodexUpdatedInput {
+    pub command: String,
+}
+
+impl CodexHookOutput {
+    pub fn allow_command(command: &str) -> Self {
+        Self::allow_command_with_context(command, None)
+    }
+
+    pub fn allow_command_with_context(command: &str, additional_context: Option<&str>) -> Self {
+        Self {
+            hook_specific_output: CodexHookSpecificOutput {
+                hook_event_name: "PreToolUse".to_string(),
+                permission_decision: "allow".to_string(),
+                permission_decision_reason: None,
+                updated_input: Some(CodexUpdatedInput {
+                    command: command.to_string(),
+                }),
+                additional_context: additional_context.map(ToString::to_string),
+            },
+        }
+    }
+
+    pub fn deny(reason: &str) -> Self {
+        Self {
+            hook_specific_output: CodexHookSpecificOutput {
+                hook_event_name: "PreToolUse".to_string(),
+                permission_decision: "deny".to_string(),
+                permission_decision_reason: Some(reason.to_string()),
+                updated_input: None,
+                additional_context: None,
             },
         }
     }

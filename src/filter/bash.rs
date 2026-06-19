@@ -252,14 +252,13 @@ fn paths_equal(a: &str, b: &str) -> bool {
 }
 
 /// Path-aware compare: delegates to `paths_equal` when `rule_pattern` has no
-/// wildcard, otherwise uses `glob_match` (which interprets `*` / `**` with
-/// the same semantics Read/Write/Edit rules use). Glob matching is always
-/// case-sensitive because `glob_match` has no case-fold option; that's
-/// consistent with Read/Write/Edit behavior. `lhs` is the command side,
-/// `rule_pattern` is the rule side.
+/// wildcard, otherwise uses a platform-aware glob match — case-insensitive on
+/// Windows (matching the case-insensitive Windows filesystem, the non-glob
+/// `paths_equal` path, and Read/Write/Edit rule matching), case-sensitive on
+/// Unix. `lhs` is the command side, `rule_pattern` is the rule side.
 fn path_match(lhs: &str, rule_pattern: &str) -> bool {
     if rule_pattern.contains('*') || rule_pattern.contains('?') {
-        glob_match::glob_match(rule_pattern, lhs)
+        crate::path_util::glob_match_for_platform(rule_pattern, lhs)
     } else {
         paths_equal(lhs, rule_pattern)
     }
