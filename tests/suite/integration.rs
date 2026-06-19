@@ -1453,14 +1453,16 @@ fn auto_preserves_missing_rules_after_transform(#[fixture(temp_dir)] dir: &std::
 fn auto_respects_read_deny_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
     let canonical = std::fs::canonicalize(dir).unwrap();
     let project_root = canonical.to_string_lossy().replace('\\', "/");
+    // `//path` is Claude's absolute-path escape. Strip a Windows `\\?\` verbatim
+    // prefix (`//?/` after slash-normalization) first so the escape forms a
+    // clean absolute path rather than `///?/…`.
+    let abs_root = project_root.strip_prefix("//?/").unwrap_or(&project_root);
     let secret_path = format!("{project_root}/secret.txt");
     std::fs::write(&secret_path, "secret").unwrap();
     std::fs::create_dir_all(canonical.join(".claude")).unwrap();
-    // `//path` is Claude Code's absolute-path escape; bare `/path` is
-    // interpreted as project-root-relative.
     std::fs::write(
         canonical.join(".claude/settings.json"),
-        format!(r#"{{"permissions":{{"deny":["Read(/{project_root}/secret.txt)"]}}}}"#),
+        format!(r#"{{"permissions":{{"deny":["Read(//{abs_root}/secret.txt)"]}}}}"#),
     )
     .unwrap();
 
@@ -1592,12 +1594,14 @@ fn bypass_respects_bash_deny_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
 fn bypass_respects_file_deny_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
     let canonical = std::fs::canonicalize(dir).unwrap();
     let project_root = canonical.to_string_lossy().replace('\\', "/");
+    // `//path` is Claude's absolute-path escape; strip a Windows `\\?\` verbatim
+    // prefix (`//?/`) first so it forms a clean absolute path, not `///?/…`.
+    let abs_root = project_root.strip_prefix("//?/").unwrap_or(&project_root);
     let forbidden_path = format!("{project_root}/forbidden.txt");
     std::fs::create_dir_all(canonical.join(".claude")).unwrap();
-    // `//path` is Claude Code's absolute-path escape.
     std::fs::write(
         canonical.join(".claude/settings.json"),
-        format!(r#"{{"permissions":{{"deny":["Write(/{project_root}/forbidden.txt)"]}}}}"#,),
+        format!(r#"{{"permissions":{{"deny":["Write(//{abs_root}/forbidden.txt)"]}}}}"#,),
     )
     .unwrap();
 
