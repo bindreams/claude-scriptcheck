@@ -297,7 +297,7 @@ mod writers_tests;
 mod tests {
     use super::*;
 
-    // normalize_cmd_name tests =====
+    // normalize_cmd_name tests ========================================================================================
 
     #[test]
     fn normalize_bare_name() {
@@ -384,7 +384,7 @@ mod tests {
         assert_eq!(normalize_cmd_name("./tools/rg.cmd"), "rg");
     }
 
-    // is_python_cmd tests =====
+    // is_python_cmd tests =============================================================================================
 
     #[test]
     fn is_python_cmd_bare() {

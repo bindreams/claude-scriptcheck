@@ -264,11 +264,7 @@ fn cp_bash_allow_suppresses_write_requirement() {
 
 #[skuld::test]
 fn cp_without_bash_rule_asks_for_missing_write() {
-    let d = check(
-        "cp /tmp/a.txt /home/user/b.txt",
-        &["Read(/tmp/**)"],
-        &[],
-    );
+    let d = check("cp /tmp/a.txt /home/user/b.txt", &["Read(/tmp/**)"], &[]);
     assert_eq!(d.decision, Decision::Ask);
     assert!(d.missing_rules.iter().any(|r| r.contains("Write(")));
 }
@@ -957,7 +953,7 @@ fn file_accesses_write_denied_by_edit_rule() {
     assert!(matches!(d.decision, Decision::Deny(_)));
 }
 
-// Python AST analysis integration tests =====
+// Python AST analysis integration tests ===============================================================================
 
 #[skuld::test]
 fn python_c_open_read_with_read_rule_allows() {
@@ -1101,7 +1097,7 @@ fn python_c_multiple_accesses_all_checked() {
     }
 }
 
-// Command name normalization =====
+// Command name normalization ==========================================================================================
 
 #[skuld::test]
 fn python_exe_normalized_for_analysis() {
@@ -1131,7 +1127,7 @@ fn deny_rule_matches_normalized_name() {
     assert!(matches!(d.decision, Decision::Deny(_)));
 }
 
-// Arg0 name/path-scoped matching =====
+// Arg0 name/path-scoped matching ======================================================================================
 
 #[skuld::test]
 fn rule_bare_name_matches_path_invocation() {
@@ -1236,8 +1232,7 @@ fn rule_project_relative_path_matches_regardless_of_cwd() {
         "/some/cwd",
         "/project",
     );
-    let program =
-        thaum::parse_with("/project/tools/rg.cmd foo", thaum::Dialect::Bash).unwrap();
+    let program = thaum::parse_with("/project/tools/rg.cmd foo", thaum::Dialect::Bash).unwrap();
     let result = check_program(&program, &perms, "/irrelevant");
     assert_eq!(result.decision, Decision::Allow);
 }
@@ -1321,11 +1316,7 @@ fn middle_star_matches_one_token() {
 
 #[skuld::test]
 fn middle_star_does_not_match_zero_tokens() {
-    let d = check(
-        "mycmd --arg --after",
-        &["Bash(mycmd --arg * --after)"],
-        &[],
-    );
+    let d = check("mycmd --arg --after", &["Bash(mycmd --arg * --after)"], &[]);
     assert_eq!(d.decision, Decision::Ask);
 }
 
@@ -1521,7 +1512,7 @@ fn bug_report_rg_cmd_pipeline() {
     assert_eq!(d.decision, Decision::Allow);
 }
 
-// uv run wrapper =====
+// uv run wrapper ======================================================================================================
 
 #[skuld::test]
 fn uv_run_python_c_allows() {
@@ -1559,7 +1550,7 @@ fn uv_run_python_versioned_allows() {
     assert_eq!(d.decision, Decision::Allow);
 }
 
-// Git subcommand file-only suppression =====
+// Git subcommand file-only suppression ================================================================================
 
 #[skuld::test]
 fn git_restore_allowed_by_write_rule() {
@@ -1753,7 +1744,10 @@ fn git_fetch_bash_rule_does_not_bypass_write_deny() {
         &["Bash(git fetch *)"],
         &[&format!("Write({}/**)", c("/tmp"))],
     );
-    assert!(matches!(d.decision, Decision::Deny(_)), "expected Deny, got {d:?}");
+    assert!(
+        matches!(d.decision, Decision::Deny(_)),
+        "expected Deny, got {d:?}"
+    );
 }
 
 #[skuld::test]
@@ -1764,12 +1758,7 @@ fn git_push_with_bash_rule_alone_is_allow() {
 
 #[skuld::test]
 fn bash_allow_suppresses_file_read_ask_with_matched_allow_logged() {
-    let d = check_with_ask(
-        "cat /tmp/x",
-        &["Bash(cat *)"],
-        &[],
-        &["Read(/tmp/x)"],
-    );
+    let d = check_with_ask("cat /tmp/x", &["Bash(cat *)"], &[], &["Read(/tmp/x)"]);
     assert_eq!(d.decision, Decision::Allow);
     assert!(
         d.matched_allow.iter().any(|r| r == "Bash(cat *)"),
@@ -1841,7 +1830,10 @@ fn redirect_write_deny_still_fires_under_bash_allow() {
         &["Bash(echo *)"],
         &["Write(/etc/**)"],
     );
-    assert!(matches!(d.decision, Decision::Deny(_)), "expected Deny, got {d:?}");
+    assert!(
+        matches!(d.decision, Decision::Deny(_)),
+        "expected Deny, got {d:?}"
+    );
 }
 
 #[skuld::test]
@@ -1877,7 +1869,10 @@ fn eval_bash_deny_fires_now() {
     // Behavior improvement: eval early-return used to mask Bash deny rules.
     // With the restructure, Deny(Bash(eval *)) now correctly fires as Deny.
     let d = check("eval $X", &[], &["Bash(eval *)"]);
-    assert!(matches!(d.decision, Decision::Deny(_)), "expected Deny, got {d:?}");
+    assert!(
+        matches!(d.decision, Decision::Deny(_)),
+        "expected Deny, got {d:?}"
+    );
 }
 
 #[skuld::test]
@@ -1910,17 +1905,19 @@ fn dynamic_cmd_name_blocked_by_bash_wildcard_deny() {
     // New behavior: Deny(Bash(*)) now blocks dynamic-cmd-name invocations.
     // Previously the dynamic path short-circuited before any deny scan.
     let d = check("$CMD arg", &[], &["Bash(*)"]);
-    assert!(matches!(d.decision, Decision::Deny(_)), "expected Deny, got {d:?}");
+    assert!(
+        matches!(d.decision, Decision::Deny(_)),
+        "expected Deny, got {d:?}"
+    );
 }
 
 #[skuld::test]
 fn dynamic_cmd_name_redirect_deny_fires_under_wildcard_allow() {
-    let d = check(
-        "$CMD arg > /etc/hosts",
-        &["Bash(*)"],
-        &["Write(/etc/**)"],
+    let d = check("$CMD arg > /etc/hosts", &["Bash(*)"], &["Write(/etc/**)"]);
+    assert!(
+        matches!(d.decision, Decision::Deny(_)),
+        "expected Deny, got {d:?}"
     );
-    assert!(matches!(d.decision, Decision::Deny(_)), "expected Deny, got {d:?}");
 }
 
 #[skuld::test]
@@ -1964,7 +1961,11 @@ fn command_substitution_outer_allow_does_not_leak_to_inner() {
 fn process_substitution_inner_bash_allow_suppresses_inner_file_access() {
     let d = check(
         "diff <(git fetch origin) /tmp/x",
-        &["Bash(diff *)", "Bash(git fetch *)", &format!("Read({}/**)", c("/tmp"))],
+        &[
+            "Bash(diff *)",
+            "Bash(git fetch *)",
+            &format!("Read({}/**)", c("/tmp")),
+        ],
         &[],
     );
     assert_eq!(d.decision, Decision::Allow);
@@ -2003,7 +2004,10 @@ fn bash_wildcard_does_not_override_file_deny() {
         &["Bash(*)"],
         &[&format!("Write({}/**)", c("/tmp"))],
     );
-    assert!(matches!(d.decision, Decision::Deny(_)), "expected Deny, got {d:?}");
+    assert!(
+        matches!(d.decision, Decision::Deny(_)),
+        "expected Deny, got {d:?}"
+    );
 }
 
 // Security tradeoff — documented in CLAUDE.md
@@ -2073,7 +2077,10 @@ fn parse_failure_redirect_deny_still_fires_under_bash_allow() {
         &["Bash(git *)"],
         &["Write(/etc/**)"],
     );
-    assert!(matches!(d.decision, Decision::Deny(_)), "expected Deny, got {d:?}");
+    assert!(
+        matches!(d.decision, Decision::Deny(_)),
+        "expected Deny, got {d:?}"
+    );
 }
 
 #[skuld::test]

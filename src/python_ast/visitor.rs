@@ -83,7 +83,7 @@ impl PythonVisitor {
         }
     }
 
-    // Walk methods =====
+    // Walk methods ====================================================================================================
 
     pub fn walk_module(&mut self, module: &ModModule) {
         self.walk_body(&module.body);
@@ -336,7 +336,7 @@ impl PythonVisitor {
         }
     }
 
-    // Import handling =====
+    // Import handling =================================================================================================
 
     fn walk_import(&mut self, stmt: &StmtImport) {
         for alias in &stmt.names {
@@ -409,7 +409,7 @@ impl PythonVisitor {
         }
     }
 
-    // Assignment handling =====
+    // Assignment handling =============================================================================================
 
     fn walk_assign(&mut self, stmt: &StmtAssign) {
         for target in &stmt.targets {
@@ -437,7 +437,7 @@ impl PythonVisitor {
         }
     }
 
-    // Function/class def handling =====
+    // Function/class def handling =====================================================================================
 
     fn walk_function_def(&mut self, stmt: &StmtFunctionDef) {
         self.shadow_if_builtin(stmt.name.as_str());
@@ -468,7 +468,7 @@ impl PythonVisitor {
         self.walk_body(&stmt.body);
     }
 
-    // With statement handling =====
+    // With statement handling =========================================================================================
 
     fn walk_with(&mut self, stmt: &StmtWith) {
         for item in &stmt.items {
@@ -480,7 +480,7 @@ impl PythonVisitor {
         self.walk_body(&stmt.body);
     }
 
-    // Call handling =====
+    // Call handling ===================================================================================================
 
     fn walk_call(&mut self, call: &ExprCall) {
         // First, walk all arguments (they may contain nested calls like open())

@@ -34,6 +34,30 @@ claude-scriptcheck uninstall
 cargo uninstall claude-scriptcheck
 ```
 
+## Development
+
+Local linting and formatting are driven by `prek.toml` so the same checks run
+both on a developer machine and in CI:
+
+```sh
+uv tool install "prek==0.3.6"
+cargo install --locked taplo-cli --version 0.10.0
+prek install
+
+# Preferred when your local hook setup allows it
+prek run --all-files
+
+# If a local pre-tool hook blocks `--all-files`, stage the files and lint the
+# staged set instead
+git add .
+prek run
+
+cargo test --locked
+```
+
+Pull requests are expected to go green in `.github/workflows/ci.yaml` before
+landing in `main`.
+
 ## How it works
 
 claude-scriptcheck registers itself as a

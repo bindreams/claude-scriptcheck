@@ -60,13 +60,17 @@ pub fn best_effort_canonicalize(path: &str) -> String {
 
                 // Append unresolved prefix segments (collected in reverse order)
                 for part in tail_parts.iter().rev() {
-                    result.push('/');
+                    if !result.ends_with('/') {
+                        result.push('/');
+                    }
                     result.push_str(part);
                 }
 
                 // Append wildcard suffix
                 for seg in suffix_segments {
-                    result.push('/');
+                    if !result.ends_with('/') {
+                        result.push('/');
+                    }
                     result.push_str(seg);
                 }
 

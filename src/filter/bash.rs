@@ -284,7 +284,7 @@ mod tests {
         ss.iter().map(|s| s.to_string()).collect()
     }
 
-    // Arg0::Name matching =====
+    // Arg0::Name matching =============================================================================================
 
     #[test]
     fn arg0_name_matches_bare() {
@@ -338,7 +338,7 @@ mod tests {
         assert!(!f.matches("grep", &[], "/cwd"));
     }
 
-    // Arg0::Path matching =====
+    // Arg0::Path matching =============================================================================================
 
     #[test]
     fn arg0_path_matches_resolved_command() {
@@ -433,7 +433,7 @@ mod tests {
         assert!(f.matches("C:/TOOLS/RG.CMD", &[], "/cwd"));
     }
 
-    // Item-list matching =====
+    // Item-list matching ==============================================================================================
 
     #[test]
     fn match_zero_or_more_trailing() {
@@ -503,7 +503,7 @@ mod tests {
         assert!(m.matches_dynamic_arg0(&strs(&["x"]), "/cwd"));
     }
 
-    // arg_matches glob =====
+    // arg_matches glob ================================================================================================
 
     #[test]
     fn arg_glob_matches() {
@@ -512,7 +512,7 @@ mod tests {
         assert!(!f.matches("git", &strs(&["branch", "bar"]), "/cwd"));
     }
 
-    // reconstruct_data round-trip =====
+    // reconstruct_data round-trip =====================================================================================
 
     #[test]
     fn reconstruct_data_name_with_wildcard() {
@@ -528,11 +528,7 @@ mod tests {
 
     #[test]
     fn reconstruct_data_match_one_middle() {
-        let f = BashFilter::from_items(vec![
-            name("foo"),
-            BashFilterItem::MatchOne,
-            arg("bar"),
-        ]);
+        let f = BashFilter::from_items(vec![name("foo"), BashFilterItem::MatchOne, arg("bar")]);
         assert_eq!(f.reconstruct_data(), "foo * bar");
     }
 

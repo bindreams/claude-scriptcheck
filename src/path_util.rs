@@ -59,10 +59,7 @@ pub fn is_filesystem_root(path: &str) -> bool {
     }
     // Drive root: "C:/" or "C:\" (three bytes, trailing separator).
     let b = path.as_bytes();
-    if b.len() == 3
-        && b[0].is_ascii_alphabetic()
-        && b[1] == b':'
-        && (b[2] == b'/' || b[2] == b'\\')
+    if b.len() == 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'/' || b[2] == b'\\')
     {
         return true;
     }

@@ -17,6 +17,37 @@ fn canonical(path: &str) -> String {
     path_util::normalize_separators(&std::fs::canonicalize(path).unwrap().to_string_lossy())
 }
 
+#[cfg(unix)]
+fn filesystem_root() -> String {
+    "/".to_string()
+}
+
+#[cfg(windows)]
+fn filesystem_root() -> String {
+    fn unc_root(rest: &str) -> String {
+        let mut parts = rest.split('/');
+        let server = parts.next().unwrap();
+        let share = parts.next().unwrap();
+        format!("//{server}/{share}")
+    }
+
+    let temp = canonical_temp();
+    let bytes = temp.as_bytes();
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/' {
+        return temp[..3].to_string();
+    }
+
+    if let Some(rest) = temp.strip_prefix("//") {
+        return unc_root(rest);
+    }
+
+    if let Some(rest) = temp.strip_prefix("UNC/") {
+        return unc_root(rest);
+    }
+
+    panic!("unexpected Windows root form: {temp}");
+}
+
 // is_wildcard_segment =================================================================================================
 
 #[skuld::test]
@@ -128,6 +159,24 @@ fn nonexistent_with_wildcard_suffix(#[fixture(temp_dir)] dir: &Path) {
     let input = format!("{}/nonexistent_abc123/**", dir.display());
     let result = best_effort_canonicalize(&input);
     assert_eq!(result, format!("{base}/nonexistent_abc123/**"));
+}
+
+#[skuld::test]
+fn nonexistent_path_from_filesystem_root_has_single_separator_boundaries(
+    #[fixture(temp_dir)] dir: &Path,
+) {
+    let root = filesystem_root();
+    let unique = dir.file_name().unwrap().to_string_lossy();
+    let input = format!(
+        "{}/scriptcheck-missing-{unique}/subdir/file.txt",
+        root.trim_end_matches('/'),
+    );
+    assert!(
+        !Path::new(&input).exists(),
+        "test path unexpectedly exists: {input}"
+    );
+    let result = best_effort_canonicalize(&input);
+    assert_eq!(result, input);
 }
 
 #[skuld::test]

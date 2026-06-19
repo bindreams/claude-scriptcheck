@@ -619,7 +619,7 @@ pub fn is_installed_for(
     })
 }
 
-// Verdict filtering =====
+// Verdict filtering ===================================================================================================
 
 /// Controls which verdicts are displayed in log output.
 #[derive(Debug)]
@@ -651,7 +651,7 @@ impl VerdictFilter {
 mod tests {
     use super::*;
 
-    // VerdictFilter tests -----
+    // VerdictFilter tests ---------------------------------------------------------------------------------------------
 
     #[test]
     fn verdict_filter_matches_allow() {
@@ -743,7 +743,7 @@ mod tests {
         assert!(!f.shows_all());
     }
 
-    // filter_and_tail tests -----
+    // filter_and_tail tests -------------------------------------------------------------------------------------------
 
     fn make_log(verdicts: &[&str]) -> String {
         let mut s = String::new();
@@ -834,7 +834,7 @@ mod tests {
         assert_eq!(result.len(), 2);
     }
 
-    // ExeRenameGuard tests (Windows only) -----
+    // ExeRenameGuard tests (Windows only) -----------------------------------------------------------------------------
 
     #[cfg(target_os = "windows")]
     use std::fs;

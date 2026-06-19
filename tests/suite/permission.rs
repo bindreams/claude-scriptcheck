@@ -127,15 +127,27 @@ fn single_command_with_wildcard() {
 #[skuld::test]
 fn token_with_glob() {
     let rule = make_rule(&["gcc", "-print-file-name=*"], false);
-    assert!(match_tokens(&rule, &tokens(&["gcc", "-print-file-name=libgcc.a"])));
+    assert!(match_tokens(
+        &rule,
+        &tokens(&["gcc", "-print-file-name=libgcc.a"])
+    ));
 }
 
 #[skuld::test]
 fn bare_star_matches_path_with_slashes() {
     let rule = make_rule(&["git", "-C", "*", "status"], true);
-    assert!(match_tokens(&rule, &tokens(&["git", "-C", "/tmp/repo", "status"])));
-    assert!(match_tokens(&rule, &tokens(&["git", "-C", "/tmp/repo", "status", "-s"])));
-    assert!(!match_tokens(&rule, &tokens(&["git", "-C", "/tmp/repo", "push"])));
+    assert!(match_tokens(
+        &rule,
+        &tokens(&["git", "-C", "/tmp/repo", "status"])
+    ));
+    assert!(match_tokens(
+        &rule,
+        &tokens(&["git", "-C", "/tmp/repo", "status", "-s"])
+    ));
+    assert!(!match_tokens(
+        &rule,
+        &tokens(&["git", "-C", "/tmp/repo", "push"])
+    ));
 }
 
 #[skuld::test]
@@ -234,9 +246,15 @@ fn parse_then_match_trailing_wildcard() {
             // Zero extra args
             assert!(match_tokens(&rule, &tokens(&["git", "status"])));
             // Multiple extra args
-            assert!(match_tokens(&rule, &tokens(&["git", "status", "-s", "--porcelain"])));
+            assert!(match_tokens(
+                &rule,
+                &tokens(&["git", "status", "-s", "--porcelain"])
+            ));
             // Wrong prefix
-            assert!(!match_tokens(&rule, &tokens(&["git", "commit", "-m", "msg"])));
+            assert!(!match_tokens(
+                &rule,
+                &tokens(&["git", "commit", "-m", "msg"])
+            ));
         }
         _ => panic!("expected Bash rule"),
     }
@@ -250,7 +268,10 @@ fn bash_star_parens_matches_any_command() {
         ParsedFilter::Bash(rule) => {
             assert_eq!(rule.reconstruct_data(), "*");
             assert!(match_tokens(&rule, &tokens(&["ls"])));
-            assert!(match_tokens(&rule, &tokens(&["git", "push", "origin", "main"])));
+            assert!(match_tokens(
+                &rule,
+                &tokens(&["git", "push", "origin", "main"])
+            ));
         }
         _ => panic!("expected Bash rule"),
     }
@@ -438,46 +459,55 @@ fn parse_rules_with_ask_write_and_edit(#[fixture(temp_dir)] dir: &Path) {
 #[skuld::test]
 fn doublestar_matches_zero_tokens() {
     let rule = make_rule(&["curl", "**", "-X", "POST"], true);
-    assert!(match_tokens(&rule, &tokens(&["curl", "-X", "POST", "https://example.com"])));
+    assert!(match_tokens(
+        &rule,
+        &tokens(&["curl", "-X", "POST", "https://example.com"])
+    ));
 }
 
 #[skuld::test]
 fn doublestar_matches_one_token() {
     let rule = make_rule(&["curl", "**", "-X", "POST"], true);
-    assert!(match_tokens(&rule, &tokens(&[
-        "curl",
-        "-s",
-        "-X",
-        "POST",
-        "https://example.com"
-    ])));
+    assert!(match_tokens(
+        &rule,
+        &tokens(&["curl", "-s", "-X", "POST", "https://example.com"])
+    ));
 }
 
 #[skuld::test]
 fn doublestar_matches_multiple_tokens() {
     let rule = make_rule(&["curl", "**", "-X", "POST"], true);
-    assert!(match_tokens(&rule, &tokens(&[
-        "curl",
-        "-s",
-        "-S",
-        "-H",
-        "Content-Type: application/json",
-        "-X",
-        "POST",
-        "https://example.com"
-    ])));
+    assert!(match_tokens(
+        &rule,
+        &tokens(&[
+            "curl",
+            "-s",
+            "-S",
+            "-H",
+            "Content-Type: application/json",
+            "-X",
+            "POST",
+            "https://example.com"
+        ])
+    ));
 }
 
 #[skuld::test]
 fn doublestar_at_start() {
     let rule = make_rule(&["**", "-X", "POST"], true);
-    assert!(match_tokens(&rule, &tokens(&["curl", "-X", "POST", "https://example.com"])));
+    assert!(match_tokens(
+        &rule,
+        &tokens(&["curl", "-X", "POST", "https://example.com"])
+    ));
 }
 
 #[skuld::test]
 fn doublestar_no_match_when_suffix_differs() {
     let rule = make_rule(&["curl", "**", "-X", "POST"], true);
-    assert!(!match_tokens(&rule, &tokens(&["curl", "-s", "-X", "GET", "https://example.com"])));
+    assert!(!match_tokens(
+        &rule,
+        &tokens(&["curl", "-s", "-X", "GET", "https://example.com"])
+    ));
 }
 
 #[skuld::test]
@@ -573,15 +603,10 @@ fn multiple_doublestars_second_skips() {
 #[skuld::test]
 fn multiple_doublestars_both_skip() {
     let rule = make_rule(&["curl", "**", "-X", "**", "POST"], false);
-    assert!(match_tokens(&rule, &tokens(&[
-        "curl",
-        "-s",
-        "-S",
-        "-X",
-        "-H",
-        "Accept: */*",
-        "POST"
-    ])));
+    assert!(match_tokens(
+        &rule,
+        &tokens(&["curl", "-s", "-S", "-X", "-H", "Accept: */*", "POST"])
+    ));
 }
 
 #[skuld::test]
@@ -593,7 +618,10 @@ fn multiple_doublestars_no_match_missing_literal() {
 #[skuld::test]
 fn multiple_doublestars_rejects_trailing() {
     let rule = make_rule(&["curl", "**", "-X", "**", "POST"], false);
-    assert!(!match_tokens(&rule, &tokens(&["curl", "-X", "POST", "https://example.com"])));
+    assert!(!match_tokens(
+        &rule,
+        &tokens(&["curl", "-X", "POST", "https://example.com"])
+    ));
 }
 
 #[skuld::test]
@@ -610,16 +638,19 @@ fn doublestar_with_trailing_wildcard_both_consume() {
     let parsed = parse_single_rule("Bash(curl ** -X POST *)", &ctx(home)).unwrap();
     match parsed {
         ParsedFilter::Bash(rule) => {
-            assert!(match_tokens(&rule, &tokens(&[
-                "curl",
-                "-s",
-                "-S",
-                "-X",
-                "POST",
-                "https://example.com",
-                "-d",
-                "body"
-            ])));
+            assert!(match_tokens(
+                &rule,
+                &tokens(&[
+                    "curl",
+                    "-s",
+                    "-S",
+                    "-X",
+                    "POST",
+                    "https://example.com",
+                    "-d",
+                    "body"
+                ])
+            ));
         }
         _ => panic!("expected Bash rule"),
     }
@@ -643,7 +674,10 @@ fn doublestar_with_trailing_wildcard_wrong_method() {
     let parsed = parse_single_rule("Bash(curl ** -X POST *)", &ctx(home)).unwrap();
     match parsed {
         ParsedFilter::Bash(rule) => {
-            assert!(!match_tokens(&rule, &tokens(&["curl", "-s", "-X", "GET", "https://example.com"])));
+            assert!(!match_tokens(
+                &rule,
+                &tokens(&["curl", "-s", "-X", "GET", "https://example.com"])
+            ));
         }
         _ => panic!("expected Bash rule"),
     }
@@ -735,7 +769,10 @@ fn tilde_rule_dropped_when_home_empty() {
     // expanded. Silently keeping `~/foo` as the literal pattern produces a dead
     // rule that matches nothing. Drop it and surface a warning.
     let parsed = parse_single_rule("Read(~/foo)", &ctx(""));
-    assert!(parsed.is_none(), "tilde rule should be dropped when home is empty");
+    assert!(
+        parsed.is_none(),
+        "tilde rule should be dropped when home is empty"
+    );
 }
 
 #[skuld::test]
@@ -779,18 +816,33 @@ fn parse_colon_wildcard_multi_token() {
 }
 
 #[skuld::test]
-fn parse_colon_wildcard_relative_path() {
+fn parse_colon_wildcard_relative_path(#[fixture(temp_dir)] dir: &Path) {
     // Path-containing first token becomes `Arg0::Path`, resolved against cwd
-    // and canonicalized. Confirms colon-wildcard normalization happens before
-    // classification.
+    // and canonicalized. Use a real cwd so the canonical form is stable on
+    // both Unix and Windows.
+    let cwd = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
+    );
+    let expected_path = format!("{cwd}/bazel.cmd");
     let parsed = parse_single_rule(
         "Bash(./bazel.cmd build:*)",
-        &ctx_full("/home/test", "/work", "/project"),
+        &ctx_full("/home/test", &cwd, &cwd),
     )
     .unwrap();
     match parsed {
         ParsedFilter::Bash(rule) => {
-            assert_eq!(rule.reconstruct_data(), "//work/bazel.cmd build *");
+            assert!(matches!(
+                rule.items.as_slice(),
+                [
+                    BashFilterItem::Arg0(Arg0Pattern::Path(path)),
+                    BashFilterItem::Arg(build),
+                    BashFilterItem::MatchZeroOrMore,
+                ] if path == &expected_path && build == "build"
+            ));
+            assert_eq!(
+                rule.reconstruct_data(),
+                format!("//{} build *", expected_path.trim_start_matches('/'))
+            );
         }
         _ => panic!("expected Bash rule"),
     }
@@ -824,7 +876,7 @@ fn inject_single_dir(#[fixture(temp_dir)] dir: &Path) {
         &std::fs::canonicalize(dir).unwrap().to_string_lossy(),
     );
     let mut perms = ParsedPermissions::default();
-    inject_accept_edits_rules(&mut perms, &[canonical.clone()]);
+    inject_accept_edits_rules(&mut perms, std::slice::from_ref(&canonical));
     assert_eq!(perms.write.allow.len(), 1);
     assert_eq!(perms.edit.allow.len(), 1);
     assert_eq!(perms.write.allow[0].pattern(), format!("{canonical}/**"));
@@ -938,7 +990,7 @@ fn injected_rules_match_workspace_file(#[fixture(temp_dir)] dir: &Path) {
     std::fs::create_dir(dir.join("src")).unwrap();
 
     let mut perms = ParsedPermissions::default();
-    inject_accept_edits_rules(&mut perms, &[canonical.clone()]);
+    inject_accept_edits_rules(&mut perms, std::slice::from_ref(&canonical));
 
     // The ephemeral rule should match files within the workspace
     let file_in_workspace = format!("{canonical}/src/main.rs");

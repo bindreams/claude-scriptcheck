@@ -35,7 +35,7 @@ mod tests {
         }
     }
 
-    // Parse failures =====
+    // Parse failures ==================================================================================================
 
     #[test]
     fn parse_error_is_unanalyzable() {
@@ -43,7 +43,7 @@ mod tests {
         assert!(reason.contains("parse error"), "reason: {reason}");
     }
 
-    // Empty / pure computation =====
+    // Empty / pure computation ========================================================================================
 
     #[test]
     fn empty_script() {
@@ -63,7 +63,7 @@ mod tests {
         );
     }
 
-    // open() reads =====
+    // open() reads ====================================================================================================
 
     #[test]
     fn open_default_mode_is_read() {
@@ -94,7 +94,7 @@ mod tests {
         );
     }
 
-    // open() writes =====
+    // open() writes ===================================================================================================
 
     #[test]
     fn open_write_mode() {
@@ -152,7 +152,7 @@ mod tests {
         );
     }
 
-    // open() with keyword mode =====
+    // open() with keyword mode ========================================================================================
 
     #[test]
     fn open_keyword_mode() {
@@ -162,7 +162,7 @@ mod tests {
         );
     }
 
-    // Dynamic path / mode =====
+    // Dynamic path / mode =============================================================================================
 
     #[test]
     fn open_dynamic_path() {
@@ -179,7 +179,7 @@ mod tests {
         unanalyzable("open(f'/tmp/{name}')");
     }
 
-    // with statement =====
+    // with statement ==================================================================================================
 
     #[test]
     fn with_open_read() {
@@ -200,7 +200,7 @@ mod tests {
         );
     }
 
-    // Nested open() in call arguments =====
+    // Nested open() in call arguments =================================================================================
 
     #[test]
     fn open_nested_in_json_dump() {
@@ -226,7 +226,7 @@ mod tests {
         );
     }
 
-    // Multiple open() calls =====
+    // Multiple open() calls ===========================================================================================
 
     #[test]
     fn multiple_opens() {
@@ -236,7 +236,7 @@ mod tests {
         );
     }
 
-    // Relative paths =====
+    // Relative paths ==================================================================================================
 
     #[test]
     fn relative_path_resolved_against_cwd() {
@@ -246,7 +246,7 @@ mod tests {
         );
     }
 
-    // Unsafe builtins =====
+    // Unsafe builtins =================================================================================================
 
     #[test]
     fn exec_is_unanalyzable() {
@@ -268,7 +268,7 @@ mod tests {
         unanalyzable("__import__('os')");
     }
 
-    // Unsafe module imports =====
+    // Unsafe module imports ===========================================================================================
 
     #[test]
     fn import_subprocess_is_unanalyzable() {
@@ -300,7 +300,7 @@ mod tests {
         unanalyzable("import importlib");
     }
 
-    // Unsafe qualified calls =====
+    // Unsafe qualified calls ==========================================================================================
 
     #[test]
     fn os_system_is_unanalyzable() {
@@ -322,14 +322,14 @@ mod tests {
         unanalyzable("from os import system\nsystem('ls')");
     }
 
-    // Star imports =====
+    // Star imports ====================================================================================================
 
     #[test]
     fn star_import_is_unanalyzable() {
         unanalyzable("from os import *");
     }
 
-    // Builtin shadowing =====
+    // Builtin shadowing ===============================================================================================
 
     #[test]
     fn open_shadowed_by_assignment() {
@@ -363,7 +363,7 @@ mod tests {
         assert_eq!(analyzed("exec = print\nexec('hello')", "/tmp"), vec![]);
     }
 
-    // builtins.open =====
+    // builtins.open ===================================================================================================
 
     #[test]
     fn builtins_open() {
@@ -381,7 +381,7 @@ mod tests {
         );
     }
 
-    // io.open =====
+    // io.open =========================================================================================================
 
     #[test]
     fn io_open_read() {
@@ -399,7 +399,7 @@ mod tests {
         );
     }
 
-    // Stdin pipeline (no file access) =====
+    // Stdin pipeline (no file access) =================================================================================
 
     #[test]
     fn sys_stdin_no_file_access() {
@@ -412,7 +412,7 @@ mod tests {
         );
     }
 
-    // Control flow =====
+    // Control flow ====================================================================================================
 
     #[test]
     fn if_branch_both_analyzed() {
@@ -434,7 +434,7 @@ mod tests {
         );
     }
 
-    // Nested function definitions =====
+    // Nested function definitions =====================================================================================
 
     #[test]
     fn function_body_analyzed_conservatively() {
@@ -444,14 +444,14 @@ mod tests {
         );
     }
 
-    // open() with no args (will fail at runtime, but not a file access) =====
+    // open() with no args (will fail at runtime, but not a file access) ===============================================
 
     #[test]
     fn open_no_args() {
         assert_eq!(analyzed("open()", "/tmp"), vec![]);
     }
 
-    // Safe modules =====
+    // Safe modules ====================================================================================================
 
     #[test]
     fn import_os_is_safe() {
@@ -469,14 +469,14 @@ mod tests {
         assert_eq!(analyzed("import sys\nprint(sys.argv)", "/tmp"), vec![]);
     }
 
-    // Aliased unsafe import then call =====
+    // Aliased unsafe import then call =================================================================================
 
     #[test]
     fn aliased_os_system() {
         unanalyzable("import os as operating_system\noperating_system.system('ls')");
     }
 
-    // Try/except with open =====
+    // Try/except with open ============================================================================================
 
     #[test]
     fn try_except_with_open() {
@@ -489,7 +489,7 @@ mod tests {
         );
     }
 
-    // os file-mutating functions =====
+    // os file-mutating functions ======================================================================================
 
     #[test]
     fn os_remove_extracts_write() {
@@ -584,7 +584,7 @@ mod tests {
         );
     }
 
-    // shutil is unsafe module =====
+    // shutil is unsafe module =========================================================================================
 
     #[test]
     fn import_shutil_is_unanalyzable() {
@@ -596,7 +596,7 @@ mod tests {
         unanalyzable("from shutil import copy");
     }
 
-    // urllib.request is unsafe submodule =====
+    // urllib.request is unsafe submodule ==============================================================================
 
     #[test]
     fn import_urllib_request_is_unanalyzable() {
@@ -626,7 +626,7 @@ mod tests {
         unanalyzable("from urllib import request\nrequest.urlopen('http://x')");
     }
 
-    // open() with splat args =====
+    // open() with splat args ==========================================================================================
 
     #[test]
     fn open_with_star_args() {
@@ -638,7 +638,7 @@ mod tests {
         unanalyzable("open(**kwargs)");
     }
 
-    // from builtins import open =====
+    // from builtins import open =======================================================================================
 
     #[test]
     fn from_builtins_import_open() {
@@ -656,7 +656,7 @@ mod tests {
         );
     }
 
-    // Builtin shadowing in various binding contexts =====
+    // Builtin shadowing in various binding contexts ===================================================================
 
     #[test]
     fn open_shadowed_by_for_target() {
@@ -693,7 +693,7 @@ mod tests {
         );
     }
 
-    // Slice sub-expressions are walked =====
+    // Slice sub-expressions are walked ================================================================================
 
     #[test]
     fn open_in_slice_lower() {

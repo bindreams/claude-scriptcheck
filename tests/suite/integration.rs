@@ -1,9 +1,22 @@
 use claude_scriptcheck::checker::{CheckResult, Decision};
 use claude_scriptcheck::{checker, permission, settings};
 
-/// Parse and check a command against the user's actual settings.
+const TEST_SETTINGS_JSON: &str = r#"{
+  "permissions": {
+    "allow": [
+      "Bash(ls *)",
+      "Bash(echo *)",
+      "Bash(wc *)",
+      "Bash(git status *)",
+      "Bash(cargo check *)",
+      "Write(/tmp/claude/**)"
+    ]
+  }
+}"#;
+
+/// Parse and check a command against deterministic test settings.
 fn check_command(command: &str, cwd: &str) -> CheckResult {
-    let loaded = settings::load_settings(cwd, cwd);
+    let loaded = settings::load_settings_from_contents(None, &[TEST_SETTINGS_JSON]);
     let parsed_perms = permission::parse_rules(&loaded.permissions, cwd, cwd);
     let program = thaum::parse_with(command, thaum::Dialect::Bash).unwrap();
     checker::check_program(&program, &parsed_perms, cwd)
@@ -40,7 +53,10 @@ fn redirect_to_disallowed_path_without_bash_rule_asks_for_write() {
     // Use a command unlikely to appear in user settings so the "no Bash allow"
     // path is exercised regardless of local settings. A matching Bash(...)
     // allow rule would suppress the Write demand (see checker.rs tests).
-    let result = check_command("my-totally-unknown-command hi > /etc/test-output.txt", "/tmp");
+    let result = check_command(
+        "my-totally-unknown-command hi > /etc/test-output.txt",
+        "/tmp",
+    );
     assert_eq!(result.decision, Decision::Ask);
     assert!(
         result.missing_rules.iter().any(|r| r.contains("Write(")),

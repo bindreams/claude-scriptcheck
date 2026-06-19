@@ -60,12 +60,7 @@ pub fn parse_rules(perms: &Permissions, cwd: &str, project_root: &str) -> Parsed
     parsed
 }
 
-fn push_parsed(
-    parsed: &mut ParsedPermissions,
-    verdict: Verdict,
-    rule_str: &str,
-    ctx: &ParseCtx,
-) {
+fn push_parsed(parsed: &mut ParsedPermissions, verdict: Verdict, rule_str: &str, ctx: &ParseCtx) {
     match parse_single_rule(rule_str, ctx) {
         Some(ParsedFilter::Bash(f)) => parsed.bash.push(verdict, f),
         Some(ParsedFilter::Read(f)) => parsed.read.push(verdict, f),
@@ -181,9 +176,7 @@ fn parse_bash_rule(inner: &str, ctx: &ParseCtx) -> Option<BashFilter> {
             // invocation.
             let basename = match &pat {
                 Arg0Pattern::Name(n) => n.as_str(),
-                Arg0Pattern::Path(p) => {
-                    crate::path_util::strip_pathext_suffix(basename_of_path(p))
-                }
+                Arg0Pattern::Path(p) => crate::path_util::strip_pathext_suffix(basename_of_path(p)),
             };
             if basename == "readonly" {
                 return None;
@@ -516,7 +509,10 @@ mod tests {
                 project_root: "",
             },
         );
-        assert!(parsed.is_none(), "tilde-rooted arg0 with empty home should be dropped");
+        assert!(
+            parsed.is_none(),
+            "tilde-rooted arg0 with empty home should be dropped"
+        );
     }
 
     #[test]

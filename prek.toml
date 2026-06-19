@@ -1,0 +1,120 @@
+#:schema https://www.schemastore.org/prek.json
+
+default_install_hook_types = ["pre-commit", "commit-msg"]
+
+# Local hooks ==========================================================================================================
+
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "no-llm-author-test"
+name = "Test hook \"no-llm-author\""
+entry = "python -m pytest scripts/check-no-llm-author.py -q --tb=short --no-header"
+language = "python"
+additional_dependencies = ["pytest==8.4.1"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "no-llm-author"
+name = "LLM cannot be a code author"
+entry = "scripts/check-no-llm-author.py"
+language = "python"
+stages = ["commit-msg"]
+
+[[repos.hooks]]
+id = "no-std-test"
+name = "no stray #[test] attribute"
+entry = '^\\s*#\\[test\\]'
+language = "pygrep"
+types = ["rust"]
+
+[[repos.hooks]]
+id = "format-section-comments-test"
+name = "Test hook \"format-section-comments\""
+entry = "python -m pytest scripts/format-section-comments.py -q --tb=short --no-header"
+language = "python"
+additional_dependencies = ["pytest==8.4.1"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "format-section-comments"
+name = "section comment format"
+entry = "scripts/format-section-comments.py"
+language = "python"
+types = ["rust"]
+
+[[repos.hooks]]
+id = "cargo-fmt"
+name = "cargo fmt"
+entry = "cargo fmt --all --check"
+language = "system"
+types = ["rust"]
+pass_filenames = false
+
+[[repos.hooks]]
+id = "cargo-clippy"
+name = "cargo clippy"
+entry = "cargo clippy --locked --all-targets -- -D warnings"
+language = "system"
+types = ["rust"]
+pass_filenames = false
+
+[[repos.hooks]]
+id = "taplo-fmt"
+name = "taplo fmt"
+entry = "taplo fmt --check"
+language = "system"
+types = ["toml"]
+
+[[repos.hooks]]
+id = "prettier"
+name = "prettier data files"
+entry = "prettier --check"
+language = "node"
+files = "\\.(json|json5|ya?ml)$"
+additional_dependencies = ["prettier@3.5.3"]
+
+# External hooks =======================================================================================================
+
+[[repos]]
+repo = "https://github.com/pre-commit/pre-commit-hooks"
+rev = "v6.0.0"
+hooks = [
+  { id = "check-executables-have-shebangs" },
+  { id = "check-shebang-scripts-are-executable" },
+  { id = "mixed-line-ending", args = [
+    "--fix=lf",
+  ] },
+]
+
+[[repos]]
+repo = "https://github.com/editorconfig-checker/editorconfig-checker.python"
+rev = "3.2.1"
+hooks = [
+  { id = "editorconfig-checker", exclude_types = [
+    "rust",
+    "markdown",
+    "python",
+    "yaml",
+    "toml",
+    "json",
+  ] },
+]
+
+[[repos]]
+repo = "https://github.com/google/yapf"
+rev = "v0.43.0"
+hooks = [{ id = "yapf", args = ["--style={based_on_style: pep8}"] }]
+
+[[repos]]
+repo = "https://github.com/hukkin/mdformat"
+rev = "1.0.0"
+hooks = [{ id = "mdformat", additional_dependencies = ["mdformat-gfm==1.0.0"] }]
+
+[[repos]]
+repo = "https://github.com/rhysd/actionlint"
+rev = "v1.7.12"
+hooks = [{ id = "actionlint" }]

@@ -397,7 +397,7 @@ fn install_via_bare_name_writes_bare_command() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// Log filtering + tail integration tests -----
+// Log filtering + tail integration tests ------------------------------------------------------------------------------
 
 use claude_scriptcheck::logging;
 

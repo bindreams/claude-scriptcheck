@@ -240,8 +240,7 @@ impl PermissionChecker<'_> {
                     .take_while(|a| a.is_some())
                     .map(|a| a.clone().unwrap())
                     .collect();
-                let (_bash_asked, bash_allowed) =
-                    self.check_bash_rules(None, &dyn_static_args);
+                let (_bash_asked, bash_allowed) = self.check_bash_rules(None, &dyn_static_args);
                 if self.denied.is_some() {
                     return;
                 }
@@ -504,11 +503,7 @@ impl PermissionChecker<'_> {
     /// short-circuit). When `bash_asked` is true, the allow scan is skipped
     /// entirely — so no allow rule is recorded in that case, matching prior
     /// behavior.
-    fn check_bash_rules(
-        &mut self,
-        raw_arg0: Option<&str>,
-        args: &[String],
-    ) -> (bool, bool) {
+    fn check_bash_rules(&mut self, raw_arg0: Option<&str>, args: &[String]) -> (bool, bool) {
         let cwd = self.cwd;
         let test = |f: &BashFilter| match raw_arg0 {
             Some(a) => f.matches(a, args, cwd),
