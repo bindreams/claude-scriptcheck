@@ -20,8 +20,10 @@ pub struct CodexConfigLayer<'a> {
 
 #[derive(Default, Deserialize)]
 struct CodexConfig {
+    // `None` (key absent) vs `Some(vec![])` (explicit empty) are distinct, per
+    // Codex: unset -> default markers; explicit empty -> detection disabled.
     #[serde(default)]
-    project_root_markers: Vec<String>,
+    project_root_markers: Option<Vec<String>>,
     #[serde(default)]
     projects: HashMap<String, CodexProjectConfig>,
     scriptcheck: Option<CodexScriptcheckConfig>,
@@ -242,18 +244,21 @@ fn find_codex_project_root(cwd: &Path, markers: &[String]) -> Option<PathBuf> {
 }
 
 fn project_root_markers(system_content: Option<&str>, user_content: Option<&str>) -> Vec<String> {
-    let mut markers = vec![".git".to_string()];
-    if let Some(config) = parse_document(system_content) {
-        if !config.project_root_markers.is_empty() {
-            markers = config.project_root_markers;
+    // Fold layers low->high (system, then user). A layer that SETS the key
+    // (Some, including an explicit empty list) REPLACES the accumulator; a layer
+    // that does not set it leaves the accumulator unchanged. After folding,
+    // `None` (no layer set it) falls back to the default `[".git"]`, while
+    // `Some(list)` is used as-is — an explicit empty list stays empty (which
+    // disables upward detection). Mirrors Codex project_root_markers resolution.
+    let mut markers: Option<Vec<String>> = None;
+    for content in [system_content, user_content] {
+        if let Some(config) = parse_document(content) {
+            if let Some(list) = config.project_root_markers {
+                markers = Some(list);
+            }
         }
     }
-    if let Some(config) = parse_document(user_content) {
-        if !config.project_root_markers.is_empty() {
-            markers = config.project_root_markers;
-        }
-    }
-    markers
+    markers.unwrap_or_else(|| vec![".git".to_string()])
 }
 
 fn project_is_trusted(user_content: Option<&str>, project_root: &str) -> bool {
@@ -318,13 +323,22 @@ fn codex_target_config_path(
 }
 
 fn codex_system_config_path() -> Option<PathBuf> {
-    #[cfg(unix)]
+    #[cfg(windows)]
     {
-        Some(PathBuf::from("/etc/codex/config.toml"))
+        // Codex loads the machine-wide layer from
+        // `<ProgramData>\OpenAI\Codex\config.toml`, resolving ProgramData via
+        // SHGetKnownFolderPath(FOLDERID_ProgramData). We approximate with the
+        // `%ProgramData%` env var (default `C:\ProgramData`) to avoid a heavy
+        // windows-sys/FFI dependency; this matches Codex's literal fallback.
+        let program_data = std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+        Some(program_data.join("OpenAI").join("Codex").join("config.toml"))
     }
-    #[cfg(not(unix))]
+    #[cfg(not(windows))]
     {
-        None
+        // macOS and Linux both use /etc/codex/config.toml.
+        Some(PathBuf::from("/etc/codex/config.toml"))
     }
 }
 
@@ -818,4 +832,58 @@ fn parse_agent<'a>(mut arguments: impl Iterator<Item = &'a str>) -> Option<&'a s
     }
 
     agent
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_config_path_is_platform_appropriate() {
+        let s = codex_system_config_path()
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        #[cfg(windows)]
+        assert!(
+            s.ends_with("OpenAI/Codex/config.toml"),
+            "windows system path should live under ProgramData/OpenAI/Codex, got {s}"
+        );
+        #[cfg(not(windows))]
+        assert_eq!(s, "/etc/codex/config.toml");
+    }
+
+    #[test]
+    fn markers_unset_defaults_to_git() {
+        assert_eq!(project_root_markers(None, None), vec![".git".to_string()]);
+    }
+
+    #[test]
+    fn markers_explicit_empty_disables_detection() {
+        // An explicit empty list is distinct from unset: detection disabled.
+        assert_eq!(
+            project_root_markers(None, Some("project_root_markers = []\n")),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn markers_custom_list_is_used() {
+        assert_eq!(
+            project_root_markers(None, Some("project_root_markers = [\".hg\", \".jj\"]\n")),
+            vec![".hg".to_string(), ".jj".to_string()]
+        );
+    }
+
+    #[test]
+    fn markers_user_empty_overrides_system_nonempty() {
+        // A higher-precedence layer that sets the key (even empty) replaces.
+        assert_eq!(
+            project_root_markers(
+                Some("project_root_markers = [\".git\"]\n"),
+                Some("project_root_markers = []\n"),
+            ),
+            Vec::<String>::new()
+        );
+    }
 }
