@@ -173,7 +173,6 @@ pub fn find_codex_project_root_from_paths(
         .collect::<Vec<_>>();
 
     let mut current = PathBuf::from(&cwd);
-    let mut matched = None;
     loop {
         let current_str = crate::path_util::normalize_separators(&current.to_string_lossy());
         if markers.iter().any(|marker| {
@@ -181,7 +180,8 @@ pub fn find_codex_project_root_from_paths(
                 crate::path_util::normalize_separators(&current.join(marker).to_string_lossy());
             existing.iter().any(|path| path == &marker_path)
         }) {
-            matched = Some(current_str.clone());
+            // First (nearest) marker going up wins, matching Codex's find_project_root.
+            return Some(current_str);
         }
 
         if !current.pop() {
@@ -189,10 +189,10 @@ pub fn find_codex_project_root_from_paths(
         }
     }
 
-    if let Some(matched) = matched {
-        return Some(matched);
-    }
-
+    // No marker found: fall back to the shortest ancestor that holds a
+    // `.codex/config.toml` layer. NOTE: this differs from Codex, which uses cwd
+    // when no marker matches; tracked for a follow-up that mirrors Codex's
+    // project-root resolution exactly.
     let mut config_roots = existing
         .iter()
         .filter_map(|path| path.strip_suffix("/.codex/config.toml").map(str::to_string))
@@ -227,10 +227,10 @@ fn find_codex_project_root(cwd: &Path, markers: &[String]) -> Option<PathBuf> {
     }
 
     let mut current = cwd.to_path_buf();
-    let mut matched = None;
     loop {
         if markers.iter().any(|marker| current.join(marker).exists()) {
-            matched = Some(current.clone());
+            // First (nearest) marker going up wins, matching Codex's find_project_root.
+            return Some(current);
         }
 
         if !current.pop() {
@@ -238,7 +238,7 @@ fn find_codex_project_root(cwd: &Path, markers: &[String]) -> Option<PathBuf> {
         }
     }
 
-    Some(matched.unwrap_or_else(|| cwd.to_path_buf()))
+    Some(cwd.to_path_buf())
 }
 
 fn project_root_markers(system_content: Option<&str>, user_content: Option<&str>) -> Vec<String> {

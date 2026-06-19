@@ -269,6 +269,18 @@ fn codex_project_root_uses_configured_markers() {
 }
 
 #[skuld::test]
+fn codex_project_root_prefers_nearest_marker() {
+    // With nested markers, Codex's find_project_root returns the NEAREST ancestor
+    // marker (walking up from cwd, first hit wins), not the farthest.
+    let root = find_codex_project_root_from_paths(
+        "/repo/app/src",
+        &["/repo/.git", "/repo/app/.git"],
+        &[".git".to_string()],
+    );
+    assert_eq!(root.as_deref(), Some("/repo/app"));
+}
+
+#[skuld::test]
 fn codex_project_root_markers_empty_uses_cwd() {
     let root = find_codex_project_root_from_paths("/repo/work/service", &[], &[]);
     assert_eq!(root.as_deref(), Some("/repo/work/service"));

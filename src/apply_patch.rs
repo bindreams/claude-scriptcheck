@@ -5,7 +5,11 @@ pub fn extract_file_accesses(command: &str, cwd: &str) -> Result<Vec<FileAccess>
     let mut accesses = Vec::new();
     let mut pending_update_source: Option<String> = None;
 
-    for line in command.lines() {
+    for raw_line in command.lines() {
+        // Codex trims each line before matching directive headers (see the
+        // apply_patch streaming parser), so an indented directive is still
+        // applied. Trim here too, or such a write escapes the file-rule check.
+        let line = raw_line.trim();
         if let Some(path) = line.strip_prefix("*** Add File: ") {
             accesses.push(write_access(path, cwd)?);
             pending_update_source = None;
@@ -108,5 +112,24 @@ mod tests {
     fn empty_patch_is_error() {
         let err = extract_file_accesses("*** Begin Patch\n*** End Patch\n", "/repo").unwrap_err();
         assert!(err.contains("did not reference any files"));
+    }
+
+    #[test]
+    fn indented_directives_are_detected() {
+        // Codex trims each line before matching directives, so an indented
+        // directive IS applied by Codex. scriptcheck must extract it too, or a
+        // write to a `Deny(Write(...))`-protected path would slip past the hook.
+        let accesses = extract_file_accesses(
+            "*** Begin Patch\n  *** Update File: src/secret.rs\n@@\n-old\n+new\n*** End Patch\n",
+            "/repo",
+        )
+        .unwrap();
+        assert_eq!(
+            accesses,
+            vec![FileAccess {
+                path: "/repo/src/secret.rs".into(),
+                kind: AccessKind::Write,
+            }]
+        );
     }
 }
