@@ -107,7 +107,7 @@ hooks = [
 [[repos]]
 repo = "https://github.com/google/yapf"
 rev = "v0.43.0"
-hooks = [{ id = "yapf" }]
+hooks = [{ id = "yapf", args = ["--style={based_on_style: pep8}"] }]
 
 [[repos]]
 repo = "https://github.com/hukkin/mdformat"

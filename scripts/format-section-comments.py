@@ -68,10 +68,11 @@ def process_lines(lines: list[str]) -> tuple[list[str], bool]:
         if fill_m and new_lines:
             prev_line = new_lines[-1].rstrip("\n")
             name_m = NAME_HALF_RE.match(prev_line)
-            if (
-                name_m and not SECTION_RE.match(prev_line) and not prev_line.lstrip().startswith("///")
-                and not prev_line.lstrip().startswith("//!") and name_m.group(2)  # has actual text after //
-            ):
+            if (name_m and not SECTION_RE.match(prev_line)
+                    and not prev_line.lstrip().startswith("///")
+                    and not prev_line.lstrip().startswith("//!")
+                    and name_m.group(2)  # has actual text after //
+                ):
                 indent = name_m.group(1)
                 name = name_m.group(2).rstrip()
                 fill_char = fill_m.group(2)
@@ -85,7 +86,8 @@ def process_lines(lines: list[str]) -> tuple[list[str], bool]:
         if sec_m:
             can_m = CANONICAL_RE.match(line)
             if can_m:
-                indent, name, fill_char = can_m.group(1), can_m.group(2), can_m.group(3)
+                indent, name, fill_char = can_m.group(1), can_m.group(
+                    2), can_m.group(3)
                 fixed = rebuild(indent, name, fill_char)
                 if fixed != line:
                     new_lines.append(fixed + "\n")
@@ -98,10 +100,10 @@ def process_lines(lines: list[str]) -> tuple[list[str], bool]:
             fill_m2 = FILL_ONLY_RE.match(next_line)
             if fill_m2:
                 name_m2 = NAME_HALF_RE.match(line)
-                if (
-                    name_m2 and not SECTION_RE.match(line) and not line.lstrip().startswith("///")
-                    and not line.lstrip().startswith("//!") and name_m2.group(2)
-                ):
+                if (name_m2 and not SECTION_RE.match(line)
+                        and not line.lstrip().startswith("///")
+                        and not line.lstrip().startswith("//!")
+                        and name_m2.group(2)):
                     indent = name_m2.group(1)
                     name = name_m2.group(2).rstrip()
                     fill_char = fill_m2.group(2)
@@ -150,8 +152,9 @@ if __name__ == "__main__":
 
 def _lines(text: str) -> list[str]:
     """Split text into lines preserving newlines, like file.readlines()."""
-    return [line + "\n" for line in text.split("\n")
-            if line or text.endswith("\n")][:text.count("\n") + (1 if not text.endswith("\n") else 0)]
+    return [
+        line + "\n" for line in text.split("\n") if line or text.endswith("\n")
+    ][:text.count("\n") + (1 if not text.endswith("\n") else 0)]
 
 
 def _fix(text: str) -> str:

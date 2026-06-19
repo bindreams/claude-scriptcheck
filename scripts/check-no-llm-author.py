@@ -17,7 +17,8 @@ import subprocess as sp
 import sys
 from dataclasses import dataclass
 
-RE_CO_AUTHORED_BY = re.compile(r"^Co-Authored-By:\s*(?P<identity>.+)$", re.MULTILINE | re.IGNORECASE)
+RE_CO_AUTHORED_BY = re.compile(r"^Co-Authored-By:\s*(?P<identity>.+)$",
+                               re.MULTILINE | re.IGNORECASE)
 RE_IDENTITY = re.compile(r"^(?P<name>.+?)\s*<(?P<email>[^>]+)>.*$")
 LLM_EMAILS = [
     "noreply@anthropic.com",
@@ -45,7 +46,12 @@ class Contributors:
 
 
 def run(argv):
-    return sp.run(argv, stdout=sp.PIPE, stderr=sp.PIPE, text=True, check=False, timeout=5)
+    return sp.run(argv,
+                  stdout=sp.PIPE,
+                  stderr=sp.PIPE,
+                  text=True,
+                  check=False,
+                  timeout=5)
 
 
 def git_author() -> str:
@@ -56,7 +62,9 @@ def git_committer() -> str:
     return run(["git", "var", "GIT_COMMITTER_IDENT"]).stdout.strip()
 
 
-def contributors(message: str, author: str | None = None, committer: str | None = None) -> Contributors:
+def contributors(message: str,
+                 author: str | None = None,
+                 committer: str | None = None) -> Contributors:
     if author is None:
         author = git_author()
     if committer is None:
@@ -69,27 +77,33 @@ def contributors(message: str, author: str | None = None, committer: str | None 
     for line in RE_CO_AUTHORED_BY.finditer(message):
         co_authors.add(Identity.from_string(line.group(1).strip()))
 
-    return Contributors(author=author, committer=committer, co_authors=co_authors)
+    return Contributors(author=author,
+                        committer=committer,
+                        co_authors=co_authors)
 
 
 def validate(contribs: Contributors) -> bool:
     result = True
     if contribs.author.email in LLM_EMAILS:
-        print(f"git author email {contribs.author.email} is an LLM", file=sys.stderr)
+        print(f"git author email {contribs.author.email} is an LLM",
+              file=sys.stderr)
         result = False
     if contribs.committer.email in LLM_EMAILS:
-        print(f"git committer email {contribs.committer.email} is an LLM", file=sys.stderr)
+        print(f"git committer email {contribs.committer.email} is an LLM",
+              file=sys.stderr)
         result = False
     for co_author in contribs.co_authors:
         if co_author.email in LLM_EMAILS:
-            print(f"git co-author email {co_author.email} is an LLM", file=sys.stderr)
+            print(f"git co-author email {co_author.email} is an LLM",
+                  file=sys.stderr)
             result = False
 
     return result
 
 
 def cli():
-    parser = argparse.ArgumentParser(description="Ensure an LLM is not a code author.")
+    parser = argparse.ArgumentParser(
+        description="Ensure an LLM is not a code author.")
     parser.add_argument("message_file", help="Commit message file path")
     return parser
 
@@ -117,16 +131,15 @@ def test_validate_ok():
         Contributors(
             author=Identity(name="Alice", email="alice@example.com"),
             committer=Identity(name="Bob", email="bob@example.com"),
-            co_authors={Identity(name="Charlie", email="charlie@example.com")}
-        )
-    ) is True
+            co_authors={Identity(name="Charlie",
+                                 email="charlie@example.com")})) is True
 
 
 def test_validate_llm_author():
     assert validate(
-        Contributors(
-            author=Identity(name="Alice", email="alice@example.com"),
-            committer=Identity(name="Bob", email="bob@example.com"),
-            co_authors={Identity(name="Claude Code", email="noreply@anthropic.com")}
-        )
-    ) is False
+        Contributors(author=Identity(name="Alice", email="alice@example.com"),
+                     committer=Identity(name="Bob", email="bob@example.com"),
+                     co_authors={
+                         Identity(name="Claude Code",
+                                  email="noreply@anthropic.com")
+                     })) is False
