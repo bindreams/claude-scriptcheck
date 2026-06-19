@@ -289,6 +289,15 @@ fn project_is_trusted(user_content: Option<&str>, project_root: &str) -> bool {
 /// the normalized and filesystem-canonicalized forms of each side (case-folded
 /// on Windows). Mirrors Codex `project_trust_for_lookup_key`.
 fn path_is_trusted_in(config: &CodexConfig, path: &str) -> bool {
+    // Match a `[projects]` key against the queried path by canonical filesystem
+    // identity: both the key and the path are compared in raw and
+    // filesystem-canonicalized forms (case-folded on Windows). Canonicalizing
+    // the key — which Codex does not do — is a deliberate divergence: it lets a
+    // trusted entry written via one path (e.g. a `/var` symlink) match the same
+    // directory reached via its canonical `/private/var` form, which is how
+    // scriptcheck receives an already-canonicalized `project_root` on macOS. It
+    // is not exploitable (a foreign directory cannot canonicalize to a trusted
+    // path without being a user-created symlink to it).
     let path = crate::path_util::normalize_separators(path);
     let canonical_path = crate::canonicalize::best_effort_canonicalize(&path);
 
@@ -391,7 +400,9 @@ fn codex_user_config_path() -> Option<PathBuf> {
 /// config) — a deliberate divergence from Codex's fatal behavior — rather than
 /// falling back to `~/.codex`. Empty or unset falls back to `~/.codex`.
 fn resolve_codex_home(env_value: Option<std::ffi::OsString>) -> Option<PathBuf> {
-    match env_value {
+    // Codex reads CODEX_HOME via `std::env::var`, so a non-UTF-8 value is an
+    // `Err` and treated as absent. Mirror that by requiring valid UTF-8.
+    match env_value.as_deref().and_then(|value| value.to_str()) {
         Some(value) if !value.is_empty() => {
             let path = PathBuf::from(value);
             path.is_dir().then_some(path)
@@ -1010,6 +1021,26 @@ mod tests {
                 &main.to_string_lossy()
             )),
             "worktree should resolve to the main repo root"
+        );
+    }
+
+    #[test]
+    fn repo_root_resolves_worktree_relative_gitdir() {
+        // A `.git` file may use a relative `gitdir:` pointer, resolved against
+        // the worktree directory.
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        std::fs::create_dir_all(main.join(".git").join("worktrees").join("wt")).unwrap();
+        let wt = tmp.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), "gitdir: ../main/.git/worktrees/wt\n").unwrap();
+        let resolved = resolve_repo_root_for_trust(&wt.to_string_lossy());
+        assert_eq!(
+            resolved.map(|r| crate::path_util::normalize_path_key(&r)),
+            Some(crate::path_util::normalize_path_key(
+                &main.to_string_lossy()
+            )),
+            "relative gitdir should resolve to the main repo root"
         );
     }
 

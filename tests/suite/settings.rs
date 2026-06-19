@@ -209,6 +209,75 @@ fn codex_settings_skip_untrusted_project_layers() {
 }
 
 #[skuld::test]
+fn codex_override_merge_explicit_empty_clears_lower_layer() {
+    // Codex override-merge: a trusted project layer setting `deny = []` REPLACES
+    // (clears) the user-level deny rules. This is faithful to Codex and is
+    // security-relevant — trusting a project grants it power over your deny list.
+    let loaded = load_codex_settings_from_contents(
+        None,
+        Some(
+            r#"
+            [projects."/repo"]
+            trust_level = "trusted"
+
+            [scriptcheck.permissions]
+            deny = ["Bash(rm *)"]
+            "#,
+        ),
+        &[CodexConfigLayer {
+            path: "/repo/.codex/config.toml",
+            content: r#"
+                [scriptcheck.permissions]
+                deny = []
+            "#,
+        }],
+        "/repo",
+    );
+    assert!(
+        loaded.permissions.deny.is_empty(),
+        "an explicit empty deny in a trusted project layer should clear the user's deny rules"
+    );
+}
+
+#[skuld::test]
+fn codex_worktree_is_trusted_via_main_repo() {
+    // A git worktree whose own path is NOT in `[projects]`, but whose main repo
+    // IS trusted, loads its project layer via the repo-root trust tier.
+    let tmp = tempfile::tempdir().unwrap();
+    let main = tmp.path().join("main");
+    std::fs::create_dir_all(main.join(".git").join("worktrees").join("wt")).unwrap();
+    let wt = tmp.path().join("wt");
+    std::fs::create_dir_all(wt.join(".codex")).unwrap();
+    let main_fwd = main.to_string_lossy().replace('\\', "/");
+    std::fs::write(
+        wt.join(".git"),
+        format!("gitdir: {main_fwd}/.git/worktrees/wt\n"),
+    )
+    .unwrap();
+
+    let user = format!("[projects.\"{main_fwd}\"]\ntrust_level = \"trusted\"\n");
+    let wt_fwd = wt.to_string_lossy().replace('\\', "/");
+    let layer_path = format!("{wt_fwd}/.codex/config.toml");
+    let loaded = load_codex_settings_from_contents(
+        None,
+        Some(&user),
+        &[CodexConfigLayer {
+            path: &layer_path,
+            content: r#"
+                [scriptcheck.permissions]
+                allow = ["Bash(worktree-allow *)"]
+            "#,
+        }],
+        &wt_fwd,
+    );
+    assert_eq!(
+        loaded.permissions.allow,
+        vec!["Bash(worktree-allow *)"],
+        "worktree should load its project layer via the trusted main repo"
+    );
+}
+
+#[skuld::test]
 fn codex_settings_trust_lookup_matches_canonicalized_project_paths() {
     let temp = std::env::temp_dir().join(format!(
         "claude-scriptcheck-codex-trust-canonical-{}",
