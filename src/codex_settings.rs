@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use path_clean::PathClean;
 use serde::Deserialize;
 use tempfile::NamedTempFile;
 use thaum::ast::{Command as ShellCommand, Expression};
@@ -269,18 +270,83 @@ fn project_is_trusted(user_content: Option<&str>, project_root: &str) -> bool {
         return false;
     };
 
-    let project_root = crate::path_util::normalize_separators(project_root);
-    let canonical_project_root = crate::canonicalize::best_effort_canonicalize(&project_root);
+    // Codex's trust decision checks, in order, the directory's own keys then the
+    // git repo-root keys (loader/mod.rs decision_for_dir). We mirror the
+    // project-root tier and the repo-root tier — the latter maps a git worktree
+    // to its main repository, so a trusted main repo also trusts its worktrees.
+    if path_is_trusted_in(&config, project_root) {
+        return true;
+    }
+    if let Some(repo_root) = resolve_repo_root_for_trust(project_root) {
+        if path_is_trusted_in(&config, &repo_root) {
+            return true;
+        }
+    }
+    false
+}
 
-    config.projects.iter().any(|(path, project)| {
-        let normalized_path = crate::path_util::normalize_separators(path);
-        let canonical_path = crate::canonicalize::best_effort_canonicalize(&normalized_path);
-        (crate::path_util::paths_equal_for_platform(&normalized_path, &project_root)
-            || crate::path_util::paths_equal_for_platform(&normalized_path, &canonical_project_root)
-            || crate::path_util::paths_equal_for_platform(&canonical_path, &project_root)
-            || crate::path_util::paths_equal_for_platform(&canonical_path, &canonical_project_root))
+/// Whether `path` is marked `trusted` in the `[projects]` map, comparing both
+/// the normalized and filesystem-canonicalized forms of each side (case-folded
+/// on Windows). Mirrors Codex `project_trust_for_lookup_key`.
+fn path_is_trusted_in(config: &CodexConfig, path: &str) -> bool {
+    let path = crate::path_util::normalize_separators(path);
+    let canonical_path = crate::canonicalize::best_effort_canonicalize(&path);
+
+    config.projects.iter().any(|(key, project)| {
+        let normalized_key = crate::path_util::normalize_separators(key);
+        let canonical_key = crate::canonicalize::best_effort_canonicalize(&normalized_key);
+        (crate::path_util::paths_equal_for_platform(&normalized_key, &path)
+            || crate::path_util::paths_equal_for_platform(&normalized_key, &canonical_path)
+            || crate::path_util::paths_equal_for_platform(&canonical_key, &path)
+            || crate::path_util::paths_equal_for_platform(&canonical_key, &canonical_path))
             && project.trust_level.as_deref() == Some("trusted")
     })
+}
+
+/// Resolve the git repository root used for trust lookups, walking up from
+/// `start` to the nearest `.git`. A `.git` directory yields that directory; a
+/// `.git` *file* (a linked worktree) is followed via its `gitdir:` pointer to
+/// the main repository root. Mirrors Codex `resolve_root_git_project_for_trust`
+/// (git-utils/src/info.rs). Returns a separator-normalized path, or `None`.
+fn resolve_repo_root_for_trust(start: &str) -> Option<String> {
+    use std::ffi::OsStr;
+    use std::path::Path;
+
+    let mut dir = PathBuf::from(crate::path_util::normalize_separators(start));
+    loop {
+        let dot_git = dir.join(".git");
+        if dot_git.is_dir() {
+            return Some(crate::path_util::normalize_separators(&dir.to_string_lossy()));
+        }
+        if dot_git.is_file() {
+            let content = std::fs::read_to_string(&dot_git).ok()?;
+            let git_dir_rel = content.trim().strip_prefix("gitdir:")?.trim();
+            if git_dir_rel.is_empty() {
+                return None;
+            }
+            let git_dir_rel = crate::path_util::normalize_separators(git_dir_rel);
+            let git_dir_path = if crate::path_util::is_absolute(&git_dir_rel) {
+                PathBuf::from(&git_dir_rel)
+            } else {
+                dir.join(&git_dir_rel)
+            }
+            .clean();
+            // `<main>/.git/worktrees/<name>` -> `<main>` (parent of `.git`).
+            let worktrees_dir = git_dir_path.parent()?;
+            if worktrees_dir.file_name() != Some(OsStr::new("worktrees")) {
+                return None;
+            }
+            let common_dir = worktrees_dir.parent()?;
+            let main_repo: &Path = common_dir.parent()?;
+            return Some(crate::path_util::normalize_separators(
+                &main_repo.to_string_lossy(),
+            ));
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
 }
 
 fn parse_config(content: Option<&str>) -> Option<CodexPermissions> {
@@ -898,6 +964,44 @@ mod tests {
         assert_eq!(
             project_root_markers(None, Some("project_root_markers = [\".hg\", \".jj\"]\n")),
             vec![".hg".to_string(), ".jj".to_string()]
+        );
+    }
+
+    #[test]
+    fn repo_root_resolves_plain_git_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let resolved = resolve_repo_root_for_trust(&repo.to_string_lossy());
+        assert_eq!(
+            resolved.map(|r| crate::path_util::normalize_path_key(&r)),
+            Some(crate::path_util::normalize_path_key(&repo.to_string_lossy()))
+        );
+    }
+
+    #[test]
+    fn repo_root_resolves_worktree_to_main_repo() {
+        // A linked worktree has a `.git` *file* pointing into the main repo's
+        // `.git/worktrees/<name>`; trust must resolve to the main repo root.
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        let gitdir = main.join(".git").join("worktrees").join("wt");
+        std::fs::create_dir_all(&gitdir).unwrap();
+        let wt = tmp.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(
+            wt.join(".git"),
+            format!(
+                "gitdir: {}\n",
+                gitdir.to_string_lossy().replace('\\', "/")
+            ),
+        )
+        .unwrap();
+        let resolved = resolve_repo_root_for_trust(&wt.to_string_lossy());
+        assert_eq!(
+            resolved.map(|r| crate::path_util::normalize_path_key(&r)),
+            Some(crate::path_util::normalize_path_key(&main.to_string_lossy())),
+            "worktree should resolve to the main repo root"
         );
     }
 
