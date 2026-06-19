@@ -587,12 +587,12 @@ pub fn scriptcheck_arg0_is_owned(arg0: &str) -> bool {
     let normalized_arg0 = path_util::normalize_separators(arg0);
     owned_scriptcheck_targets()
         .into_iter()
-        .any(|target| target == normalized_arg0)
+        .any(|target| path_util::paths_equal_for_platform(&target, &normalized_arg0))
 }
 
 fn owned_scriptcheck_targets() -> Vec<String> {
     let mut targets = Vec::new();
-    if bare_scriptcheck_resolves_to_current_binary() {
+    if bare_scriptcheck_is_resolvable() {
         targets.push("claude-scriptcheck".to_string());
     }
     targets.push(path_util::normalize_separators(&current_binary_path()));
@@ -720,12 +720,12 @@ fn scriptcheck_arg0_matches_binary(arg0: &str, binary_path: &str) -> bool {
     let normalized_arg0 = path_util::normalize_separators(arg0);
     owned_scriptcheck_targets_for(binary_path)
         .into_iter()
-        .any(|target| target == normalized_arg0)
+        .any(|target| path_util::paths_equal_for_platform(&target, &normalized_arg0))
 }
 
 fn owned_scriptcheck_targets_for(binary_path: &str) -> Vec<String> {
     let mut targets = Vec::new();
-    if bare_scriptcheck_resolves_to_current_binary() {
+    if bare_scriptcheck_is_resolvable() {
         targets.push("claude-scriptcheck".to_string());
     }
     targets.push(path_util::normalize_separators(binary_path));
@@ -739,7 +739,13 @@ fn owned_scriptcheck_targets_for(binary_path: &str) -> Vec<String> {
     targets
 }
 
-fn bare_scriptcheck_resolves_to_current_binary() -> bool {
+fn bare_scriptcheck_is_resolvable() -> bool {
+    // A bare `claude-scriptcheck` token is ours when PATH resolves it to *our*
+    // program: either the same file (a symlink/hardlink to the running binary)
+    // or a byte-identical copy of it. Windows installs copy the binary onto PATH
+    // (symlinks need privileges), so path/inode identity with `current_exe` does
+    // not hold there — but a copy has identical contents. A *foreign* binary
+    // named `claude-scriptcheck` (different contents) is not ours.
     let Ok(resolved) = which::which("claude-scriptcheck") else {
         return false;
     };
@@ -748,6 +754,20 @@ fn bare_scriptcheck_resolves_to_current_binary() -> bool {
     };
     best_effort_canonicalize(&resolved.to_string_lossy())
         == best_effort_canonicalize(&current_exe.to_string_lossy())
+        || files_have_identical_contents(&resolved, &current_exe)
+}
+
+/// Whether two paths refer to files with identical byte contents. Cheap-rejects
+/// on differing length before reading. Used to recognize a copied install of
+/// our own binary (vs a foreign binary that merely shares the name).
+fn files_have_identical_contents(a: &Path, b: &Path) -> bool {
+    let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+        return false;
+    };
+    if ma.len() != mb.len() {
+        return false;
+    }
+    matches!((std::fs::read(a), std::fs::read(b)), (Ok(da), Ok(db)) if da == db)
 }
 
 fn parse_hook_command_kind(arguments: &[String]) -> HookCommandKind {
