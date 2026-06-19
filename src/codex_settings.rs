@@ -314,10 +314,22 @@ fn merge_permissions(merged: &mut Permissions, perms: CodexPermissions) {
 }
 
 fn codex_user_config_path() -> Option<PathBuf> {
-    let home = std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|path| path.join(".codex")))?;
-    Some(home.join("config.toml"))
+    Some(resolve_codex_home(std::env::var_os("CODEX_HOME"))?.join("config.toml"))
+}
+
+/// Resolve the Codex home directory from a `CODEX_HOME` value. Codex ignores an
+/// empty value and errors when it is set but not a directory; a hook must never
+/// block the user, so a set-but-invalid `CODEX_HOME` resolves to `None` (no user
+/// config) — a deliberate divergence from Codex's fatal behavior — rather than
+/// falling back to `~/.codex`. Empty or unset falls back to `~/.codex`.
+fn resolve_codex_home(env_value: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    match env_value {
+        Some(value) if !value.is_empty() => {
+            let path = PathBuf::from(value);
+            path.is_dir().then_some(path)
+        }
+        _ => dirs::home_dir().map(|home| home.join(".codex")),
+    }
 }
 
 fn codex_target_config_path(
@@ -886,6 +898,24 @@ mod tests {
         assert_eq!(
             project_root_markers(None, Some("project_root_markers = [\".hg\", \".jj\"]\n")),
             vec![".hg".to_string(), ".jj".to_string()]
+        );
+    }
+
+    #[test]
+    fn codex_home_invalid_dir_resolves_to_none() {
+        // CODEX_HOME set to a non-directory (a file) -> None, not a fallback.
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let value = std::ffi::OsString::from(file.path());
+        assert_eq!(resolve_codex_home(Some(value)), None);
+    }
+
+    #[test]
+    fn codex_home_valid_dir_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let value = std::ffi::OsString::from(dir.path());
+        assert_eq!(
+            resolve_codex_home(Some(value)).as_deref(),
+            Some(dir.path())
         );
     }
 
