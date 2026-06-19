@@ -1,3 +1,4 @@
+use claude_scriptcheck::codex_settings::*;
 use claude_scriptcheck::settings::*;
 
 #[skuld::test]
@@ -121,6 +122,454 @@ fn managed_none_still_loads_user_rules() {
         &[r#"{"permissions": {"allow": ["Bash(ls *)"], "deny": [], "ask": []}}"#],
     );
     assert_eq!(loaded.permissions.allow, vec!["Bash(ls *)"]);
+}
+
+// ─── Codex TOML settings ─────────────────────────────────────────────────────
+
+#[skuld::test]
+fn codex_settings_merge_system_user_and_trusted_project_layers() {
+    let loaded = load_codex_settings_from_contents(
+        Some(
+            r#"
+            [scriptcheck.permissions]
+            allow = ["Bash(system-allow *)"]
+            deny = ["Bash(system-deny *)"]
+            "#,
+        ),
+        Some(
+            r#"
+            project_root_markers = [".git", ".jj"]
+
+            [projects."/repo"]
+            trust_level = "trusted"
+
+            [scriptcheck.permissions]
+            allow = ["Bash(user-allow *)"]
+            ask = ["Bash(user-ask *)"]
+            additional_directories = ["/user/dir"]
+            "#,
+        ),
+        &[
+            CodexConfigLayer {
+                path: "/repo/.codex/config.toml",
+                content: r#"
+                    [scriptcheck.permissions]
+                    allow = ["Bash(root-allow *)"]
+                "#,
+            },
+            CodexConfigLayer {
+                path: "/repo/apps/.codex/config.toml",
+                content: r#"
+                    [scriptcheck.permissions]
+                    deny = ["Bash(app-deny *)"]
+                    ask = ["Bash(app-ask *)"]
+                    additional_directories = ["/app/dir"]
+                "#,
+            },
+        ],
+        "/repo/apps",
+    );
+
+    assert_eq!(
+        loaded.permissions.allow,
+        vec![
+            "Bash(system-allow *)",
+            "Bash(user-allow *)",
+            "Bash(root-allow *)",
+        ]
+    );
+    assert_eq!(
+        loaded.permissions.deny,
+        vec!["Bash(system-deny *)", "Bash(app-deny *)"]
+    );
+    assert_eq!(
+        loaded.permissions.ask,
+        vec!["Bash(user-ask *)", "Bash(app-ask *)"]
+    );
+    assert_eq!(
+        loaded.permissions.additional_directories,
+        vec!["/user/dir", "/app/dir"]
+    );
+}
+
+#[skuld::test]
+fn codex_settings_skip_untrusted_project_layers() {
+    let loaded = load_codex_settings_from_contents(
+        None,
+        Some(
+            r#"
+            [projects."/repo"]
+            trust_level = "untrusted"
+
+            [scriptcheck.permissions]
+            allow = ["Bash(user-allow *)"]
+            "#,
+        ),
+        &[CodexConfigLayer {
+            path: "/repo/.codex/config.toml",
+            content: r#"
+                [scriptcheck.permissions]
+                allow = ["Bash(project-allow *)"]
+                deny = ["Bash(project-deny *)"]
+            "#,
+        }],
+        "/repo",
+    );
+
+    assert_eq!(loaded.permissions.allow, vec!["Bash(user-allow *)"]);
+    assert!(loaded.permissions.deny.is_empty());
+}
+
+#[skuld::test]
+fn codex_settings_trust_lookup_matches_canonicalized_project_paths() {
+    let temp = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-codex-trust-canonical-{}",
+        std::process::id()
+    ));
+    let repo = temp.join("repo");
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+
+    let repo_display = claude_scriptcheck::path_util::normalize_separators(&repo.to_string_lossy());
+    let repo_canonical = claude_scriptcheck::path_util::normalize_separators(
+        &std::fs::canonicalize(&repo).unwrap().to_string_lossy(),
+    );
+
+    let loaded = load_codex_settings_from_contents(
+        None,
+        Some(&format!(
+            r#"
+            [projects."{repo_display}"]
+            trust_level = "trusted"
+            "#
+        )),
+        &[CodexConfigLayer {
+            path: &format!("{repo_canonical}/.codex/config.toml"),
+            content: r#"
+                [scriptcheck.permissions]
+                allow = ["Bash(project-allow *)"]
+            "#,
+        }],
+        &repo_canonical,
+    );
+
+    assert_eq!(loaded.permissions.allow, vec!["Bash(project-allow *)"]);
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[skuld::test]
+fn codex_project_root_uses_configured_markers() {
+    let root = find_codex_project_root_from_paths(
+        "/repo/work/service/src",
+        &["/repo/.jj", "/repo/work/.codex/config.toml"],
+        &[".git".to_string(), ".jj".to_string()],
+    );
+    assert_eq!(root.as_deref(), Some("/repo"));
+}
+
+#[skuld::test]
+fn codex_project_root_markers_empty_uses_cwd() {
+    let root = find_codex_project_root_from_paths("/repo/work/service", &[], &[]);
+    assert_eq!(root.as_deref(), Some("/repo/work/service"));
+}
+
+#[skuld::test]
+fn install_codex_hooks_into_toml_adds_matchers_and_enables_features_hooks() {
+    let output = install_codex_hooks_into_toml(
+        r#"# top comment
+[features]
+other = true
+"#,
+        "/tmp/claude-scriptcheck --agent codex",
+        false,
+    )
+    .unwrap();
+
+    assert!(output.contains("# top comment"));
+    assert!(output.contains("[features]"));
+    assert!(output.contains("other = true"));
+    assert!(output.contains("hooks = true"));
+    assert!(output.contains("matcher = \"^Bash$\""));
+    assert!(output.contains("matcher = \"^apply_patch$\""));
+    assert_eq!(output.matches("type = \"command\"").count(), 2);
+    assert_eq!(
+        output
+            .matches("command = \"/tmp/claude-scriptcheck --agent codex\"")
+            .count(),
+        2
+    );
+}
+
+#[skuld::test]
+fn install_codex_hooks_into_toml_preserves_foreign_hooks_and_non_command_handlers() {
+    let input = r#"# lead
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/usr/bin/other-hook"
+
+[[hooks.PreToolUse.hooks]]
+type = "webhook"
+url = "https://example.test/hook"
+
+[hooks.state]
+keep = "yes"
+"#;
+
+    let output =
+        install_codex_hooks_into_toml(input, "/tmp/claude-scriptcheck --agent=codex", false)
+            .unwrap();
+
+    assert!(output.contains("# lead"));
+    assert!(output.contains("command = \"/usr/bin/other-hook\""));
+    assert!(output.contains("type = \"webhook\""));
+    assert!(output.contains("url = \"https://example.test/hook\""));
+    assert!(output.contains("[hooks.state]"));
+    assert!(output.contains("keep = \"yes\""));
+    assert!(output.contains("matcher = \"^Bash$\""));
+    assert!(output.contains("matcher = \"^apply_patch$\""));
+    assert_eq!(
+        output
+            .matches("command = \"/tmp/claude-scriptcheck --agent=codex\"")
+            .count(),
+        2
+    );
+}
+
+#[skuld::test]
+fn install_codex_hooks_into_toml_replaces_owned_bare_handler_instead_of_duplicating() {
+    let input = r#"[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "claude-scriptcheck --agent codex"
+"#;
+
+    let output =
+        install_codex_hooks_into_toml(input, "/new/path/claude-scriptcheck --agent codex", false)
+            .unwrap();
+
+    assert!(!output.contains(r#"command = "claude-scriptcheck --agent codex""#));
+    assert_eq!(
+        output
+            .matches("command = \"/new/path/claude-scriptcheck --agent codex\"")
+            .count(),
+        2
+    );
+}
+
+#[skuld::test]
+fn install_codex_hooks_into_toml_preserves_foreign_scriptcheck_binary_paths() {
+    let input = r#"[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/foreign/bin/claude-scriptcheck --agent codex"
+"#;
+
+    let output =
+        install_codex_hooks_into_toml(input, "/owned/bin/claude-scriptcheck --agent codex", false)
+            .unwrap();
+
+    assert!(output.contains(r#"command = "/foreign/bin/claude-scriptcheck --agent codex""#));
+    assert!(output.contains(r#"command = "/owned/bin/claude-scriptcheck --agent codex""#));
+}
+
+#[skuld::test]
+fn install_codex_hooks_into_toml_is_idempotent() {
+    let once =
+        install_codex_hooks_into_toml("", "/tmp/claude-scriptcheck --agent codex", false).unwrap();
+    let twice =
+        install_codex_hooks_into_toml(&once, "/tmp/claude-scriptcheck --agent codex", false)
+            .unwrap();
+
+    assert_eq!(twice, once);
+}
+
+#[skuld::test]
+fn install_codex_hooks_into_toml_fails_when_hooks_json_exists() {
+    let error = install_codex_hooks_into_toml("", "/tmp/claude-scriptcheck --agent codex", true)
+        .unwrap_err();
+
+    assert_eq!(error, CodexTomlMutationError::HooksJsonExists);
+}
+
+#[skuld::test]
+fn install_codex_hooks_into_toml_rejects_legacy_command_without_codex_agent() {
+    let error = install_codex_hooks_into_toml("", "/tmp/claude-scriptcheck", false).unwrap_err();
+
+    assert_eq!(error, CodexTomlMutationError::InvalidInstallCommand);
+}
+
+#[skuld::test]
+fn install_codex_hooks_into_toml_rejects_command_with_extra_args() {
+    let error =
+        install_codex_hooks_into_toml("", "/tmp/claude-scriptcheck --agent codex --verbose", false)
+            .unwrap_err();
+
+    assert_eq!(error, CodexTomlMutationError::InvalidInstallCommand);
+}
+
+#[skuld::test]
+fn install_codex_hooks_into_toml_fails_when_features_is_not_a_table() {
+    let error = install_codex_hooks_into_toml(
+        r#"features = "broken""#,
+        "/tmp/claude-scriptcheck --agent codex",
+        false,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error,
+        CodexTomlMutationError::UnexpectedTomlType("features".to_string())
+    );
+}
+
+#[skuld::test]
+fn install_codex_hooks_into_toml_fails_when_hooks_is_not_a_table() {
+    let error = install_codex_hooks_into_toml(
+        r#"hooks = "broken""#,
+        "/tmp/claude-scriptcheck --agent codex",
+        false,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error,
+        CodexTomlMutationError::UnexpectedTomlType("hooks".to_string())
+    );
+}
+
+#[skuld::test]
+fn install_codex_hooks_into_toml_fails_when_pretooluse_is_not_an_array() {
+    let error = install_codex_hooks_into_toml(
+        r#"[hooks]
+PreToolUse = "broken"
+"#,
+        "/tmp/claude-scriptcheck --agent codex",
+        false,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error,
+        CodexTomlMutationError::UnexpectedTomlType("hooks.PreToolUse".to_string())
+    );
+}
+
+#[skuld::test]
+fn uninstall_codex_hooks_from_toml_removes_only_owned_codex_handlers() {
+    let input = r#"[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/tmp/claude-scriptcheck --agent codex"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/tmp/claude-scriptcheck"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/usr/bin/other-hook"
+
+[[hooks.PreToolUse.hooks]]
+type = "webhook"
+url = "https://example.test/hook"
+
+[[hooks.PreToolUse]]
+matcher = "^apply_patch$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/tmp/claude-scriptcheck --agent=codex"
+
+[hooks.state]
+keep = "yes"
+"#;
+
+    let output = uninstall_codex_hooks_from_toml(input, "/tmp/claude-scriptcheck", false).unwrap();
+
+    assert!(!output.contains("/tmp/claude-scriptcheck --agent codex"));
+    assert!(!output.contains("/tmp/claude-scriptcheck --agent=codex"));
+    assert!(output.contains("command = \"/tmp/claude-scriptcheck\""));
+    assert!(output.contains("command = \"/usr/bin/other-hook\""));
+    assert!(output.contains("type = \"webhook\""));
+    assert!(output.contains("[hooks.state]"));
+    assert!(output.contains("keep = \"yes\""));
+}
+
+#[skuld::test]
+fn uninstall_codex_hooks_from_toml_removes_empty_matcher_entries_only() {
+    let input = r#"[[hooks.PreToolUse]]
+matcher = "^apply_patch$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/tmp/claude-scriptcheck --agent codex"
+
+[hooks.state]
+keep = "yes"
+"#;
+
+    let output = uninstall_codex_hooks_from_toml(input, "/tmp/claude-scriptcheck", false).unwrap();
+
+    assert!(!output.contains("matcher = \"^apply_patch$\""));
+    assert!(output.contains("[hooks.state]"));
+    assert!(output.contains("keep = \"yes\""));
+}
+
+#[skuld::test]
+fn uninstall_codex_hooks_from_toml_preserves_foreign_scriptcheck_binary_paths() {
+    let input = r#"[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/foreign/bin/claude-scriptcheck --agent codex"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/owned/bin/claude-scriptcheck --agent codex"
+"#;
+
+    let output =
+        uninstall_codex_hooks_from_toml(input, "/owned/bin/claude-scriptcheck", false).unwrap();
+
+    assert!(output.contains(r#"command = "/foreign/bin/claude-scriptcheck --agent codex""#));
+    assert!(!output.contains(r#"command = "/owned/bin/claude-scriptcheck --agent codex""#));
+}
+
+#[skuld::test]
+fn uninstall_codex_hooks_from_toml_is_idempotent() {
+    let once = uninstall_codex_hooks_from_toml(
+        r#"[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/tmp/claude-scriptcheck --agent codex"
+"#,
+        "/tmp/claude-scriptcheck",
+        false,
+    )
+    .unwrap();
+    let twice = uninstall_codex_hooks_from_toml(&once, "/tmp/claude-scriptcheck", false).unwrap();
+
+    assert_eq!(twice, once);
+}
+
+#[skuld::test]
+fn uninstall_codex_hooks_from_toml_fails_when_hooks_json_exists() {
+    let error = uninstall_codex_hooks_from_toml("", "/tmp/claude-scriptcheck", true).unwrap_err();
+
+    assert_eq!(error, CodexTomlMutationError::HooksJsonExists);
 }
 
 // ─── additionalDirectories ───────────────────────────────────────────────────

@@ -263,6 +263,15 @@ pub fn load_perms(
     permission_mode: Option<PermissionMode>,
 ) -> ParsedPermissions {
     let loaded = settings::load_settings(cwd, project_root);
+    load_perms_from_settings(loaded, cwd, project_root, permission_mode)
+}
+
+pub fn load_perms_from_settings(
+    loaded: settings::LoadedSettings,
+    cwd: &str,
+    project_root: &str,
+    permission_mode: Option<PermissionMode>,
+) -> ParsedPermissions {
     let mut parsed = parse_rules(&loaded.permissions, cwd, project_root);
 
     if permission_mode == Some(PermissionMode::AcceptEdits) {

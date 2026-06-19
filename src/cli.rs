@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::process;
 
+use crate::canonicalize::best_effort_canonicalize;
 use crate::permission_mode::PermissionMode;
 use crate::{checker, logging, path_util, permission};
-
-const HOOK_ENTRY_MARKER: &str = "claude-scriptcheck";
+use thaum::ast::{Command as ShellCommand, Expression};
 
 /// Tool matchers that claude-scriptcheck handles. Each gets its own hook entry.
 pub const SUPPORTED_MATCHERS: &[&str] =
@@ -67,7 +67,6 @@ pub fn install(project: bool) {
 pub fn uninstall(project: bool) {
     let settings_path = settings_path(project);
     let binary_path = current_binary_path();
-
     let mut root = read_settings_json(&settings_path);
 
     let Some(hooks) = root.get_mut("hooks").and_then(|h| h.as_object_mut()) else {
@@ -80,11 +79,34 @@ pub fn uninstall(project: bool) {
         return;
     };
 
-    let before = pre_tool_use.len();
-    pre_tool_use.retain(|entry| !entry_matches(entry, &binary_path));
-    let after = pre_tool_use.len();
+    let mut removed_any = false;
+    for entry in pre_tool_use.iter_mut() {
+        let Some(matcher) = entry.get("matcher").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        if !SUPPORTED_MATCHERS.contains(&matcher) {
+            continue;
+        }
 
-    if before == after {
+        let Some(entry_hooks) = entry
+            .get_mut("hooks")
+            .and_then(|value| value.as_array_mut())
+        else {
+            continue;
+        };
+
+        let before = entry_hooks.len();
+        entry_hooks.retain(|hook| !hook_is_claude_owned(hook, &binary_path));
+        removed_any |= entry_hooks.len() != before;
+    }
+    pre_tool_use.retain(|entry| {
+        entry
+            .get("hooks")
+            .and_then(|value| value.as_array())
+            .is_none_or(|hooks| !hooks.is_empty())
+    });
+
+    if !removed_any {
         eprintln!("Hook was not installed in {}", settings_path.display());
         return;
     }
@@ -549,7 +571,7 @@ fn settings_path(project: bool) -> PathBuf {
 /// If argv[0] is a bare command name (no path separators), returns it as-is
 /// so that settings.json uses PATH lookup — making it portable across machines.
 /// Otherwise falls back to `current_exe()` for a resolved absolute path.
-fn current_binary_path() -> String {
+pub fn current_binary_path() -> String {
     match std::env::args().next() {
         // Bare command name (no path separators) → PATH lookup, keep as-is
         Some(argv0) if !argv0.is_empty() && !argv0.contains('/') && !argv0.contains('\\') => argv0,
@@ -559,6 +581,29 @@ fn current_binary_path() -> String {
             .to_string_lossy()
             .to_string(),
     }
+}
+
+pub fn scriptcheck_arg0_is_owned(arg0: &str) -> bool {
+    let normalized_arg0 = path_util::normalize_separators(arg0);
+    owned_scriptcheck_targets()
+        .into_iter()
+        .any(|target| target == normalized_arg0)
+}
+
+fn owned_scriptcheck_targets() -> Vec<String> {
+    let mut targets = Vec::new();
+    if bare_scriptcheck_resolves_to_current_binary() {
+        targets.push("claude-scriptcheck".to_string());
+    }
+    targets.push(path_util::normalize_separators(&current_binary_path()));
+    if let Ok(current_exe) = std::env::current_exe() {
+        targets.push(path_util::normalize_separators(
+            &current_exe.to_string_lossy(),
+        ));
+    }
+    targets.sort();
+    targets.dedup();
+    targets
 }
 
 fn read_settings_json(path: &Path) -> serde_json::Value {
@@ -591,13 +636,10 @@ fn write_settings_json(path: &Path, value: &serde_json::Value) {
 }
 
 fn entry_matches(entry: &serde_json::Value, binary_path: &str) -> bool {
-    // Match by checking if any hook command contains our binary path or marker
     if let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
         for hook in hooks {
-            if let Some(cmd) = hook.get("command").and_then(|c| c.as_str()) {
-                if cmd == binary_path || cmd.contains(HOOK_ENTRY_MARKER) {
-                    return true;
-                }
+            if hook_is_claude_owned(hook, binary_path) {
+                return true;
             }
         }
     }
@@ -617,6 +659,128 @@ pub fn is_installed_for(
             .is_some_and(|m| m == matcher);
         matcher_matches && entry_matches(entry, binary_path)
     })
+}
+
+fn hook_is_claude_owned(hook: &serde_json::Value, binary_path: &str) -> bool {
+    if hook.get("type").and_then(|value| value.as_str()) != Some("command") {
+        return false;
+    }
+
+    hook.get("command")
+        .and_then(|value| value.as_str())
+        .and_then(|command| classify_hook_command(command, binary_path))
+        .is_some_and(|kind| matches!(kind, HookCommandKind::Legacy | HookCommandKind::Claude))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HookCommandKind {
+    Legacy,
+    Claude,
+    Codex,
+    Invalid,
+}
+
+pub(crate) fn classify_hook_command(command: &str, binary_path: &str) -> Option<HookCommandKind> {
+    let program = thaum::parse_with(command, thaum::Dialect::Bash).ok()?;
+    if program.statements.len() != 1 {
+        return None;
+    }
+
+    let Expression::Command(ShellCommand {
+        assignments,
+        arguments,
+        redirects,
+        ..
+    }) = &program.statements[0].expression
+    else {
+        return None;
+    };
+
+    if !assignments.is_empty() || !redirects.is_empty() {
+        return None;
+    }
+
+    let arguments: Vec<String> = arguments
+        .iter()
+        .map(|arg| arg.try_to_static_string())
+        .collect::<Option<_>>()?;
+    let arg0 = arguments.first()?;
+    if !scriptcheck_arg0_matches_binary(arg0, binary_path) {
+        return None;
+    }
+
+    Some(parse_hook_command_kind(&arguments))
+}
+
+fn scriptcheck_arg0_matches_binary(arg0: &str, binary_path: &str) -> bool {
+    let normalized_arg0 = path_util::normalize_separators(arg0);
+    owned_scriptcheck_targets_for(binary_path)
+        .into_iter()
+        .any(|target| target == normalized_arg0)
+}
+
+fn owned_scriptcheck_targets_for(binary_path: &str) -> Vec<String> {
+    let mut targets = Vec::new();
+    if bare_scriptcheck_resolves_to_current_binary() {
+        targets.push("claude-scriptcheck".to_string());
+    }
+    targets.push(path_util::normalize_separators(binary_path));
+    if let Ok(current_exe) = std::env::current_exe() {
+        targets.push(path_util::normalize_separators(
+            &current_exe.to_string_lossy(),
+        ));
+    }
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
+fn bare_scriptcheck_resolves_to_current_binary() -> bool {
+    let Ok(resolved) = which::which("claude-scriptcheck") else {
+        return false;
+    };
+    let Ok(current_exe) = std::env::current_exe() else {
+        return false;
+    };
+    best_effort_canonicalize(&resolved.to_string_lossy())
+        == best_effort_canonicalize(&current_exe.to_string_lossy())
+}
+
+fn parse_hook_command_kind(arguments: &[String]) -> HookCommandKind {
+    let mut agents = Vec::new();
+    let mut index = 1;
+    while index < arguments.len() {
+        let value = &arguments[index];
+        if value == "--agent" {
+            let Some(next_value) = arguments.get(index + 1) else {
+                return HookCommandKind::Invalid;
+            };
+            if next_value.starts_with('-') {
+                return HookCommandKind::Invalid;
+            }
+            agents.push(next_value.as_str());
+            index += 2;
+            continue;
+        }
+
+        if let Some(value) = value.strip_prefix("--agent=") {
+            if value.is_empty() {
+                return HookCommandKind::Invalid;
+            }
+            agents.push(value);
+            index += 1;
+            continue;
+        }
+
+        return HookCommandKind::Invalid;
+    }
+
+    match agents.as_slice() {
+        [] => HookCommandKind::Legacy,
+        ["claude"] => HookCommandKind::Claude,
+        ["codex"] => HookCommandKind::Codex,
+        [_] | [_, ..] => HookCommandKind::Invalid,
+    }
 }
 
 // Verdict filtering ===================================================================================================

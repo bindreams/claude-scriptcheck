@@ -1,6 +1,6 @@
 # claude-scriptcheck
 
-AST-aware Bash permission checker for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) hooks.
+AST-aware Bash permission checker for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and Codex hooks.
 
 Instead of relying on simple prefix matching, claude-scriptcheck **parses** every
 Bash command into an AST (using [thaum](https://github.com/bindreams/thaum)), walks it,
@@ -21,16 +21,22 @@ Otherwise: **ask** the user, and log the missing rules for later review.
 # Install from GitHub (requires Rust toolchain)
 cargo install --git https://github.com/bindreams/claude-scriptcheck.git
 
-# Register the hook in your Claude settings
-claude-scriptcheck install
+# Register the hook in Claude settings
+claude-scriptcheck install claude
 
-# That's it — the hook runs automatically on every Bash, Monitor, Read, Write, Edit, Grep, and Glob tool call.
+# Register the hook in Codex config.toml
+claude-scriptcheck install codex
+
+# Hook mode is explicit
+claude-scriptcheck --agent claude
+claude-scriptcheck --agent codex
 ```
 
 To update later, run the same `cargo install` command again. To remove:
 
 ```sh
-claude-scriptcheck uninstall
+claude-scriptcheck uninstall claude
+claude-scriptcheck uninstall codex
 cargo uninstall claude-scriptcheck
 ```
 
@@ -60,13 +66,10 @@ landing in `main`.
 
 ## How it works
 
-claude-scriptcheck registers itself as a
-[pre-tool-use hook](https://docs.anthropic.com/en/docs/claude-code/hooks)
-for the `Bash`, `Monitor`, `Read`, `Write`, `Edit`, `Grep`, and `Glob` tools.
-Claude Code invokes it before every matching tool call, passing JSON on stdin
-and reading a permission decision from stdout. The `Monitor` tool's `command`
-field is parsed and analyzed identically to `Bash` — the same `Bash(...)` rules
-govern both.
+claude-scriptcheck registers itself as a pre-tool hook for each supported agent.
+Claude uses the existing `Bash`, `Monitor`, `Read`, `Write`, `Edit`, `Grep`, and
+`Glob` tool surface. Codex currently uses `PreToolUse` for `Bash` and
+`apply_patch`.
 
 ```
 ┌─────────────┐  JSON stdin    ┌─────────────────────┐  JSON stdout   ┌─────────────┐
@@ -117,40 +120,50 @@ The checker recurses through the full AST:
 
 ## CLI reference
 
-When invoked **without a subcommand**, claude-scriptcheck runs in hook mode
-(reads JSON from stdin, writes JSON to stdout). The subcommands are for
-management and debugging:
+Hook mode always requires an explicit top-level agent flag:
+
+```sh
+claude-scriptcheck --agent claude
+claude-scriptcheck --agent codex
+```
+
+Management and dry-run commands use a positional agent selector:
 
 ### `install` / `uninstall`
 
 ```sh
-# Install to global settings (~/.claude/settings.json)
-claude-scriptcheck install
+# Install to global Claude settings (~/.claude/settings.json)
+claude-scriptcheck install claude
 
-# Install to project-level settings (.claude/settings.json)
-claude-scriptcheck install --project
+# Install to global Codex settings (~/.codex/config.toml or $CODEX_HOME/config.toml)
+claude-scriptcheck install codex
 
-# Remove the hook
-claude-scriptcheck uninstall
+# Install to project-level settings
+claude-scriptcheck install claude --project
+claude-scriptcheck install codex --project
+
+# Remove hooks
+claude-scriptcheck uninstall claude
+claude-scriptcheck uninstall codex
 ```
 
 ### `check`
 
-Manually test a command against your current rules without running Claude Code:
+Manually test a command against the selected agent's current rules:
 
 ```sh
-claude-scriptcheck check "ls -la /tmp"
+claude-scriptcheck check claude "ls -la /tmp"
 # ALLOW: All commands and file accesses are permitted
 
-claude-scriptcheck check "rm -rf /"
+claude-scriptcheck check codex "rm -rf /"
 # ASK: Missing permission rules:
 #   - Bash(rm -rf /)
 #   - Write(/)
 
-claude-scriptcheck check "echo hello > /tmp/claude/out.txt"
+claude-scriptcheck check claude "echo hello > /tmp/claude/out.txt"
 # ALLOW: All commands and file accesses are permitted
 
-claude-scriptcheck check --cwd /some/project "cat src/main.rs"
+claude-scriptcheck check codex --cwd /some/project "cat src/main.rs"
 # (checks against /some/project's settings too)
 ```
 
@@ -176,7 +189,7 @@ to your settings.
 
 ## Settings format
 
-claude-scriptcheck reads rules from `~/.claude/settings.json` (global) and
+Claude rules are read from `~/.claude/settings.json` (global) and
 `.claude/settings.json` (project-level), merging both:
 
 ```jsonc
@@ -200,6 +213,19 @@ claude-scriptcheck reads rules from `~/.claude/settings.json` (global) and
   }
 }
 ```
+
+Codex rules live in `config.toml` under `[scriptcheck.permissions]`:
+
+```toml
+[scriptcheck.permissions]
+allow = ["Bash(ls *)", "Write(/tmp/claude/**)"]
+deny = ["Bash(rm -rf /)"]
+ask = ["Bash(curl *)"]
+```
+
+Codex hook installation writes inline `[[hooks.PreToolUse]]` entries into the
+target `config.toml`. It refuses to modify that layer if a sibling `hooks.json`
+already exists, so one Codex layer has exactly one hook representation.
 
 ## Well-known commands
 
