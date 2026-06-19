@@ -430,7 +430,13 @@ fn codex_apply_patch_with_write_rule_allows() {
     std::fs::create_dir_all(&codex_home).unwrap();
     std::fs::create_dir_all(&cwd).unwrap();
     let canonical_cwd = std::fs::canonicalize(&cwd).unwrap();
-    let allowed_path = format!("{}/src/demo.rs", canonical_cwd.to_string_lossy());
+    // Forward-slash the path: this rule lives in a TOML *basic* string, where a
+    // Windows `\\?\C:\…` path would be mangled as escape sequences. Codex config
+    // paths likewise use forward slashes (or TOML literal strings).
+    let allowed_path = format!(
+        "{}/src/demo.rs",
+        canonical_cwd.to_string_lossy().replace('\\', "/")
+    );
     std::fs::write(
         codex_home.join("config.toml"),
         format!(
