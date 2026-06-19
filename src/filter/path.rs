@@ -50,7 +50,7 @@ impl EditFilter {
 
 impl PathFilter for ReadFilter {
     fn matches(&self, path: &str) -> bool {
-        glob_match::glob_match(&self.0, path)
+        path_util::glob_match_for_platform(&self.0, path)
     }
     fn pattern(&self) -> &str {
         &self.0
@@ -59,7 +59,7 @@ impl PathFilter for ReadFilter {
 
 impl PathFilter for WriteFilter {
     fn matches(&self, path: &str) -> bool {
-        glob_match::glob_match(&self.0, path)
+        path_util::glob_match_for_platform(&self.0, path)
     }
     fn pattern(&self) -> &str {
         &self.0
@@ -68,7 +68,7 @@ impl PathFilter for WriteFilter {
 
 impl PathFilter for EditFilter {
     fn matches(&self, path: &str) -> bool {
-        glob_match::glob_match(&self.0, path)
+        path_util::glob_match_for_platform(&self.0, path)
     }
     fn pattern(&self) -> &str {
         &self.0

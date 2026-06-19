@@ -35,10 +35,57 @@ pub fn is_absolute(path: &str) -> bool {
 /// Normalize path separators for internal use.
 ///
 /// - Replaces all `\` with `/`.
+/// - Maps the Windows verbatim UNC prefix (`\\?\UNC\server\share` → `//?/UNC/...`)
+///   back to the plain UNC form `//server/share`.
 /// - Strips the Windows extended-length prefix (`\\?\` → after normalization `//?/`).
 pub fn normalize_separators(path: &str) -> String {
     let s = path.replace('\\', "/");
+    if let Some(rest) = s.strip_prefix("//?/UNC/") {
+        return format!("//{rest}");
+    }
     s.strip_prefix("//?/").unwrap_or(&s).to_string()
+}
+
+/// Compare two path strings for equality with platform filesystem semantics:
+/// case-insensitive on Windows, case-sensitive elsewhere. Mirrors the
+/// `#[cfg(windows)]` comparison used for command names in `filter/bash.rs`.
+#[cfg(windows)]
+pub fn paths_equal_for_platform(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
+#[cfg(not(windows))]
+pub fn paths_equal_for_platform(a: &str, b: &str) -> bool {
+    a == b
+}
+
+/// Produce a comparison key for a path: separators normalized, and lowercased
+/// on Windows (case-insensitive filesystem) but left as-is on Unix. Mirrors
+/// Codex's `normalize_project_trust_lookup_key`.
+pub fn normalize_path_key(path: &str) -> String {
+    let normalized = normalize_separators(path);
+    #[cfg(windows)]
+    {
+        normalized.to_ascii_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        normalized
+    }
+}
+
+/// Glob-match a path against a pattern with platform filesystem semantics:
+/// case-insensitive on Windows, case-sensitive elsewhere. Both pattern and
+/// path are assumed already separator-normalized (canonical forward-slash).
+pub fn glob_match_for_platform(pattern: &str, path: &str) -> bool {
+    #[cfg(windows)]
+    {
+        glob_match::glob_match(&pattern.to_ascii_lowercase(), &path.to_ascii_lowercase())
+    }
+    #[cfg(not(windows))]
+    {
+        glob_match::glob_match(pattern, path)
+    }
 }
 
 /// Returns true if `path` refers to an entire filesystem root.
@@ -121,5 +168,61 @@ mod tests {
         assert_eq!(strip_pathext_suffix("foo.jse"), "foo");
         // `.js` also matches.
         assert_eq!(strip_pathext_suffix("foo.js"), "foo");
+    }
+
+    #[test]
+    fn normalize_separators_strips_verbatim_prefix() {
+        assert_eq!(normalize_separators(r"\\?\C:\foo\bar"), "C:/foo/bar");
+    }
+
+    #[test]
+    fn normalize_separators_maps_verbatim_unc_to_plain_unc() {
+        assert_eq!(
+            normalize_separators(r"\\?\UNC\server\share\dir"),
+            "//server/share/dir"
+        );
+    }
+
+    #[test]
+    fn normalize_separators_preserves_plain_unc() {
+        assert_eq!(normalize_separators(r"\\server\share"), "//server/share");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn paths_equal_case_sensitive_on_unix() {
+        assert!(paths_equal_for_platform("/a/b", "/a/b"));
+        assert!(!paths_equal_for_platform("/a/b", "/A/B"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn paths_equal_case_insensitive_on_windows() {
+        assert!(paths_equal_for_platform("C:/Foo", "c:/foo"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn normalize_path_key_preserves_case_on_unix() {
+        assert_eq!(normalize_path_key("/Foo/Bar"), "/Foo/Bar");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn normalize_path_key_lowercases_on_windows() {
+        assert_eq!(normalize_path_key(r"C:\Foo\Bar"), "c:/foo/bar");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn glob_match_case_sensitive_on_unix() {
+        assert!(glob_match_for_platform("/a/*.txt", "/a/x.txt"));
+        assert!(!glob_match_for_platform("/A/*.txt", "/a/x.txt"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn glob_match_case_insensitive_on_windows() {
+        assert!(glob_match_for_platform("C:/Repo/*.txt", "c:/repo/x.TXT"));
     }
 }
