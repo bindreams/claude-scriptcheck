@@ -10,7 +10,7 @@ fn w(paths: &[&str]) -> Vec<String> {
     paths.iter().map(|s| s.to_string()).collect()
 }
 
-// Read-only subcommands =====
+// Read-only subcommands ===============================================================================================
 
 #[skuld::test]
 fn status_is_read_only() {
@@ -108,7 +108,7 @@ fn grep_is_read_only() {
     assert_eq!(result.file_only, Some(true));
 }
 
-// Branch/tag listing =====
+// Branch/tag listing ==================================================================================================
 
 #[skuld::test]
 fn branch_no_args_is_read_only() {
@@ -159,7 +159,7 @@ fn tag_list_short_flag() {
     assert!(result.writes.is_empty());
 }
 
-// Remote =====
+// Remote ==============================================================================================================
 
 #[skuld::test]
 fn remote_no_args_is_read_only() {
@@ -210,7 +210,7 @@ fn remote_remove_is_network() {
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
 
-// Reflog / stash list =====
+// Reflog / stash list =================================================================================================
 
 #[skuld::test]
 fn reflog_no_args_is_read_only() {
@@ -238,7 +238,7 @@ fn stash_show_is_read_only() {
     assert_eq!(result.file_only, Some(true));
 }
 
-// Write .git only =====
+// Write .git only =====================================================================================================
 
 #[skuld::test]
 fn add_writes_git() {
@@ -400,7 +400,7 @@ fn notes_writes_git() {
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
 
-// Write working tree =====
+// Write working tree ==================================================================================================
 
 #[skuld::test]
 fn restore_dot() {
@@ -619,7 +619,7 @@ fn init_relative_dir() {
     assert_eq!(result.writes, w(&["/repo/subdir/.git"]));
 }
 
-// Network operations =====
+// Network operations ==================================================================================================
 
 #[skuld::test]
 fn fetch_writes_git_not_file_only() {
@@ -689,7 +689,7 @@ fn clone_no_dir() {
     assert_eq!(result.writes, w(&["/repo"]));
 }
 
-// Global option: -C =====
+// Global option: -C ===================================================================================================
 
 #[skuld::test]
 fn c_flag_adjusts_cwd() {
@@ -723,7 +723,7 @@ fn c_flag_chained() {
     assert_eq!(result.writes, w(&["/base/sub/.git"]));
 }
 
-// Global option: -c (config) =====
+// Global option: -c (config) ==========================================================================================
 
 #[skuld::test]
 fn c_config_forces_bash_rule() {
@@ -753,7 +753,7 @@ fn c_config_dangerous_key() {
     assert_eq!(result.file_only, None);
 }
 
-// Global option: --git-dir =====
+// Global option: --git-dir ============================================================================================
 
 #[skuld::test]
 fn git_dir_override() {
@@ -782,7 +782,7 @@ fn git_dir_with_read_only_cmd() {
     assert!(result.writes.is_empty());
 }
 
-// Global option: --work-tree =====
+// Global option: --work-tree ==========================================================================================
 
 #[skuld::test]
 fn work_tree_override() {
@@ -811,7 +811,7 @@ fn work_tree_and_git_dir() {
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
 
-// Unknown subcommand =====
+// Unknown subcommand ==================================================================================================
 
 #[skuld::test]
 fn unknown_subcommand_returns_empty() {
@@ -827,7 +827,7 @@ fn submodule_is_unknown() {
     assert_eq!(result.file_only, None);
 }
 
-// Edge cases =====
+// Edge cases ==========================================================================================================
 
 #[skuld::test]
 fn no_args_is_informational() {
@@ -869,7 +869,7 @@ fn cherry_pick_abort() {
     assert_eq!(result.writes, w(&["/repo/.git"]));
 }
 
-// Bug fix tests =====
+// Bug fix tests =======================================================================================================
 
 #[skuld::test]
 fn branch_verbose_with_name_creates() {
@@ -895,7 +895,7 @@ fn remote_unknown_subcommand_is_network() {
     assert_eq!(result.file_only, Some(false));
 }
 
-// Informational global flags =====
+// Informational global flags ==========================================================================================
 
 #[skuld::test]
 fn version_flag_is_read_only() {
@@ -970,7 +970,7 @@ fn dash_lowercase_c_overrides_informational() {
     assert_eq!(result.file_only, None);
 }
 
-// Worktree =====
+// Worktree ============================================================================================================
 
 #[skuld::test]
 fn worktree_bare_is_read_only() {
@@ -1105,7 +1105,7 @@ fn worktree_unknown_sub_sub_requires_bash_rule() {
     assert_eq!(result.file_only, None);
 }
 
-// Config =====
+// Config ==============================================================================================================
 
 #[skuld::test]
 fn config_bare_key_is_read() {
@@ -1245,7 +1245,7 @@ fn config_with_dash_lowercase_c_override_requires_bash_rule() {
     assert_eq!(result.file_only, None);
 }
 
-// Symbolic-ref =====
+// Symbolic-ref ========================================================================================================
 
 #[skuld::test]
 fn symbolic_ref_read_head() {
@@ -1331,7 +1331,7 @@ fn symbolic_ref_read_with_reason() {
     assert!(result.writes.is_empty());
 }
 
-// Bug regression tests =====
+// Bug regression tests ================================================================================================
 
 #[skuld::test]
 fn config_get_with_value_pattern_is_read() {
@@ -1496,7 +1496,7 @@ fn worktree_move_help_is_read_only() {
     assert!(result.writes.is_empty());
 }
 
-// Test gap fills =====
+// Test gap fills ======================================================================================================
 
 #[skuld::test]
 fn worktree_rm_alias() {
@@ -1648,7 +1648,7 @@ fn informational_version_then_dash_c() {
     assert_eq!(result.file_only, None);
 }
 
-// Second-round bug regression tests =====
+// Second-round bug regression tests ===================================================================================
 
 #[skuld::test]
 fn config_global_edit_requires_bash_rule() {

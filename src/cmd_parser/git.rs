@@ -88,7 +88,7 @@ impl CommandParser for GitParser {
         );
 
         match subcmd {
-            // Read-only subcommands -----
+            // Read-only subcommands -----------------------------------------------------------------------------------
             "status" | "log" | "show" | "blame" | "rev-parse" | "ls-files" | "ls-tree"
             | "shortlog" | "describe" | "name-rev" | "grep" | "cherry" | "range-diff"
             | "whatchanged" | "check-ignore" | "help" | "version" => Ok(ctx.read_only()),
@@ -103,13 +103,13 @@ impl CommandParser for GitParser {
             "symbolic-ref" => parse_symbolic_ref(&ctx, sub_args),
             "worktree" => parse_worktree(&ctx, sub_args),
 
-            // Write .git only -----
+            // Write .git only -----------------------------------------------------------------------------------------
             "add" | "commit" | "notes" => Ok(ctx.write_git()),
 
             "reset" => parse_reset(&ctx, sub_args),
             "rm" => parse_rm(&ctx, sub_args),
 
-            // Write working tree -----
+            // Write working tree --------------------------------------------------------------------------------------
             "restore" => parse_restore(&ctx, sub_args),
             "checkout" => parse_checkout(&ctx, sub_args),
             "switch" => Ok(ctx.write_worktree_and_git()),
@@ -121,7 +121,7 @@ impl CommandParser for GitParser {
             "apply" => parse_apply(&ctx, sub_args),
             "init" => parse_init(sub_args, cwd),
 
-            // Network operations -----
+            // Network operations --------------------------------------------------------------------------------------
             "fetch" => Ok(ctx.network_write_git()),
             "pull" => Ok(ctx.network_write_worktree_and_git()),
             "push" => Ok(CommandFileAccesses {
@@ -139,7 +139,7 @@ impl CommandParser for GitParser {
     }
 }
 
-// Global option parsing =====
+// Global option parsing ===============================================================================================
 
 /// Parsed global options.
 struct GlobalOptions<'a> {
@@ -300,7 +300,7 @@ fn parse_global_options<'a>(args: &'a [&'a str], cwd: &str) -> GlobalOptions<'a>
     }
 }
 
-// Subcommand parsers =====
+// Subcommand parsers ==================================================================================================
 
 fn parse_diff(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, String> {
     let mut i = 0;
@@ -638,7 +638,7 @@ fn parse_clone(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, S
     })
 }
 
-// Worktree =====
+// Worktree ============================================================================================================
 
 fn parse_worktree(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, String> {
     if args.is_empty() {
@@ -813,7 +813,7 @@ fn parse_worktree_move(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAcc
     }
 }
 
-// Config =====
+// Config ==============================================================================================================
 
 fn parse_config(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, String> {
     if args.is_empty() {
@@ -1041,7 +1041,7 @@ enum AccessIntent {
     Write,
 }
 
-// Symbolic-ref =====
+// Symbolic-ref ========================================================================================================
 
 fn parse_symbolic_ref(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, String> {
     let mut positionals: u32 = 0;

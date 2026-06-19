@@ -187,10 +187,10 @@ Implementation should be incremental rather than a rewrite.
 Recommended order:
 
 1. Introduce shared internal request and response types plus an explicit agent enum.
-2. Move current Claude hook behavior behind a Claude adapter without changing Claude semantics.
-3. Add Codex transport and configuration support through a Codex adapter.
-4. Refactor install and uninstall code to dispatch through agent-specific installers.
-5. Tighten CLI parsing around explicit agent selection.
+1. Move current Claude hook behavior behind a Claude adapter without changing Claude semantics.
+1. Add Codex transport and configuration support through a Codex adapter.
+1. Refactor install and uninstall code to dispatch through agent-specific installers.
+1. Tighten CLI parsing around explicit agent selection.
 
 At each step, tests should prove that the existing Claude path still behaves the same unless the test intentionally covers new agent behavior.
 

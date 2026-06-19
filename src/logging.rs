@@ -133,7 +133,7 @@ fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
     (y, m, d)
 }
 
-// Parsing helpers =====
+// Parsing helpers =====================================================================================================
 
 /// Minimal struct to extract the verdict field from a log entry.
 #[derive(Deserialize)]
@@ -191,7 +191,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    // yaml_serde output format -----
+    // yaml_serde output format ----------------------------------------------------------------------------------------
 
     #[test]
     fn yaml_serde_output_format() {
@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(extract_verdict(docs[1]), Some("deny".into()));
     }
 
-    // split_documents tests -----
+    // split_documents tests -------------------------------------------------------------------------------------------
 
     #[test]
     fn split_empty() {
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(docs.len(), 1);
     }
 
-    // extract_verdict tests -----
+    // extract_verdict tests -------------------------------------------------------------------------------------------
 
     #[test]
     fn extract_verdict_allow() {

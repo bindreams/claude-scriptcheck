@@ -1,6 +1,6 @@
 use super::{get_parser, normalize_cmd_name, resolve, CommandFileAccesses, CommandParser};
 
-// uv run flags =====
+// uv run flags ========================================================================================================
 
 const UV_RUN_VALUE_FLAGS: &[&str] = &[
     "--with",
@@ -22,7 +22,7 @@ const UV_RUN_BOOL_FLAGS: &[&str] = &[
     "--no-group",
 ];
 
-// UvParser =====
+// UvParser ============================================================================================================
 
 pub struct UvParser;
 
