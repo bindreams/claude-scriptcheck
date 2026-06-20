@@ -12,7 +12,7 @@ id = "no-llm-author-test"
 name = "Test hook \"no-llm-author\""
 entry = "python -m pytest scripts/check-no-llm-author.py -q --tb=short --no-header"
 language = "python"
-additional_dependencies = ["pytest==9.0.3"]
+additional_dependencies = ["pytest==9.1.0"]
 pass_filenames = false
 always_run = true
 
@@ -35,7 +35,7 @@ id = "format-section-comments-test"
 name = "Test hook \"format-section-comments\""
 entry = "python -m pytest scripts/format-section-comments.py -q --tb=short --no-header"
 language = "python"
-additional_dependencies = ["pytest==9.0.3"]
+additional_dependencies = ["pytest==9.1.0"]
 pass_filenames = false
 always_run = true
 
