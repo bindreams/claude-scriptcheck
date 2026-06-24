@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
         with:
@@ -48,7 +48,7 @@ jobs:
           - { platform: linux/arm64, runner: ubuntu-24.04-arm }
           - { platform: darwin/arm64, runner: macos-latest }
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/setup-rust
 
