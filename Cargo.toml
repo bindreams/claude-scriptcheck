@@ -23,7 +23,7 @@ tempfile = "3"
 
 [dev-dependencies]
 json5 = "1.0"
-jsonschema = "0.46"
+jsonschema = "0.47"
 toml = "1.0"
 
 [[test]]
