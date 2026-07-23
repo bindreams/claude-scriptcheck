@@ -27,7 +27,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
 
       - name: Install prek
-        run: uv tool install "prek==0.4.9"
+        run: uv tool install "prek==0.4.10"
 
       - name: Install taplo
         run: cargo install --locked taplo-cli --version 0.10.0
