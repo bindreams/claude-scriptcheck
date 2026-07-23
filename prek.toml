@@ -75,7 +75,7 @@ name = "prettier data files"
 entry = "prettier --check"
 language = "node"
 files = "\\.(json|json5|ya?ml)$"
-additional_dependencies = ["prettier@3.5.3"]
+additional_dependencies = ["prettier@3.9.5"]
 
 # External hooks =======================================================================================================
 
