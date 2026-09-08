@@ -217,12 +217,13 @@ impl PermissionChecker<'_> {
             return;
         }
 
-        // Extract argument literals
-        let arg_literals: Vec<Option<String>> = cmd
-            .arguments
-            .iter()
-            .map(|a| a.try_to_static_string())
-            .collect();
+        // Two views of the same argument list, deliberately kept separate.
+        //
+        // `args` is every argument, with unresolvable ones carrying a rendering
+        // of the word. It drives file-access analysis, which must see past an
+        // unresolvable argument rather than stop at it.
+        let args: Vec<cmd_parser::ResolvedArg> =
+            cmd.arguments.iter().map(resolve_argument).collect();
 
         // Get command name. Two forms are kept:
         //   - `raw_arg0`: the command as written (e.g. `./tools/rg.cmd`). Used
@@ -231,19 +232,15 @@ impl PermissionChecker<'_> {
         //   - `cmd_name`: normalized (basename + PATHEXT strip). Used for
         //     parser dispatch, eval/Python short-circuits, and missing-rule
         //     emission (keeps the log's rule suggestion short and name-form).
-        let raw_arg0 = match &arg_literals[0] {
-            Some(name) => name.clone(),
+        let raw_arg0 = match args[0].as_static() {
+            Some(name) => name.to_string(),
             None => {
                 // Dynamic command name. The matcher walks `items` against
                 // the static args only (arg0 is treated as missing); rules
                 // starting with a concrete `Arg0(...)` item can't match, but
                 // shapes like `Bash(** foo)` can still match if the static
                 // args align with the trailing items.
-                let dyn_static_args: Vec<String> = arg_literals[1..]
-                    .iter()
-                    .take_while(|a| a.is_some())
-                    .map(|a| a.clone().unwrap())
-                    .collect();
+                let dyn_static_args = bash_rule_args(&args);
                 let (_bash_asked, bash_allowed) = self.check_bash_rules(None, &dyn_static_args);
                 if self.denied.is_some() {
                     return;
@@ -262,12 +259,7 @@ impl PermissionChecker<'_> {
         };
         let cmd_name = cmd_parser::normalize_cmd_name(&raw_arg0).to_string();
 
-        // Static arg list — only consecutive static arg literals after arg0.
-        let static_args: Vec<String> = arg_literals[1..]
-            .iter()
-            .take_while(|a| a.is_some())
-            .map(|a| a.clone().unwrap())
-            .collect();
+        let static_args = bash_rule_args(&args);
 
         // Run Bash deny/ask/allow matching. Deny short-circuits the whole
         // command; allow enables secondary-demand suppression downstream.
@@ -290,7 +282,7 @@ impl PermissionChecker<'_> {
 
         // Extract file accesses from well-known command semantics (clap-based parsers)
         let cmd_parse_result =
-            cmd_parser::parse_file_accesses(&cmd_name, &arg_literals[1..], self.cwd);
+            cmd_parser::parse_file_accesses(&cmd_name, &args[1..], self.cwd);
         let (cmd_accesses, parse_failed, inline_script_start, file_only_override, effective_cmd) =
             match cmd_parse_result {
                 CmdParseResult::Parsed(cfa) => {
@@ -342,7 +334,7 @@ impl PermissionChecker<'_> {
             if let Some(script_idx) = inline_script_start {
                 // inline_script_start is 0-based into args-after-cmd-name.
                 // arg_literals[0] is the cmd name, so script text is at [script_idx + 1].
-                if let Some(Some(script_text)) = arg_literals.get(script_idx + 1) {
+                if let Some(script_text) = args.get(script_idx + 1).and_then(|a| a.as_static()) {
                     if let PythonAnalysis::Analyzed { accesses } =
                         python_ast::analyze_python_script(script_text, self.cwd)
                     {
@@ -371,7 +363,7 @@ impl PermissionChecker<'_> {
         // Similarly, when Python AST analysis succeeded, the Bash() rule is suppressed.
         if !bash_allowed && !parse_failed {
             let has_file_accesses = !redirect_accesses.is_empty() || !cmd_accesses.is_empty();
-            let has_dynamic_args = arg_literals[1..].iter().any(|a| a.is_none());
+            let has_dynamic_args = args[1..].iter().any(|a| a.is_unresolved());
             let can_skip = match file_only_override {
                 // Parser explicitly declared this invocation's effects.
                 // Trust it even with zero file accesses (e.g. read-only git
@@ -620,6 +612,28 @@ fn rule_suggestion(kind: AccessKind, scope: &AccessScope) -> String {
 }
 
 // ─── Redirect file access extraction ─────────────────────────────────────────
+
+/// One command argument, resolved for file-access analysis.
+fn resolve_argument(arg: &Argument) -> cmd_parser::ResolvedArg {
+    match arg.try_to_static_string() {
+        Some(value) => cmd_parser::ResolvedArg::Static(value),
+        None => cmd_parser::ResolvedArg::Unresolved(unresolved::describe_argument(arg)),
+    }
+}
+
+/// The Bash-rule view of a command's arguments: arg0 excluded, truncated at the
+/// first unresolvable argument.
+///
+/// The truncation is load-bearing and must not be "fixed" to match the
+/// file-access view. `BashFilter::matches` aligns its items positionally, so
+/// substituting a placeholder for an unresolvable argument would silently
+/// change which `Bash(...)` rules match a command.
+fn bash_rule_args(args: &[cmd_parser::ResolvedArg]) -> Vec<String> {
+    args[1..]
+        .iter()
+        .map_while(|a| a.as_static().map(str::to_string))
+        .collect()
+}
 
 /// The file accesses one redirect performs.
 ///

@@ -2292,3 +2292,12 @@ fn unresolved_payload_stays_bounded_and_single_line() {
         "payload not capped: {payload:?}",
     );
 }
+
+#[skuld::test]
+fn dynamic_argument_still_truncates_bash_rule_matching() {
+    // `static_args` stops at `$f`, so `Bash(grep foo)`'s items align and the
+    // rule matches. This holds before and after the argument-view split; it is
+    // here to fail loudly if the two views are ever unified.
+    let result = check("grep foo $f bar.txt", &["Bash(grep foo)"], &[]);
+    assert_eq!(result.decision, Decision::Allow);
+}

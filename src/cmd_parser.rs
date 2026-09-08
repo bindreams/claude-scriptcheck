@@ -48,9 +48,10 @@ impl CommandFileAccesses {
         Self::default()
     }
 
-    pub fn filter_sentinel(mut self, sentinel: &str) -> Self {
-        self.reads.retain(|p| !p.path().contains(sentinel));
-        self.writes.retain(|p| !p.path().contains(sentinel));
+    /// Drop every access whose resolved path came from an unresolved argument.
+    pub fn filter_sentinels(mut self, args: &[ResolvedArg]) -> Self {
+        self.reads.retain(|s| sentinel_index(s, args).is_none());
+        self.writes.retain(|s| sentinel_index(s, args).is_none());
         self // inline_script_start and effective_cmd_name preserved as-is
     }
 }
@@ -71,28 +72,80 @@ pub enum CmdParseResult {
     ParseFailed { cmd_name: String, message: String },
 }
 
-pub const SENTINEL: &str = "__CLAUDE_DYNAMIC__";
+/// One command argument, as the checker resolved it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedArg {
+    /// A statically determined value.
+    Static(String),
+    /// A word whose value could not be determined, carrying
+    /// [`crate::unresolved::describe_argument`]'s rendering of it.
+    Unresolved(String),
+}
+
+impl ResolvedArg {
+    /// The value, for a statically determined argument.
+    pub fn as_static(&self) -> Option<&str> {
+        match self {
+            Self::Static(s) => Some(s),
+            Self::Unresolved(_) => None,
+        }
+    }
+
+    pub fn is_unresolved(&self) -> bool {
+        matches!(self, Self::Unresolved(_))
+    }
+}
+
+/// Placeholder standing in for the unresolved argument at `index` while a
+/// parser runs, so the parser's positional logic is unaffected.
+///
+/// The index is what lets a resolved path be traced back to the argument that
+/// produced it. The trailing `__` delimits, so `sentinel(1)` is not a substring
+/// of `sentinel(11)`.
+pub fn sentinel(index: usize) -> String {
+    format!("__CLAUDE_DYNAMIC_{index}__")
+}
+
+/// The lowest unresolved-argument index whose sentinel appears in `scope`.
+///
+/// Provenance is carried as a string and recovered by substring search, so a
+/// static path that literally contains a sentinel *and* sits alongside an
+/// unresolved argument at that index is mis-attributed. Requiring
+/// `is_unresolved` keeps the far more likely case — a sentinel-shaped path with
+/// no unresolved argument anywhere — honest, and bounds the damage to the one
+/// colliding access rather than the whole command. Structured provenance is the
+/// real fix and is tracked separately.
+fn sentinel_index(scope: &AccessScope, args: &[ResolvedArg]) -> Option<usize> {
+    let path = scope.path();
+    (0..args.len()).find(|i| args[*i].is_unresolved() && path.contains(&sentinel(*i)))
+}
 
 /// Main entry point: parse a known command's arguments into file accesses.
 ///
 /// `cmd_name` — the command name (e.g. "grep").
-/// `args` — arguments after the command name. `None` = dynamic/unresolvable.
+/// `args` — arguments after the command name; index `i` here is the `i` in
+/// [`sentinel`].
 /// `cwd` — working directory for resolving relative paths.
-pub fn parse_file_accesses(cmd_name: &str, args: &[Option<String>], cwd: &str) -> CmdParseResult {
+pub fn parse_file_accesses(cmd_name: &str, args: &[ResolvedArg], cwd: &str) -> CmdParseResult {
     let parser = match get_parser(normalize_cmd_name(cmd_name)) {
         Some(p) => p,
         None => return CmdParseResult::Parsed(CommandFileAccesses::empty()),
     };
 
-    // Substitute None → sentinel so positional ordering is preserved for the parser.
+    // Substitute a per-index sentinel for each unresolved argument, so the
+    // parser sees an argument in every slot and its positional logic holds.
     let concrete: Vec<String> = args
         .iter()
-        .map(|a| a.clone().unwrap_or_else(|| SENTINEL.to_string()))
+        .enumerate()
+        .map(|(i, a)| match a {
+            ResolvedArg::Static(s) => s.clone(),
+            ResolvedArg::Unresolved(_) => sentinel(i),
+        })
         .collect();
     let str_args: Vec<&str> = concrete.iter().map(|s| s.as_str()).collect();
 
     match parser.parse(&str_args, cwd) {
-        Ok(accesses) => CmdParseResult::Parsed(accesses.filter_sentinel(SENTINEL)),
+        Ok(accesses) => CmdParseResult::Parsed(accesses.filter_sentinels(args)),
         Err(msg) => CmdParseResult::ParseFailed {
             cmd_name: cmd_name.to_string(),
             message: msg,
