@@ -45,7 +45,11 @@ fn cp_with_t_flag() {
         .parse(&["-t", "/dest", "src1.txt", "src2.txt"], "/tmp")
         .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/src1.txt", "/tmp/src2.txt"]));
-    assert_eq!(r.writes, writes(&["/dest"]));
+    // -t names a directory, so each source lands beneath it.
+    assert_eq!(
+        r.writes,
+        writes(&["/dest", "/dest/src1.txt", "/dest/src2.txt"]),
+    );
 }
 
 #[skuld::test]
@@ -58,19 +62,28 @@ fn cp_recursive() {
 // ── mv ──
 
 #[skuld::test]
-fn mv_basic() {
-    let r = MvParser.parse(&["old.txt", "new.txt"], "/tmp").unwrap();
-    assert_eq!(r.reads, reads(&["/tmp/old.txt"]));
-    assert_eq!(r.writes, writes(&["/tmp/new.txt"]));
+fn mv_basic(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::write(dir.join("old.txt"), "x").unwrap();
+    let r = MvParser.parse(&["old.txt", "new.txt"], &cwd).unwrap();
+    assert_eq!(r.reads, reads(&[&format!("{cwd}/old.txt")]));
+    assert_eq!(r.writes, writes(&[&format!("{cwd}/new.txt")]));
 }
 
 #[skuld::test]
-fn mv_with_t_flag() {
+fn mv_with_t_flag(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::write(dir.join("file1"), "x").unwrap();
+    std::fs::write(dir.join("file2"), "x").unwrap();
     let r = MvParser
-        .parse(&["-t", "/dest", "file1", "file2"], "/tmp")
+        .parse(&["-t", "/dest", "file1", "file2"], &cwd)
         .unwrap();
-    assert_eq!(r.reads, reads(&["/tmp/file1", "/tmp/file2"]));
-    assert_eq!(r.writes, writes(&["/dest"]));
+    assert_eq!(
+        r.reads,
+        reads(&[&format!("{cwd}/file1"), &format!("{cwd}/file2")]),
+    );
+    // -t names a directory, so each source lands beneath it.
+    assert_eq!(r.writes, writes(&["/dest", "/dest/file1", "/dest/file2"]),);
 }
 
 // ── ln ──
@@ -106,7 +119,8 @@ fn install_t_flag() {
         .parse(&["-t", "/dest", "src1", "src2"], "/tmp")
         .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/src1", "/tmp/src2"]));
-    assert_eq!(r.writes, writes(&["/dest"]));
+    // -t names a directory, so each source lands beneath it.
+    assert_eq!(r.writes, writes(&["/dest", "/dest/src1", "/dest/src2"]));
 }
 
 #[skuld::test]
@@ -231,7 +245,7 @@ fn chmod_mode_then_files() {
 #[skuld::test]
 fn chmod_recursive() {
     let r = ChmodParser.parse(&["-R", "755", "dir/"], "/tmp").unwrap();
-    assert_eq!(r.writes, writes(&["/tmp/dir/"]));
+    assert_eq!(r.writes, sub(&["/tmp/dir/"]));
 }
 
 #[skuld::test]
@@ -292,16 +306,18 @@ fn cp_selinux_context_flag() {
 }
 
 #[skuld::test]
-fn mv_selinux_z_flag() {
-    let r = MvParser
-        .parse(&["-Z", "old.txt", "new.txt"], "/tmp")
-        .unwrap();
-    assert_eq!(r.reads, reads(&["/tmp/old.txt"]));
-    assert_eq!(r.writes, writes(&["/tmp/new.txt"]));
+fn mv_selinux_z_flag(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::write(dir.join("old.txt"), "x").unwrap();
+    let r = MvParser.parse(&["-Z", "old.txt", "new.txt"], &cwd).unwrap();
+    assert_eq!(r.reads, reads(&[&format!("{cwd}/old.txt")]));
+    assert_eq!(r.writes, writes(&[&format!("{cwd}/new.txt")]));
 }
 
 #[skuld::test]
-fn mv_selinux_context_flag() {
+fn mv_selinux_context_flag(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::write(dir.join("a.txt"), "x").unwrap();
     let r = MvParser
         .parse(
             &[
@@ -309,11 +325,11 @@ fn mv_selinux_context_flag() {
                 "a.txt",
                 "b.txt",
             ],
-            "/tmp",
+            &cwd,
         )
         .unwrap();
-    assert_eq!(r.reads, reads(&["/tmp/a.txt"]));
-    assert_eq!(r.writes, writes(&["/tmp/b.txt"]));
+    assert_eq!(r.reads, reads(&[&format!("{cwd}/a.txt")]));
+    assert_eq!(r.writes, writes(&[&format!("{cwd}/b.txt")]));
 }
 
 #[skuld::test]
@@ -413,7 +429,7 @@ fn sort_gnu_compress_program() {
 fn chmod_bsd_silent() {
     // BSD chmod -f (silent) — already defined as short+long
     let r = ChmodParser.parse(&["-fR", "755", "dir/"], "/tmp").unwrap();
-    assert_eq!(r.writes, writes(&["/tmp/dir/"]));
+    assert_eq!(r.writes, sub(&["/tmp/dir/"]));
 }
 
 #[skuld::test]
@@ -460,4 +476,149 @@ fn cp_without_r_sources_are_exact() {
     let r = CpParser.parse(&["a.txt", "b.txt"], "/tmp").unwrap();
     assert_eq!(r.reads, reads(&["/tmp/a.txt"]));
     assert_eq!(r.writes, writes(&["/tmp/b.txt"]));
+}
+
+// Recursive writes and directory destinations =====================================================
+
+#[skuld::test]
+fn chmod_recursive_targets_are_subtree() {
+    let r = ChmodParser
+        .parse(&["-R", "755", "/tmp/dir"], "/tmp")
+        .unwrap();
+    assert_eq!(r.writes, sub(&["/tmp/dir"]));
+}
+
+#[skuld::test]
+fn chown_recursive_targets_are_subtree() {
+    let r = ChownParser
+        .parse(&["-R", "me:me", "/tmp/dir"], "/tmp")
+        .unwrap();
+    assert_eq!(r.writes, sub(&["/tmp/dir"]));
+}
+
+#[skuld::test]
+fn chgrp_recursive_targets_are_subtree() {
+    let r = ChgrpParser
+        .parse(&["-R", "staff", "/tmp/dir"], "/tmp")
+        .unwrap();
+    assert_eq!(r.writes, sub(&["/tmp/dir"]));
+}
+
+#[skuld::test]
+fn chmod_without_r_targets_are_exact() {
+    let r = ChmodParser.parse(&["755", "/tmp/f"], "/tmp").unwrap();
+    assert_eq!(r.writes, writes(&["/tmp/f"]));
+}
+
+#[skuld::test]
+fn cp_file_into_existing_directory_writes_nested_path(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // `cp a.txt vault` writes `vault/a.txt`; recording only `vault` lets the
+    // write slip past a rule scoped to the directory's contents.
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::create_dir(dir.join("vault")).unwrap();
+    std::fs::write(dir.join("a.txt"), "x").unwrap();
+    let r = CpParser.parse(&["a.txt", "vault"], &cwd).unwrap();
+    assert_eq!(r.reads, reads(&[&format!("{cwd}/a.txt")]));
+    assert_eq!(
+        r.writes,
+        writes(&[&format!("{cwd}/vault"), &format!("{cwd}/vault/a.txt")]),
+    );
+}
+
+#[skuld::test]
+fn cp_to_nonexistent_destination_is_exact(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::write(dir.join("a.txt"), "x").unwrap();
+    let r = CpParser.parse(&["a.txt", "b.txt"], &cwd).unwrap();
+    assert_eq!(r.writes, writes(&[&format!("{cwd}/b.txt")]));
+}
+
+#[skuld::test]
+fn cp_target_directory_flag_writes_nested_path(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // -t always names a directory, so no stat is needed.
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::write(dir.join("a.txt"), "x").unwrap();
+    let r = CpParser.parse(&["-t", "vault", "a.txt"], &cwd).unwrap();
+    assert_eq!(
+        r.writes,
+        writes(&[&format!("{cwd}/vault"), &format!("{cwd}/vault/a.txt")]),
+    );
+}
+
+#[skuld::test]
+fn cp_no_target_directory_flag_is_exact(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // -T means the destination is the path itself, even if it is a directory.
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::create_dir(dir.join("vault")).unwrap();
+    std::fs::write(dir.join("a.txt"), "x").unwrap();
+    let r = CpParser.parse(&["-T", "a.txt", "vault"], &cwd).unwrap();
+    assert_eq!(r.writes, writes(&[&format!("{cwd}/vault")]));
+}
+
+#[skuld::test]
+fn mv_directory_source_is_subtree(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::create_dir(dir.join("src")).unwrap();
+    let r = MvParser.parse(&["src", "dst"], &cwd).unwrap();
+    assert_eq!(r.reads, sub(&[&format!("{cwd}/src")]));
+}
+
+#[skuld::test]
+fn mv_file_source_is_exact(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::write(dir.join("a.txt"), "x").unwrap();
+    let r = MvParser.parse(&["a.txt", "b.txt"], &cwd).unwrap();
+    assert_eq!(r.reads, reads(&[&format!("{cwd}/a.txt")]));
+}
+
+#[skuld::test]
+fn mv_multiple_sources_are_each_classified(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::create_dir(dir.join("srcdir")).unwrap();
+    std::fs::write(dir.join("a.txt"), "x").unwrap();
+    std::fs::create_dir(dir.join("vault")).unwrap();
+    let r = MvParser.parse(&["srcdir", "a.txt", "vault"], &cwd).unwrap();
+    assert_eq!(
+        r.reads,
+        vec![
+            AccessScope::Subtree(format!("{cwd}/srcdir")),
+            AccessScope::Exact(format!("{cwd}/a.txt")),
+        ],
+    );
+}
+
+#[skuld::test]
+fn mv_into_existing_directory_writes_nested_path(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::create_dir(dir.join("vault")).unwrap();
+    std::fs::write(dir.join("secret.txt"), "x").unwrap();
+    let r = MvParser.parse(&["secret.txt", "vault"], &cwd).unwrap();
+    assert_eq!(
+        r.writes,
+        writes(&[&format!("{cwd}/vault"), &format!("{cwd}/vault/secret.txt")]),
+    );
+}
+
+#[skuld::test]
+fn ln_into_existing_directory_writes_nested_path(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::create_dir(dir.join("vault")).unwrap();
+    std::fs::write(dir.join("a.txt"), "x").unwrap();
+    let r = LnParser.parse(&["-s", "a.txt", "vault"], &cwd).unwrap();
+    assert_eq!(
+        r.writes,
+        writes(&[&format!("{cwd}/vault"), &format!("{cwd}/vault/a.txt")]),
+    );
+}
+
+#[skuld::test]
+fn install_into_existing_directory_writes_nested_path(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::create_dir(dir.join("vault")).unwrap();
+    std::fs::write(dir.join("a.txt"), "x").unwrap();
+    let r = InstallParser.parse(&["a.txt", "vault"], &cwd).unwrap();
+    assert_eq!(
+        r.writes,
+        writes(&[&format!("{cwd}/vault"), &format!("{cwd}/vault/a.txt")]),
+    );
 }

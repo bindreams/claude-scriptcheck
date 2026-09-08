@@ -1,3 +1,5 @@
+use crate::file_access::AccessScope;
+
 use clap::{ArgAction, ArgMatches};
 
 use super::helpers::*;
@@ -80,7 +82,7 @@ impl CommandParser for MvParser {
             .try_get_matches_from(args)
             .map_err(|e| e.to_string())?;
 
-        parse_copy_like(&matches, cwd, Recursion::No)
+        parse_copy_like(&matches, cwd, Recursion::IfDir)
     }
 }
 
@@ -108,9 +110,82 @@ impl CommandParser for LnParser {
     }
 }
 
+/// The writes a copy-like command performs on `dest`.
+///
+/// `cp`/`mv`/`ln`/`install` write to `dest/basename(src)` whenever `dest` is an
+/// existing directory, so recording `dest` alone lets the real write slip past
+/// a rule scoped to the directory's contents. The directory itself is kept as
+/// an access too — its entries change — so rules written against either form
+/// still fire.
+///
+/// Each write inherits the scope of the source it came from: moving a
+/// directory writes a whole tree, moving a file writes one path. The
+/// destination is never classified by its own `stat`, which would say
+/// "does not exist yet" for the common case.
+///
+/// `force_directory` is for `-t`, which names a directory by definition, and
+/// `no_target_directory` is `-T`, which means the destination is the path
+/// itself. Otherwise the directory test is a check-time stat, with the same
+/// accepted race as `Recursion::IfDir` (decision Q4 on scriptcheck#44).
+fn copy_destination_writes(
+    dest: &str,
+    sources: &[&String],
+    source_scopes: &[AccessScope],
+    cwd: &str,
+    force_directory: bool,
+    no_target_directory: bool,
+) -> Vec<AccessScope> {
+    let subtree_source = source_scopes.iter().any(|s| {
+        matches!(
+            s,
+            AccessScope::Subtree(_) | AccessScope::UnboundedSubtree(_)
+        )
+    });
+    let dest_path = super::resolve_str(dest, cwd);
+
+    if no_target_directory {
+        return vec![scope_like(subtree_source, dest_path)];
+    }
+
+    let is_dir = force_directory || std::fs::metadata(&dest_path).is_ok_and(|meta| meta.is_dir());
+    if !is_dir {
+        return vec![scope_like(subtree_source, dest_path)];
+    }
+
+    // The directory's own entries change, plus one write per source landing
+    // inside it.
+    let base = dest_path.trim_end_matches('/').to_string();
+    let mut writes = vec![AccessScope::Exact(dest_path)];
+    for (i, src) in sources.iter().enumerate() {
+        let Some(name) = src.trim_end_matches('/').rsplit(['/', '\\']).next() else {
+            continue;
+        };
+        if name.is_empty() || name == "." || name == ".." {
+            continue;
+        }
+        let nested = source_scopes.get(i).is_some_and(|s| {
+            matches!(
+                s,
+                AccessScope::Subtree(_) | AccessScope::UnboundedSubtree(_)
+            )
+        });
+        writes.push(scope_like(nested, format!("{base}/{name}")));
+    }
+    writes
+}
+
+fn scope_like(subtree: bool, path: String) -> AccessScope {
+    if subtree {
+        AccessScope::Subtree(path)
+    } else {
+        AccessScope::Exact(path)
+    }
+}
+
 /// Shared cp/mv/ln extraction:
-/// - With -t DIR: all positionals → reads, DIR → writes
-/// - Without -t: last positional → writes, rest → reads
+/// - With -t DIR: all positionals → reads, DIR (and the paths landing inside
+///   it) → writes.
+/// - Without -t: last positional → writes, rest → reads.
 fn parse_copy_like(
     matches: &ArgMatches,
     cwd: &str,
@@ -126,17 +201,37 @@ fn parse_copy_like(
         .map(|v| v.collect())
         .unwrap_or_default();
 
+    let no_target_directory = matches.get_count("no-target-directory") > 0;
+
     if let Some(dir) = target_dir {
         // -t DIR: all positionals are sources (read), DIR is write target
-        for p in &positionals {
-            reads.push(resolve_scoped(p, cwd, recursion));
-        }
-        writes.push(resolve_scoped(dir, cwd, recursion));
+        let scopes: Vec<AccessScope> = positionals
+            .iter()
+            .map(|p| resolve_scoped(p, cwd, recursion))
+            .collect();
+        reads.extend(scopes.iter().cloned());
+        writes.extend(copy_destination_writes(
+            dir,
+            &positionals,
+            &scopes,
+            cwd,
+            true,
+            false,
+        ));
     } else if let Some((last, rest)) = positionals.split_last() {
-        for src in rest {
-            reads.push(resolve_scoped(src, cwd, recursion));
-        }
-        writes.push(resolve_scoped(last, cwd, recursion));
+        let scopes: Vec<AccessScope> = rest
+            .iter()
+            .map(|src| resolve_scoped(src, cwd, recursion))
+            .collect();
+        reads.extend(scopes.iter().cloned());
+        writes.extend(copy_destination_writes(
+            last,
+            rest,
+            &scopes,
+            cwd,
+            false,
+            no_target_directory,
+        ));
     }
 
     Ok(CommandFileAccesses {
@@ -190,15 +285,27 @@ impl CommandParser for InstallParser {
                 writes.push(resolve(p, cwd));
             }
         } else if let Some(dir) = target_dir {
-            for p in &positionals {
-                reads.push(resolve(p, cwd));
-            }
-            writes.push(resolve(dir, cwd));
+            let scopes: Vec<AccessScope> = positionals.iter().map(|p| resolve(p, cwd)).collect();
+            reads.extend(scopes.iter().cloned());
+            writes.extend(copy_destination_writes(
+                dir,
+                &positionals,
+                &scopes,
+                cwd,
+                true,
+                false,
+            ));
         } else if let Some((last, rest)) = positionals.split_last() {
-            for src in rest {
-                reads.push(resolve(src, cwd));
-            }
-            writes.push(resolve(last, cwd));
+            let scopes: Vec<AccessScope> = rest.iter().map(|src| resolve(src, cwd)).collect();
+            reads.extend(scopes.iter().cloned());
+            writes.extend(copy_destination_writes(
+                last,
+                rest,
+                &scopes,
+                cwd,
+                false,
+                matches.get_count("no-target-directory") > 0,
+            ));
         }
 
         Ok(CommandFileAccesses {
@@ -513,10 +620,17 @@ fn parse_permission_change(matches: &ArgMatches, cwd: &str) -> Result<CommandFil
         .map(|v| v.collect())
         .unwrap_or_default();
 
+    // -R applies the change to every file beneath each operand.
+    let recursion = if matches.get_count("recursive") > 0 {
+        Recursion::Yes
+    } else {
+        Recursion::No
+    };
+
     let writes = positionals
         .iter()
         .skip(1) // skip mode/owner/group
-        .map(|p| resolve(p, cwd))
+        .map(|p| resolve_scoped(p, cwd, recursion))
         .collect();
 
     Ok(CommandFileAccesses {
