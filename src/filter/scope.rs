@@ -155,7 +155,7 @@ fn covers_subtree(pattern: &str, dir: &str) -> bool {
         return false;
     }
 
-    // The directory itself. D4: an allow pattern `X/**` whose `X` matches the
+    // The directory itself: an allow pattern `X/**` whose `X` matches the
     // subtree root counts as covering that root, so `Read(vault/**)` permits
     // `grep -r vault`. Deliberately not generalized to `Exact` accesses.
     glob_match_for_platform(pattern, dir) || glob_match_for_platform(prefix, dir)
@@ -170,7 +170,12 @@ fn patterns_intersect(a: &str, b: &str) -> bool {
     let x = segments(a);
     let y = segments(b);
 
+    // A `**` segment consumes any number of segments, so nothing past it lines
+    // up positionally — stop there and refuse to conclude disjointness.
     for (sx, sy) in x.iter().zip(y.iter()) {
+        if *sx == "**" || *sy == "**" {
+            return true;
+        }
         if !is_wildcard_segment(sx) && !is_wildcard_segment(sy) && !paths_equal_for_platform(sx, sy)
         {
             return false;
@@ -291,7 +296,7 @@ mod tests {
     #[test]
     fn subtree_root_covered_by_globstar_rule() {
         assert!(covers("/vault/**", &subtree("/vault")));
-        // D4 boundary: an Exact access to the root is untouched.
+        // An Exact access to the root is untouched by the X/** rule.
         assert!(!covers("/vault/**", &exact("/vault")));
     }
 
@@ -344,6 +349,16 @@ mod tests {
         assert!(could_match("/tmp[!a]x", &pattern("/tmp/x/y")));
         assert!(covers("/home/**", &pattern("/home/a/*")));
         assert!(!covers("/home/*", &pattern("/home/a/*")));
+    }
+
+    #[test]
+    fn globstar_stops_positional_pattern_comparison() {
+        // Both patterns match /a/x/y/c/d, so they must not be called disjoint.
+        assert!(patterns_intersect("/a/**/c/d", "/a/x/y/c/*"));
+        assert!(patterns_intersect("/a/x/y/c/*", "/a/**/c/d"));
+        assert!(could_match("/a/**/c/d", &pattern("/a/x/y/c/*")));
+        // A literal mismatch before any `**` is still provable.
+        assert!(!patterns_intersect("/a/**/c/d", "/b/x/**"));
     }
 
     #[test]

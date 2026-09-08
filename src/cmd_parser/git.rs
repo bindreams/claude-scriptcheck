@@ -1,6 +1,6 @@
 use crate::file_access::AccessScope;
 
-use super::{resolve_str, CommandFileAccesses, CommandParser};
+use super::{resolve_str, CommandFileAccesses, CommandParser, Recursion};
 
 pub(super) struct GitParser;
 
@@ -57,6 +57,11 @@ impl GitContext {
 
     fn resolve(&self, path: &str) -> AccessScope {
         AccessScope::Exact(resolve_str(path, &self.work_tree))
+    }
+
+    /// Resolve an operand whose reach depends on how far the subcommand walks.
+    fn resolve_scoped(&self, path: &str, recursion: Recursion) -> AccessScope {
+        super::resolve_scoped(path, &self.work_tree, recursion)
     }
 
     /// The `.git` directory as an access — the permission anchor for every
@@ -457,19 +462,28 @@ fn parse_reset(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, S
 
 fn parse_rm(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, String> {
     let mut cached = false;
-    let mut paths = Vec::new();
+    let mut recursion = Recursion::No;
+    let mut operands = Vec::new();
 
     for arg in args {
         if matches!(*arg, "--cached") {
             cached = true;
-        } else if *arg == "-r" || *arg == "--recursive" || *arg == "-f" || *arg == "--force" {
+        } else if *arg == "-r" || *arg == "--recursive" {
+            // -r deletes every file beneath a directory operand.
+            recursion = Recursion::Yes;
+        } else if *arg == "-f" || *arg == "--force" {
             // skip flags
         } else if *arg == "--" {
             // skip separator
         } else if !arg.starts_with('-') {
-            paths.push(ctx.resolve(arg));
+            operands.push(*arg);
         }
     }
+
+    let paths: Vec<AccessScope> = operands
+        .iter()
+        .map(|p| ctx.resolve_scoped(p, recursion))
+        .collect();
 
     if cached {
         Ok(ctx.write_git())
@@ -529,8 +543,15 @@ fn parse_mv(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, Stri
         .collect();
 
     if positionals.len() >= 2 {
-        let src = ctx.resolve(positionals[0]);
-        let dst = ctx.resolve(positionals[positionals.len() - 1]);
+        // Moving a directory moves everything under it.
+        let src = ctx.resolve_scoped(positionals[0], Recursion::IfDir);
+        let dst = ctx.resolve_scoped(
+            positionals[positionals.len() - 1],
+            match src {
+                AccessScope::Subtree(_) | AccessScope::UnboundedSubtree(_) => Recursion::Yes,
+                _ => Recursion::No,
+            },
+        );
         Ok(CommandFileAccesses {
             reads: vec![src],
             writes: vec![dst, ctx.git_dir_access()],

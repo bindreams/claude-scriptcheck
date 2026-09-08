@@ -2126,7 +2126,7 @@ fn cli_check_rejects_invalid_mode() {
     );
 }
 
-// ── Recursive access scopes (issue #44) ─────────────────────────────────────
+// ── Recursive access scopes ─────────────────────────────────────────────────
 
 /// The canonical project root: absolute, forward slashes, and free of the
 /// Windows `\\?\` verbatim prefix (`//?/` after slash-normalization).
@@ -2499,7 +2499,7 @@ fn hook_du_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
 
 #[skuld::test]
 fn hook_bash_allow_does_not_suppress_subtree_deny(#[fixture(temp_dir)] dir: &std::path::Path) {
-    // D5: a Bash allow rule suppresses secondary demands but never a file deny.
+    // A Bash allow rule suppresses secondary demands but never a file deny.
     let abs = vault_paths(dir).root;
     let p = write_vault_project(
         dir,

@@ -2209,9 +2209,26 @@ fn unresolved_scope_asks_when_unsuppressed() {
 
 #[skuld::test]
 fn exact_access_to_subtree_root_still_asks_under_globstar_allow() {
-    // The D4 boundary: `Read(vault/**)` covers a recursive read rooted at
+    // `Read(vault/**)` covers a recursive read rooted at
     // `vault`, but a plain `cat vault` is untouched and still asks.
     let accesses = scoped(AccessScope::Exact("/repro/vault".into()), AccessKind::Read);
     let result = check_accesses_full(&accesses, &["Read(/repro/vault/**)"], &[], &[]);
     assert_eq!(result.decision, Decision::Ask);
+}
+
+#[skuld::test]
+fn unbounded_subtree_suggestion_does_not_name_an_unusable_rule() {
+    // `covers` rejects every path pattern for a symlink-following walk, so a
+    // `Read(D/**)` suggestion would loop the user forever.
+    let accesses = scoped(
+        AccessScope::UnboundedSubtree("/repro/vault".into()),
+        AccessKind::Read,
+    );
+    let result = check_accesses_full(&accesses, &["Read(/repro/**)"], &[], &[]);
+    assert_eq!(result.decision, Decision::Ask);
+    let suggestion = result.missing_rules.first().expect("a missing rule");
+    assert!(
+        suggestion.contains("Bash(...)") && suggestion.contains("follows symlinks"),
+        "suggestion should point at a rule that can actually work, got: {suggestion}",
+    );
 }

@@ -622,3 +622,78 @@ fn install_into_existing_directory_writes_nested_path(#[fixture(temp_dir)] dir: 
         writes(&[&format!("{cwd}/vault"), &format!("{cwd}/vault/a.txt")]),
     );
 }
+
+#[skuld::test]
+fn cp_recursive_dereference_is_following() {
+    let r = CpParser.parse(&["-rL", "src", "dst"], "/tmp").unwrap();
+    assert_eq!(
+        r.reads,
+        vec![AccessScope::UnboundedSubtree("/tmp/src".into())],
+    );
+}
+
+#[skuld::test]
+fn cp_dereference_without_recursion_stays_exact() {
+    let r = CpParser.parse(&["-L", "a.txt", "b.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/a.txt"]));
+}
+
+#[skuld::test]
+fn chown_recursive_dereference_is_following() {
+    let r = ChownParser
+        .parse(&["-R", "-L", "me", "/tmp/dir"], "/tmp")
+        .unwrap();
+    assert_eq!(
+        r.writes,
+        vec![AccessScope::UnboundedSubtree("/tmp/dir".into())],
+    );
+}
+
+#[skuld::test]
+fn chgrp_recursive_dereference_is_following() {
+    let r = ChgrpParser
+        .parse(&["-R", "-H", "staff", "/tmp/dir"], "/tmp")
+        .unwrap();
+    assert_eq!(
+        r.writes,
+        vec![AccessScope::UnboundedSubtree("/tmp/dir".into())],
+    );
+}
+
+#[skuld::test]
+fn chmod_recursive_has_no_dereference_flag() {
+    // chmod declares neither -L nor -H; the shared helper must not trip on that.
+    let r = ChmodParser
+        .parse(&["-R", "755", "/tmp/dir"], "/tmp")
+        .unwrap();
+    assert_eq!(r.writes, sub(&["/tmp/dir"]));
+}
+
+#[skuld::test]
+fn cp_dot_source_lands_contents_under_destination(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // `cp -r src/. vault` writes vault/<entry> for every entry, with no single
+    // landing path to name.
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::create_dir(dir.join("src")).unwrap();
+    std::fs::create_dir(dir.join("vault")).unwrap();
+    let r = CpParser.parse(&["-r", "src/.", "vault"], &cwd).unwrap();
+    assert_eq!(
+        r.writes,
+        vec![
+            AccessScope::Exact(format!("{cwd}/vault")),
+            AccessScope::Subtree(format!("{cwd}/vault")),
+        ],
+    );
+}
+
+#[skuld::test]
+fn cp_destination_stat_error_other_than_missing_takes_directory_branch(
+    #[fixture(temp_dir)] dir: &std::path::Path,
+) {
+    // A destination reported missing provably is not a directory, so the write
+    // is the destination itself. Anything else leaves the question open.
+    let cwd = dir.to_string_lossy().replace('\\', "/");
+    std::fs::write(dir.join("a.txt"), "x").unwrap();
+    let r = CpParser.parse(&["a.txt", "gone/b.txt"], &cwd).unwrap();
+    assert_eq!(r.writes, writes(&[&format!("{cwd}/gone/b.txt")]));
+}

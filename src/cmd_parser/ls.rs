@@ -74,10 +74,14 @@ impl CommandParser for LsParser {
             .try_get_matches_from(args)
             .map_err(|e| e.to_string())?;
 
-        let recursion = if matches.get_count("recursive") > 0 {
-            Recursion::Yes
-        } else {
+        // Without -L, `-R` does not descend into symlinked directories; with
+        // it, the walk can leave the named tree.
+        let recursion = if matches.get_count("recursive") == 0 {
             Recursion::No
+        } else if matches.get_count("dereference") > 0 {
+            Recursion::Following
+        } else {
+            Recursion::Yes
         };
 
         let positionals: Vec<&String> = matches

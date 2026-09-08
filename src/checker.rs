@@ -464,7 +464,7 @@ impl PermissionChecker<'_> {
         };
         if ask_matched {
             if !suppress_unmatched {
-                self.unmatched.push(rule_suggestion(access.kind, &shown));
+                self.unmatched.push(rule_suggestion(access.kind, &scope));
             }
             return;
         }
@@ -482,7 +482,7 @@ impl PermissionChecker<'_> {
         if let Some(rule_str) = allow_matched {
             self.matched_allow.push(rule_str);
         } else if !suppress_unmatched {
-            self.unmatched.push(rule_suggestion(access.kind, &shown));
+            self.unmatched.push(rule_suggestion(access.kind, &scope));
         }
     }
 
@@ -586,8 +586,20 @@ fn find_covers<F: PathFilter>(bucket: &[F], scope: &AccessScope) -> Option<Strin
 }
 
 /// The rule a user would add to satisfy an unmatched access. For a subtree the
-/// suggestion is `Read(D/**)`, which under D4 covers the root as well.
-fn rule_suggestion(kind: AccessKind, shown: &str) -> String {
+/// suggestion is `Read(D/**)`, which also covers the subtree root.
+///
+/// A symlink-following walk has no such rule: it can reach outside the tree it
+/// names, so `covers` rejects every path pattern. Saying `Read(D/**)` there
+/// would send the user round a loop — they add the rule, rerun, and are asked
+/// again — so that case names the rule shape that does resolve it instead.
+fn rule_suggestion(kind: AccessKind, scope: &AccessScope) -> String {
+    let shown = scope.display();
+    if let AccessScope::UnboundedSubtree(dir) = scope {
+        return format!(
+            "Read({dir}/**) -- follows symlinks out of the tree, so no Read/Write rule \
+             can cover it; allow the command with a Bash(...) rule instead",
+        );
+    }
     match kind {
         AccessKind::Read => format!("Read({shown})"),
         AccessKind::Write => format!("Write({shown})"),

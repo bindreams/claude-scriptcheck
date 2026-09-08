@@ -13,36 +13,48 @@ impl CommandParser for FindParser {
         let mut i = 0;
         let mut follows_symlinks = false;
 
-        // Global options precede the search paths. `-L` / `-follow` make the
-        // walk follow symlinks, so it can leave the named subtree.
+        // Global options precede the search paths. `-L` makes the walk follow
+        // symlinks, so it can leave the named subtree.
         while i < args.len() {
             match args[i] {
-                "-L" | "-follow" => {
+                "-L" => {
                     follows_symlinks = true;
                     i += 1;
                 }
                 "-H" | "-P" => i += 1,
-                "-D" => i += 2,
+                // `-D <debugopts>` takes a value, which may be absent if the
+                // user typed a trailing `-D`.
+                "-D" => i = (i + 2).min(args.len()),
                 a if a.starts_with("-O") && a.len() > 2 => i += 1,
                 _ => break,
             }
         }
 
+        let mut paths: Vec<&str> = Vec::new();
+        let mut rest = &args[i..];
+        while let Some(arg) = rest.first() {
+            if is_find_expression_token(arg) {
+                break;
+            }
+            paths.push(arg);
+            rest = &rest[1..];
+        }
+
+        // `-follow` is the expression-position spelling of `-L`, so it only
+        // appears after the starting points.
+        if rest.contains(&"-follow") {
+            follows_symlinks = true;
+        }
         let recursion = if follows_symlinks {
             Recursion::Following
         } else {
             Recursion::Yes
         };
 
-        let mut reads: Vec<AccessScope> = Vec::new();
-        let mut rest = &args[i..];
-        while let Some(arg) = rest.first() {
-            if is_find_expression_token(arg) {
-                break;
-            }
-            reads.push(resolve_scoped(arg, cwd, recursion));
-            rest = &rest[1..];
-        }
+        let mut reads: Vec<AccessScope> = paths
+            .iter()
+            .map(|p| resolve_scoped(p, cwd, recursion))
+            .collect();
         if reads.is_empty() {
             // No path operand: find walks the working directory.
             reads.push(resolve_scoped(cwd, cwd, recursion));
@@ -113,6 +125,7 @@ fn is_find_expression_token(arg: &str) -> bool {
         | "-mount"
         | "-noleaf"
         | "-daystart"
+        | "-follow"
         | "-warn"
         | "-nowarn"
         | "-regextype"

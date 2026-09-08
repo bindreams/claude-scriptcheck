@@ -63,8 +63,9 @@ ParseCtx<'a>    { home: &'a str, cwd: &'a str, project_root: &'a str }  // threa
 {Read,Write,Edit}Filter(String) — PathFilter; ::new(p) debug-asserts p is canonical
 AccessScope     = Exact(p) | Subtree(d) | UnboundedSubtree(d) | Pattern(q) | Unresolved(reason)
     // Subtree(d) = d plus everything beneath it. UnboundedSubtree adds "and whatever a
-    // symlink under d points at", so no allow rule can cover it. Unresolved is defined for
-    // the word-resolution item; nothing constructs it yet.
+    // symlink under d points at", so no allow rule can cover it. Pattern and Unresolved
+    // are matched and tested but nothing constructs them yet — they wait on the word
+    // resolver that can tell a globbed or unresolvable word from a literal path.
 FileAccess       { scope: AccessScope, kind: AccessKind }   // AccessKind = Read | Write
 Recursion       = No | Yes | IfDir | Following   // resolve_scoped(path, cwd, recursion) -> AccessScope
 HookInput        { session_id, cwd, tool_name, tool_input, permission_mode? }

@@ -502,7 +502,7 @@ fn handle_file_search(
     // Grep and Glob walk the whole tree under their search path, so rules
     // covering anything beneath it must be consulted. A path that is a regular
     // file searches only that file — the same check-time stat, and the same
-    // accepted race, as `Recursion::IfDir` (decision Q4 on scriptcheck#44).
+    // accepted race, as `Recursion::IfDir`.
     let scope = cmd_parser::resolve_scoped(&resolved, cwd, cmd_parser::Recursion::IfDir);
     let accesses = [FileAccess::scoped(scope, AccessKind::Read)];
     let result = checker::check_file_accesses(&accesses, parsed_perms, cwd);

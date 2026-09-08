@@ -7,15 +7,18 @@ use super::{resolve, resolve_scoped, CommandFileAccesses, CommandParser, Recursi
 
 // ─── Copy-like commands ──────────────────────────────────────────────────────
 
-/// `cp -r`/`-R`/`-a` walks directory operands.
+/// `cp -r`/`-R`/`-a` walks directory operands; `-L` makes the walk follow
+/// symlinks, so it can pull in content from outside the named tree.
 fn cp_recursion(matches: &ArgMatches) -> Recursion {
     let recursive = matches.get_count("recursive") > 0
         || matches.get_count("bool_R") > 0
         || matches.get_count("archive") > 0;
-    if recursive {
-        Recursion::Yes
-    } else {
+    if !recursive {
         Recursion::No
+    } else if matches.get_count("dereference") > 0 {
+        Recursion::Following
+    } else {
+        Recursion::Yes
     }
 }
 
@@ -125,8 +128,15 @@ impl CommandParser for LnParser {
 ///
 /// `force_directory` is for `-t`, which names a directory by definition, and
 /// `no_target_directory` is `-T`, which means the destination is the path
-/// itself. Otherwise the directory test is a check-time stat, with the same
-/// accepted race as `Recursion::IfDir` (decision Q4 on scriptcheck#44).
+/// itself. Otherwise a check-time stat decides, with the same accepted race as
+/// `Recursion::IfDir`.
+///
+/// The two differ on what an unreadable stat means, and deliberately so. A
+/// *source* that cannot be stat'd may still be a directory the command walks,
+/// so the unknown resolves to the wider scope. A destination that is reported
+/// missing provably is not a directory yet — the command creates a plain file
+/// there — so that case resolves narrow. Any other stat error leaves the
+/// question open and takes the directory branch.
 fn copy_destination_writes(
     dest: &str,
     sources: &[&String],
@@ -147,7 +157,11 @@ fn copy_destination_writes(
         return vec![scope_like(subtree_source, dest_path)];
     }
 
-    let is_dir = force_directory || std::fs::metadata(&dest_path).is_ok_and(|meta| meta.is_dir());
+    let is_dir = force_directory
+        || match std::fs::metadata(&dest_path) {
+            Ok(meta) => meta.is_dir(),
+            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+        };
     if !is_dir {
         return vec![scope_like(subtree_source, dest_path)];
     }
@@ -157,19 +171,21 @@ fn copy_destination_writes(
     let base = dest_path.trim_end_matches('/').to_string();
     let mut writes = vec![AccessScope::Exact(dest_path)];
     for (i, src) in sources.iter().enumerate() {
-        let Some(name) = src.trim_end_matches('/').rsplit(['/', '\\']).next() else {
-            continue;
-        };
-        if name.is_empty() || name == "." || name == ".." {
-            continue;
-        }
         let nested = source_scopes.get(i).is_some_and(|s| {
             matches!(
                 s,
                 AccessScope::Subtree(_) | AccessScope::UnboundedSubtree(_)
             )
         });
-        writes.push(scope_like(nested, format!("{base}/{name}")));
+        let name = src.trim_end_matches('/').rsplit(['/', '\\']).next();
+        match name {
+            // `cp -r src/. dest` copies the source's *contents*, so the writes
+            // land directly under `dest` with no single landing path to name.
+            Some(".") | Some("..") | Some("") | None => {
+                writes.push(AccessScope::Subtree(base.clone()));
+            }
+            Some(name) => writes.push(scope_like(nested, format!("{base}/{name}"))),
+        }
     }
     writes
 }
@@ -620,11 +636,25 @@ fn parse_permission_change(matches: &ArgMatches, cwd: &str) -> Result<CommandFil
         .map(|v| v.collect())
         .unwrap_or_default();
 
-    // -R applies the change to every file beneath each operand.
-    let recursion = if matches.get_count("recursive") > 0 {
-        Recursion::Yes
-    } else {
+    // -R applies the change to every file beneath each operand; -L/-H make
+    // that walk traverse symlinked directories, so it can leave the operand's
+    // tree. `chmod` declares neither flag, so the lookups are simply absent there.
+    let dereferences = matches
+        .try_get_one::<u8>("dereference")
+        .ok()
+        .flatten()
+        .is_some_and(|c| *c > 0)
+        || matches
+            .try_get_one::<u8>("dereference-command-line")
+            .ok()
+            .flatten()
+            .is_some_and(|c| *c > 0);
+    let recursion = if matches.get_count("recursive") == 0 {
         Recursion::No
+    } else if dereferences {
+        Recursion::Following
+    } else {
+        Recursion::Yes
     };
 
     let writes = positionals

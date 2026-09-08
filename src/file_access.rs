@@ -20,11 +20,15 @@ pub enum AccessScope {
     /// whatever a symlink under the root points at. Deny/ask behave as for
     /// `Subtree`; no allow rule can prove coverage, so it always prompts.
     UnboundedSubtree(String),
-    /// A glob pattern from a globbed word.
+    /// A glob pattern from a globbed word (`cat /home/*/secrets`). Nothing
+    /// constructs this variant yet: shell words are resolved by the caller, and
+    /// the resolver that can tell a globbed word from a literal one has not
+    /// landed. Its matching is implemented and tested so that resolver has a
+    /// scope to emit.
     Pattern(String),
     /// A path-shaped word whose value could not be determined. Matches no rule
-    /// and satisfies none, so it always prompts. Constructed by the
-    /// word-resolution item, not here.
+    /// and satisfies none, so it always prompts. Nothing constructs this
+    /// variant yet, for the same reason as `Pattern`.
     Unresolved(String),
 }
 

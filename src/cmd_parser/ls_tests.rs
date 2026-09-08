@@ -73,3 +73,18 @@ fn ls_common_flags_parse() {
         );
     }
 }
+
+#[skuld::test]
+fn ls_recursive_dereference_is_following() {
+    let result = LsParser.parse(&["-RL", "src"], "/tmp").unwrap();
+    assert_eq!(
+        result.reads,
+        vec![AccessScope::UnboundedSubtree("/tmp/src".into())],
+    );
+}
+
+#[skuld::test]
+fn ls_dereference_without_recursion_stays_exact() {
+    let result = LsParser.parse(&["-L", "src"], "/tmp").unwrap();
+    assert_eq!(result.reads, r(&["/tmp/src"]));
+}

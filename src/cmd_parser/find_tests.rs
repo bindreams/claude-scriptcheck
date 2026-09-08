@@ -133,3 +133,28 @@ fn find_delete_writes_the_search_subtree() {
     assert_eq!(result.reads, sub(&["/tmp/src"]));
     assert_eq!(result.writes, sub(&["/tmp/src"]));
 }
+
+#[skuld::test]
+fn find_expression_follow_is_following() {
+    // `-follow` is the expression-position spelling of `-L`, and it must not
+    // be mistaken for a search path.
+    let result = FindParser
+        .parse(&[".", "-follow", "-name", "*.txt"], "/repro")
+        .unwrap();
+    assert_eq!(result.reads, unbounded(&["/repro/."]));
+}
+
+#[skuld::test]
+fn find_trailing_debug_flag_does_not_panic() {
+    // `-D` takes a value that may be missing when the user types a bare `-D`.
+    let result = FindParser.parse(&["-D"], "/repro").unwrap();
+    assert_eq!(result.reads, sub(&["/repro"]));
+}
+
+#[skuld::test]
+fn find_debug_flag_consumes_its_value() {
+    let result = FindParser
+        .parse(&["-D", "tree", "/tmp/src"], "/tmp")
+        .unwrap();
+    assert_eq!(result.reads, sub(&["/tmp/src"]));
+}

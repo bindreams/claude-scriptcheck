@@ -303,13 +303,12 @@ pub fn resolve_scoped(path: &str, cwd: &str, recursion: Recursion) -> AccessScop
         Recursion::Following => AccessScope::UnboundedSubtree(resolved),
         // The stat is a check-time snapshot and the command runs afterwards, so
         // an operand swapped from file to directory inside that window is
-        // classified `Exact` and its subtree goes unchecked. Accepted
-        // deliberately (decision Q4 on scriptcheck#44): scriptcheck defends
-        // against accidents, not malice — an agent that has genuinely gone
-        // rogue circumvents the hook entirely — and the precision is worth more
-        // than closing the race. This is a recorded exception to the project's
-        // "never rely on data races" rule, not an oversight: do not "fix" it by
-        // deleting the narrowing without reading that decision first.
+        // classified `Exact` and its subtree goes unchecked. That race is
+        // accepted deliberately: scriptcheck defends against accidents, not
+        // malice — an agent that has genuinely gone rogue circumvents the hook
+        // entirely — and the precision is worth more than closing it. This is a
+        // recorded exception to the project's "never rely on data races" rule,
+        // not an oversight; do not delete the narrowing to "fix" it.
         Recursion::IfDir => match std::fs::metadata(&resolved) {
             Ok(meta) if !meta.is_dir() => AccessScope::Exact(resolved),
             // A directory, or a path that cannot be stat'd at all: assume the
