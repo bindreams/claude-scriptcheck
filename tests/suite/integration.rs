@@ -2125,3 +2125,116 @@ fn cli_check_rejects_invalid_mode() {
         String::from_utf8_lossy(&output.stderr),
     );
 }
+
+// ── Recursive access scopes (issue #44) ─────────────────────────────────────
+
+/// The project root in two forms: as written into hook payloads, and as it
+/// must appear inside a rule after Claude's `//` absolute-path escape.
+struct VaultProject {
+    root: String,
+    abs: String,
+}
+
+/// Canonicalize `dir` and derive both path forms. A Windows `\\?\` verbatim
+/// prefix (`//?/` after slash-normalization) is stripped so the `//` escape
+/// forms a clean absolute path rather than `///?/…`.
+fn vault_paths(dir: &std::path::Path) -> VaultProject {
+    let canonical = std::fs::canonicalize(dir).unwrap();
+    let root = canonical.to_string_lossy().replace('\\', "/");
+    let abs = root.strip_prefix("//?/").unwrap_or(&root).to_string();
+    VaultProject { root, abs }
+}
+
+/// Populate the project with `vault/creds` and a settings file.
+fn write_vault_project(dir: &std::path::Path, permissions: &str) -> VaultProject {
+    let paths = vault_paths(dir);
+    let canonical = std::path::PathBuf::from(&paths.root);
+    std::fs::create_dir_all(canonical.join("vault")).unwrap();
+    std::fs::write(canonical.join("vault/creds"), "TOKEN=sekrit").unwrap();
+    std::fs::create_dir_all(canonical.join(".claude")).unwrap();
+    std::fs::write(
+        canonical.join(".claude/settings.json"),
+        format!(r#"{{"permissions":{permissions}}}"#),
+    )
+    .unwrap();
+    paths
+}
+
+fn run_bash_hook(command: &str, project_root: &str) -> String {
+    let input = hook_json_with_mode(
+        "Bash",
+        serde_json::json!({ "command": command }),
+        project_root,
+        None,
+    );
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", project_root)]);
+    assert_eq!(output.status.code(), Some(0), "binary exited non-zero");
+    parse_decision(&output)
+}
+
+fn run_search_hook(tool_name: &str, path: &str, project_root: &str) -> String {
+    let input = serde_json::json!({
+        "session_id": "test-session",
+        "cwd": project_root,
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool_name,
+        "tool_input": { "pattern": "TOKEN", "path": path },
+        "tool_use_id": "toolu_test"
+    })
+    .to_string()
+    .into_bytes();
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", project_root)]);
+    assert_eq!(output.status.code(), Some(0), "binary exited non-zero");
+    parse_decision(&output)
+}
+
+// Grep / Glob tools ---------------------------------------------------------
+
+#[skuld::test]
+fn hook_grep_tool_on_denied_directory_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let abs = vault_paths(dir).abs;
+    let p = write_vault_project(
+        dir,
+        &format!(r#"{{"allow":["Read(//{abs}/**)"],"deny":["Read(//{abs}/vault/**)"]}}"#),
+    );
+    assert_eq!(
+        run_search_hook("Grep", &format!("{}/vault", p.root), &p.root),
+        "deny",
+    );
+}
+
+#[skuld::test]
+fn hook_glob_tool_on_denied_directory_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let abs = vault_paths(dir).abs;
+    let p = write_vault_project(
+        dir,
+        &format!(r#"{{"allow":["Read(//{abs}/**)"],"deny":["Read(//{abs}/vault/**)"]}}"#),
+    );
+    assert_eq!(
+        run_search_hook("Glob", &format!("{}/vault", p.root), &p.root),
+        "deny",
+    );
+}
+
+#[skuld::test]
+fn hook_grep_tool_on_allowed_directory_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let abs = vault_paths(dir).abs;
+    let p = write_vault_project(dir, &format!(r#"{{"allow":["Read(//{abs}/**)"]}}"#));
+    assert_eq!(
+        run_search_hook("Grep", &format!("{}/vault", p.root), &p.root),
+        "allow",
+    );
+}
+
+#[skuld::test]
+fn hook_read_tool_on_file_is_unaffected(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // The Read tool still checks one exact path — only Grep/Glob walk a tree.
+    let abs = vault_paths(dir).abs;
+    let p = write_vault_project(
+        dir,
+        &format!(r#"{{"allow":["Read(//{abs}/vault/creds)"]}}"#),
+    );
+    let input = file_tool_json_with_mode("Read", &format!("{}/vault/creds", p.root), &p.root, None);
+    let output = run_binary_with_env(&input, &[("CLAUDE_PROJECT_DIR", &p.root)]);
+    assert_eq!(parse_decision(&output), "allow");
+}
