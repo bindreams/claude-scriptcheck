@@ -2368,3 +2368,102 @@ fn unresolved_argument_matches_no_deny_rule() {
     let result = check("cat $FOO", &[], &["Read(**)"]);
     assert_eq!(result.decision, Decision::Ask);
 }
+
+// ── Descriptor operations vs file redirections ──────────────────────────────
+//
+// `>&word` is a file write only when the word names no descriptor. Bash §3.6.8
+// covers duplication (`>&2`) and closing (`>&-`); §3.6.9 adds the *move* form
+// `>&digit-`, which duplicates then closes the source. A trailing `-` is never
+// part of a filename in these forms, so reading `>&2-` as a file called `2-`
+// produces a false deny — the one failure a permission tool cannot walk back.
+
+#[skuld::test]
+fn fd_move_output_is_not_a_file() {
+    assert_eq!(
+        check("cat /tmp/x >&2-", &["Read(/tmp/x)"], &[]).decision,
+        Decision::Allow,
+    );
+}
+
+#[skuld::test]
+fn fd_move_output_to_stdout_is_not_a_file() {
+    assert_eq!(
+        check("cat /tmp/x >&1-", &["Read(/tmp/x)"], &[]).decision,
+        Decision::Allow,
+    );
+}
+
+#[skuld::test]
+fn fd_move_output_does_not_trigger_a_write_deny() {
+    // The regression this section exists for: a deny is authoritative in every
+    // mode and no rule the user adds can lift it, so a spurious one is worse
+    // than a spurious ask.
+    assert_eq!(
+        check("cat /tmp/x >&2-", &["Read(/tmp/x)"], &["Write(/tmp/**)"]).decision,
+        Decision::Allow,
+    );
+}
+
+#[skuld::test]
+fn fd_move_input_is_not_a_file() {
+    // Allow rather than ask is the discriminator: a recorded access to a file
+    // named `0-` would be unmatched and surface.
+    assert_eq!(
+        check("cat /tmp/x <&0-", &["Read(/tmp/x)"], &[]).decision,
+        Decision::Allow,
+    );
+}
+
+#[skuld::test]
+fn fd_duplication_and_closing_are_not_files() {
+    for cmd in ["cat /tmp/x >&2", "cat /tmp/x >&-", "cat /tmp/x <&3"] {
+        assert_eq!(
+            check(cmd, &["Read(/tmp/x)"], &["Write(/tmp/**)"]).decision,
+            Decision::Allow,
+            "{cmd}",
+        );
+    }
+}
+
+#[skuld::test]
+fn dup_input_from_a_non_numeric_word_is_not_a_file() {
+    // `<&word` requires digits or `-`; anything else is a redirection error,
+    // not a file open. The `>&` file special case is stated for output only.
+    assert_eq!(
+        check("cat /tmp/x <&$FOO", &["Read(/tmp/x)"], &[]).decision,
+        Decision::Allow,
+    );
+}
+
+#[skuld::test]
+fn dup_output_to_a_file_word_is_still_a_write() {
+    // The forms the move syntax is easily confused with must stay writes.
+    let result = check("cat /tmp/x >&/tmp/out", &["Read(/tmp/x)"], &[]);
+    assert_eq!(result.decision, Decision::Ask);
+    assert!(
+        result.missing_rules.iter().any(|r| r.contains("Write(")),
+        "expected a Write demand, got {:?}",
+        result.missing_rules,
+    );
+    assert!(matches!(
+        check(
+            "cat /tmp/x >&/tmp/out",
+            &["Read(/tmp/x)"],
+            &["Write(/tmp/**)"]
+        )
+        .decision,
+        Decision::Deny(_),
+    ));
+}
+
+#[skuld::test]
+fn leading_dash_word_is_a_file_not_a_descriptor_move() {
+    // `-2` is neither digits nor `-`, so bash opens a file called `-2`.
+    let result = check("cat /tmp/x >&-2", &["Read(/tmp/x)"], &[]);
+    assert_eq!(result.decision, Decision::Ask);
+    assert!(
+        result.missing_rules.iter().any(|r| r.contains("-2")),
+        "expected a Write demand for the file `-2`, got {:?}",
+        result.missing_rules,
+    );
+}

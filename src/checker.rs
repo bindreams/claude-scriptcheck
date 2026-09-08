@@ -669,16 +669,17 @@ fn accesses_for_redirect(redirect: &Redirect, cwd: &str) -> Vec<FileAccess> {
         RedirectKind::ReadWrite(w) => (w, &[Read, Write]),
         // The body is inline text — no file is named.
         RedirectKind::HereDoc { .. } | RedirectKind::BashHereString(_) => return Vec::new(),
-        // `<&word` requires digits or `-` (Bash §3.6.8); any other word is a
-        // redirection error, not a file open. The file special case below is
+        // `<&word` takes only the same descriptor forms as `>&` — digits, `-`,
+        // and the `digits-` move (Bash §3.6.8-9). Any other word is a
+        // redirection error, not a file open: the file special case below is
         // stated for output only.
         RedirectKind::DupInput(_) => return Vec::new(),
         RedirectKind::DupOutput(w) => {
             // Bash §3.6.8: "if n is omitted, and word does not expand to one or
             // more digits or '-', the standard output and standard error are
             // redirected" — that is a file write. With n present, or a word
-            // that duplicates, nothing is opened.
-            if redirect.fd.is_some() || duplicates_a_descriptor(w) {
+            // that names a descriptor, nothing is opened.
+            if redirect.fd.is_some() || names_a_descriptor(w) {
                 return Vec::new();
             }
             (w, &[Write])
@@ -697,16 +698,34 @@ fn accesses_for_redirect(redirect: &Redirect, cwd: &str) -> Vec<FileAccess> {
         .collect()
 }
 
-/// Does this `>&word` target duplicate or close a descriptor instead of naming
-/// a file?
+/// Does this `>&word` target name a descriptor instead of a file?
 ///
-/// Only a statically known all-digit word or `-` does. An unresolvable word
-/// might be either, and of the two readings only the file one needs checking.
-fn duplicates_a_descriptor(word: &Word) -> bool {
-    match word.try_to_static_string() {
-        Some(s) => s == "-" || (!s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())),
-        None => false,
+/// Three forms do, and none of them is a filename:
+///
+/// - `digits` — duplicate that descriptor (Bash §3.6.8), `>&2`
+/// - `-` — close the descriptor (§3.6.8), `>&-`
+/// - `digits-` — *move* the descriptor: duplicate, then close the source
+///   (§3.6.9), `>&2-`
+///
+/// The move form is the one worth spelling out. Reading its trailing `-` as
+/// part of a filename turns `>&2-` into a write to a file called `2-`, which a
+/// `Deny(Write(...))` over the directory then blocks — a false deny on a valid
+/// command, and no rule the user adds can lift it.
+///
+/// A leading `-` is *not* this: `>&-2` opens a file called `-2`, because the
+/// word is neither digits nor `-`.
+///
+/// An unresolvable word might be any of these or a filename; of those readings
+/// only the file one needs checking, so it is not treated as a descriptor.
+fn names_a_descriptor(word: &Word) -> bool {
+    let Some(s) = word.try_to_static_string() else {
+        return false;
+    };
+    if s == "-" {
+        return true;
     }
+    let digits = s.strip_suffix('-').unwrap_or(&s);
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 fn extract_redirect_accesses(redirects: &[Redirect], cwd: &str) -> Vec<FileAccess> {
