@@ -2,7 +2,7 @@ use thaum::ast::*;
 use thaum::visit::Visit;
 
 use crate::cmd_parser::{self, CmdParseResult};
-use crate::file_access::{self, AccessKind, FileAccess};
+use crate::file_access::{self, AccessKind, AccessScope, FileAccess};
 use crate::filter::{Arg0Pattern, BashFilter, BashFilterItem, Filter, PathFilter};
 use crate::permission::ParsedPermissions;
 use crate::permission_mode::PermissionMode;
@@ -434,57 +434,55 @@ impl PermissionChecker<'_> {
 
         // Canonicalize the query path(s) before matching against rules
         let scope = access.scope.canonicalized();
-        let path = scope.path().to_string();
+        let shown = scope.display();
 
         // Check deny first (Edit fallback for Write) — always runs, even when
-        // suppressing, because file Deny is authoritative.
+        // suppressing, because file Deny is authoritative. Deny and ask scan
+        // over-approximately: a rule fires if it *could* reach any path the
+        // access touches.
         let deny_matched: Option<String> = match access.kind {
-            AccessKind::Read => find_match(&self.perms.read.deny, &path),
-            AccessKind::Write => find_match(&self.perms.write.deny, &path)
-                .or_else(|| find_match(&self.perms.edit.deny, &path)),
+            AccessKind::Read => find_could_match(&self.perms.read.deny, &scope),
+            AccessKind::Write => find_could_match(&self.perms.write.deny, &scope)
+                .or_else(|| find_could_match(&self.perms.edit.deny, &scope)),
         };
         if let Some(rule_str) = deny_matched {
             self.matched_deny.push(rule_str);
             self.deny(format!(
                 "File access '{}' ({:?}) matched deny rule",
-                path, access.kind
+                shown, access.kind
             ));
             return;
         }
 
         // Check ask rules — force ask even if allowed (Edit fallback for Write)
         let ask_matched = match access.kind {
-            AccessKind::Read => find_match(&self.perms.read.ask, &path).is_some(),
+            AccessKind::Read => find_could_match(&self.perms.read.ask, &scope).is_some(),
             AccessKind::Write => {
-                find_match(&self.perms.write.ask, &path).is_some()
-                    || find_match(&self.perms.edit.ask, &path).is_some()
+                find_could_match(&self.perms.write.ask, &scope).is_some()
+                    || find_could_match(&self.perms.edit.ask, &scope).is_some()
             }
         };
         if ask_matched {
             if !suppress_unmatched {
-                let rule_needed = match access.kind {
-                    AccessKind::Read => format!("Read({path})"),
-                    AccessKind::Write => format!("Write({path})"),
-                };
-                self.unmatched.push(rule_needed);
+                self.unmatched.push(rule_suggestion(access.kind, &shown));
             }
             return;
         }
 
-        // Check allow (Edit fallback for Write)
+        // Check allow (Edit fallback for Write). The allow scan is
+        // under-approximating: a rule counts only when it provably covers
+        // every path the access touches. Anything unproven falls through to
+        // the push below, which is what turns an unsatisfiable access — an
+        // unresolved path, a symlink-following walk — into an ask.
         let allow_matched: Option<String> = match access.kind {
-            AccessKind::Read => find_match(&self.perms.read.allow, &path),
-            AccessKind::Write => find_match(&self.perms.write.allow, &path)
-                .or_else(|| find_match(&self.perms.edit.allow, &path)),
+            AccessKind::Read => find_covers(&self.perms.read.allow, &scope),
+            AccessKind::Write => find_covers(&self.perms.write.allow, &scope)
+                .or_else(|| find_covers(&self.perms.edit.allow, &scope)),
         };
         if let Some(rule_str) = allow_matched {
             self.matched_allow.push(rule_str);
         } else if !suppress_unmatched {
-            let rule_needed = match access.kind {
-                AccessKind::Read => format!("Read({path})"),
-                AccessKind::Write => format!("Write({path})"),
-            };
-            self.unmatched.push(rule_needed);
+            self.unmatched.push(rule_suggestion(access.kind, &shown));
         }
     }
 
@@ -569,14 +567,31 @@ impl PermissionChecker<'_> {
     }
 }
 
-/// Scan a bucket of path filters for one that covers `path`; return its rule
-/// string form if found. Generic over `PathFilter` so the same helper serves
-/// Read/Write/Edit buckets.
-fn find_match<F: PathFilter>(bucket: &[F], path: &str) -> Option<String> {
+/// Scan a bucket of path filters for one that *could* reach any path in
+/// `scope`; return its rule string form if found. The deny/ask direction.
+fn find_could_match<F: PathFilter>(bucket: &[F], scope: &AccessScope) -> Option<String> {
     bucket
         .iter()
-        .find(|f| f.matches(path))
+        .find(|f| f.could_match(scope))
         .map(|f| f.to_rule_string())
+}
+
+/// Scan a bucket of path filters for one that provably covers every path in
+/// `scope`; return its rule string form if found. The allow direction.
+fn find_covers<F: PathFilter>(bucket: &[F], scope: &AccessScope) -> Option<String> {
+    bucket
+        .iter()
+        .find(|f| f.covers(scope))
+        .map(|f| f.to_rule_string())
+}
+
+/// The rule a user would add to satisfy an unmatched access. For a subtree the
+/// suggestion is `Read(D/**)`, which under D4 covers the root as well.
+fn rule_suggestion(kind: AccessKind, shown: &str) -> String {
+    match kind {
+        AccessKind::Read => format!("Read({shown})"),
+        AccessKind::Write => format!("Write({shown})"),
+    }
 }
 
 // ─── Redirect file access extraction ─────────────────────────────────────────

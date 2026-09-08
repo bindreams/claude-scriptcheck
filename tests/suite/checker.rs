@@ -1,5 +1,5 @@
 use claude_scriptcheck::checker::{check_file_accesses, check_program, CheckResult, Decision};
-use claude_scriptcheck::file_access::{AccessKind, FileAccess};
+use claude_scriptcheck::file_access::{AccessKind, AccessScope, FileAccess};
 use claude_scriptcheck::path_util;
 use claude_scriptcheck::permission::{self, ParsedPermissions};
 use claude_scriptcheck::settings::Permissions;
@@ -2089,4 +2089,124 @@ fn dynamic_cmd_name_allowed_by_bash_double_star_space_star() {
     // BashFilter::matches falls through to empty-prefix + wildcard).
     let d = check("$CMD arg", &["Bash(** *)"], &[]);
     assert_eq!(d.decision, Decision::Allow);
+}
+
+// Access scopes ===================================================================================
+
+// `check_file_accesses` uses cwd `/tmp`, and `make_perms_full` parses rules
+// against cwd `/tmp`, so `//repro/...` (Claude's absolute escape) keeps these
+// paths off the project root.
+
+fn scoped(scope: AccessScope, kind: AccessKind) -> [FileAccess; 1] {
+    [FileAccess::scoped(scope, kind)]
+}
+
+#[skuld::test]
+fn subtree_read_hits_deny_rule_beneath_root() {
+    let accesses = scoped(
+        AccessScope::Subtree("/repro/vault".into()),
+        AccessKind::Read,
+    );
+    let result = check_accesses_full(&accesses, &[], &["Read(//repro/vault/**)"], &[]);
+    assert!(matches!(result.decision, Decision::Deny(_)));
+}
+
+#[skuld::test]
+fn subtree_read_hits_deny_rule_on_nested_file() {
+    let accesses = scoped(AccessScope::Subtree("/repro".into()), AccessKind::Read);
+    let result = check_accesses_full(&accesses, &[], &["Read(//repro/vault/creds)"], &[]);
+    assert!(matches!(result.decision, Decision::Deny(_)));
+}
+
+#[skuld::test]
+fn subtree_read_satisfied_by_globstar_allow() {
+    let accesses = scoped(
+        AccessScope::Subtree("/repro/vault".into()),
+        AccessKind::Read,
+    );
+    let result = check_accesses_full(&accesses, &["Read(//repro/vault/**)"], &[], &[]);
+    assert_eq!(result.decision, Decision::Allow);
+    assert!(result.missing_rules.is_empty());
+}
+
+#[skuld::test]
+fn subtree_read_not_satisfied_by_exact_allow() {
+    let accesses = scoped(
+        AccessScope::Subtree("/repro/vault".into()),
+        AccessKind::Read,
+    );
+    let result = check_accesses_full(&accesses, &["Read(//repro/vault)"], &[], &[]);
+    assert_eq!(result.decision, Decision::Ask);
+    assert_eq!(result.missing_rules, vec!["Read(/repro/vault/**)"]);
+}
+
+#[skuld::test]
+fn subtree_read_unaffected_by_fixed_depth_ask_rule() {
+    let accesses = scoped(AccessScope::Subtree("/repro/foo".into()), AccessKind::Read);
+    let result = check_accesses_full(
+        &accesses,
+        &["Read(//repro/**)"],
+        &[],
+        &["Read(//repro/*.log)"],
+    );
+    assert_eq!(result.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn subtree_write_hits_edit_deny_rule() {
+    let accesses = scoped(
+        AccessScope::Subtree("/repro/vault".into()),
+        AccessKind::Write,
+    );
+    let result = check_accesses_full(&accesses, &[], &["Edit(//repro/vault/**)"], &[]);
+    assert!(matches!(result.decision, Decision::Deny(_)));
+}
+
+#[skuld::test]
+fn unbounded_subtree_asks_under_globstar_allow() {
+    // A symlink-following walk can leave the subtree, so no allow rule proves
+    // coverage — the same command with a bounded scope allows.
+    let unbounded = scoped(
+        AccessScope::UnboundedSubtree("/repro/vault".into()),
+        AccessKind::Read,
+    );
+    let bounded = scoped(
+        AccessScope::Subtree("/repro/vault".into()),
+        AccessKind::Read,
+    );
+    assert_eq!(
+        check_accesses_full(&unbounded, &["Read(//repro/**)"], &[], &[]).decision,
+        Decision::Ask,
+    );
+    assert_eq!(
+        check_accesses_full(&bounded, &["Read(//repro/**)"], &[], &[]).decision,
+        Decision::Allow,
+    );
+}
+
+#[skuld::test]
+fn unbounded_subtree_still_denies() {
+    let accesses = scoped(
+        AccessScope::UnboundedSubtree("/repro".into()),
+        AccessKind::Read,
+    );
+    let result = check_accesses_full(&accesses, &[], &["Read(//repro/vault/**)"], &[]);
+    assert!(matches!(result.decision, Decision::Deny(_)));
+}
+
+#[skuld::test]
+fn unresolved_scope_asks_when_unsuppressed() {
+    let accesses = scoped(AccessScope::Unresolved("$FOO".into()), AccessKind::Read);
+    let result = check_accesses_full(&accesses, &["Read(**)"], &[], &[]);
+    assert_eq!(result.decision, Decision::Ask);
+    assert_eq!(result.missing_rules, vec!["Read(<unresolved: $FOO>)"]);
+}
+
+#[skuld::test]
+fn exact_access_to_subtree_root_still_asks_under_globstar_allow() {
+    // The D4 boundary: `Read(vault/**)` covers a recursive read rooted at
+    // `vault`, but a plain `cat vault` is untouched and still asks.
+    let accesses = scoped(AccessScope::Exact("/repro/vault".into()), AccessKind::Read);
+    let result = check_accesses_full(&accesses, &["Read(//repro/vault/**)"], &[], &[]);
+    assert_eq!(result.decision, Decision::Ask);
 }
