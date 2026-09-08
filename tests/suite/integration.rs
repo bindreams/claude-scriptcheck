@@ -2761,3 +2761,12 @@ fn hook_deny_rule_does_not_fire_on_unresolved_target(#[fixture(temp_dir)] dir: &
         "ask",
     );
 }
+
+#[skuld::test]
+fn hook_git_status_with_dynamic_redirect_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // `git status` declares file_only = Some(true), so this exercises that
+    // branch of the shortcut rather than the legacy is_file_only_command one.
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(dir, &format!(r#"{{"allow":["Read(//{abs}/**)"]}}"#));
+    assert_eq!(run_bash_hook("git status > $FOO", &p.root), "ask");
+}

@@ -2301,3 +2301,36 @@ fn dynamic_argument_still_truncates_bash_rule_matching() {
     let result = check("grep foo $f bar.txt", &["Bash(grep foo)"], &[]);
     assert_eq!(result.decision, Decision::Allow);
 }
+
+#[skuld::test]
+fn unresolved_redirect_still_demands_a_bash_rule() {
+    // Without this the ask is unactionable: the only other entry names a path
+    // rule that can never cover an unknown path.
+    let result = check("cat /tmp/x > $FOO", &["Read(/tmp/x)"], &[]);
+    assert_eq!(result.decision, Decision::Ask);
+    assert!(
+        result.missing_rules.iter().any(|r| r == "Bash(cat /tmp/x)"),
+        "no actionable rule offered: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn python_inline_script_with_unresolved_redirect_demands_a_bash_rule() {
+    // The Python-analysis shortcut sits outside the file_only match, so it
+    // needs the same guard — otherwise it skips the Bash demand on its own.
+    let result = check("python -c 'print(1)' > $FOO", &[], &[]);
+    assert_eq!(result.decision, Decision::Ask);
+    assert!(
+        result.missing_rules.iter().any(|r| r == "Bash(python -c *)"),
+        "no actionable rule offered: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn python_inline_script_without_unresolved_words_still_skips_the_bash_rule() {
+    // Control: the guard must not disable Python analysis outright.
+    let result = check("python -c 'print(1)'", &[], &[]);
+    assert_eq!(result.decision, Decision::Allow);
+}

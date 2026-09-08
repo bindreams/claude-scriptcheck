@@ -358,17 +358,28 @@ impl PermissionChecker<'_> {
         // For file-only commands (mkdir, touch, rm, cp, …), the file access rules are
         // sufficient — no separate Bash() rule is needed, provided:
         //   1. the command has at least one resolved file access to gate it,
-        //   2. all arguments are static (no dynamic args that could hide unchecked paths), and
+        //   2. every word is statically known, so no unchecked path is hidden, and
         //   3. the parser didn't fail (we trust the extracted accesses).
         // Similarly, when Python AST analysis succeeded, the Bash() rule is suppressed.
         if !bash_allowed && !parse_failed {
             let has_file_accesses = !redirect_accesses.is_empty() || !cmd_accesses.is_empty();
-            let has_dynamic_args = args[1..].iter().any(|a| a.is_unresolved());
+            // Redirect targets count, not just arguments. A file-only command
+            // whose reads are satisfied and whose redirect target is unknown was
+            // an unconstrained write primitive (#45): nothing was left to object.
+            //
+            // Parser-derived accesses count for the same reason. Today an
+            // unresolved one implies an unresolved argument, so that disjunct is
+            // covered by the first; it states the intent rather than relying on
+            // the coincidence.
+            let unresolved_access = |a: &FileAccess| matches!(a.scope, AccessScope::Unresolved(_));
+            let has_unresolved_word = args[1..].iter().any(|a| a.is_unresolved())
+                || redirect_accesses.iter().any(unresolved_access)
+                || cmd_accesses.iter().any(unresolved_access);
             let can_skip = match file_only_override {
                 // Parser explicitly declared this invocation's effects.
                 // Trust it even with zero file accesses (e.g. read-only git
-                // subcommands), but still require static args.
-                Some(true) => !has_dynamic_args && !bash_asked,
+                // subcommands), but still require every word to be known.
+                Some(true) => !has_unresolved_word && !bash_asked,
                 // Parser says there are non-file side effects (e.g. network).
                 Some(false) => false,
                 // Legacy path: use is_file_only_command() and require at
@@ -376,10 +387,13 @@ impl PermissionChecker<'_> {
                 None => {
                     file_access::is_file_only_command(effective)
                         && has_file_accesses
-                        && !has_dynamic_args
+                        && !has_unresolved_word
                         && !bash_asked
                 }
-            } || (python_analyzed && !bash_asked);
+            // The Python shortcut sits outside the match and needs the same
+            // guard: analysing the inline script says nothing about a redirect
+            // target or an argument the analysis never saw.
+            } || (python_analyzed && !bash_asked && !has_unresolved_word);
 
             if !can_skip {
                 // Build a name-form suggestion filter: `Arg0::Name(stripped
