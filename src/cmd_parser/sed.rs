@@ -1,3 +1,5 @@
+use crate::file_access::AccessScope;
+
 use super::{resolve, CommandFileAccesses, CommandParser};
 
 // ─── sed ─────────────────────────────────────────────────────────────────────
@@ -173,7 +175,7 @@ impl CommandParser for SedParser {
             i += 1;
         }
 
-        let mut reads: Vec<String> = file_reads.iter().map(|f| resolve(f, cwd)).collect();
+        let mut reads: Vec<AccessScope> = file_reads.iter().map(|f| resolve(f, cwd)).collect();
         let mut writes = Vec::new();
 
         for path in &file_paths {

@@ -1,3 +1,5 @@
+use crate::file_access::AccessScope;
+
 use clap::ArgMatches;
 
 use super::helpers::*;
@@ -12,7 +14,7 @@ use super::CommandParser;
 fn parse_compression(matches: &ArgMatches, cwd: &str) -> CommandFileAccesses {
     let to_stdout = matches.get_count("stdout") > 0;
 
-    let paths: Vec<String> = matches
+    let paths: Vec<AccessScope> = matches
         .get_many::<String>("files")
         .map(|vals| vals.map(|f| super::resolve(f, cwd)).collect())
         .unwrap_or_default();

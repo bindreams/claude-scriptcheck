@@ -9,6 +9,7 @@
 
 pub mod bash;
 pub mod path;
+pub mod scope;
 
 use std::borrow::Cow;
 
@@ -36,6 +37,17 @@ pub trait PathFilter: Filter {
 
     /// The canonicalized glob pattern backing this filter.
     fn pattern(&self) -> &str;
+
+    /// Could this filter match any member of `scope`? The deny/ask direction.
+    fn could_match(&self, scope: &crate::file_access::AccessScope) -> bool {
+        scope::could_match(self.pattern(), scope)
+    }
+
+    /// Does this filter provably cover every member of `scope`? The allow
+    /// direction.
+    fn covers(&self, scope: &crate::file_access::AccessScope) -> bool {
+        scope::covers(self.pattern(), scope)
+    }
 }
 
 /// Generates `impl Filter` for a filter type.

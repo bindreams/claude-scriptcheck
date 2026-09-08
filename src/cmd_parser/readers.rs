@@ -1,5 +1,7 @@
+use crate::file_access::AccessScope;
+
 use super::helpers::*;
-use super::{resolve, CommandFileAccesses, CommandParser};
+use super::{resolve, resolve_scoped, CommandFileAccesses, CommandParser, Recursion};
 
 // ─── Simple readers ──────────────────────────────────────────────────────────
 // All positional args → reads.
@@ -737,36 +739,61 @@ impl CommandParser for ReadlinkParser {
 pub(super) struct DuParser;
 impl CommandParser for DuParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
-        parse_with(
-            base_cmd("du")
-                .arg(flag('a', "all"))
-                .arg(flag('s', "summarize"))
-                .arg(flag('c', "total"))
-                .arg(flag('h', "human-readable"))
-                .arg(flag('H', "si"))
-                .arg(flag('k', "kilobytes"))
-                .arg(flag('m', "megabytes"))
-                .arg(flag('l', "count-links"))
-                .arg(flag('L', "dereference"))
-                .arg(flag('S', "separate-dirs"))
-                .arg(flag('x', "one-file-system"))
-                .arg(flag('0', "null"))
-                .arg(flag_l("apparent-size"))
-                .arg(flag_l("inodes"))
-                .arg(val('d', "max-depth"))
-                .arg(val('B', "block-size"))
-                .arg(val_l("exclude"))
-                .arg(val('t', "threshold"))
-                .arg(val_l("time"))
-                .arg(val_l("time-style"))
-                .arg(val_l("files0-from"))
-                // BSD/macOS
-                .arg(val('I', "ignore"))
-                .arg(files_arg()),
-            args,
-            cwd,
-            extract_positional_reads,
-        )
+        let matches = base_cmd("du")
+            .arg(flag('a', "all"))
+            .arg(flag('s', "summarize"))
+            .arg(flag('c', "total"))
+            .arg(flag('h', "human-readable"))
+            .arg(flag('H', "si"))
+            .arg(flag('k', "kilobytes"))
+            .arg(flag('m', "megabytes"))
+            .arg(flag('l', "count-links"))
+            .arg(flag('L', "dereference"))
+            .arg(flag('S', "separate-dirs"))
+            .arg(flag('x', "one-file-system"))
+            .arg(flag('0', "null"))
+            .arg(flag_l("apparent-size"))
+            .arg(flag_l("inodes"))
+            .arg(val('d', "max-depth"))
+            .arg(val('B', "block-size"))
+            .arg(val_l("exclude"))
+            .arg(val('t', "threshold"))
+            .arg(val_l("time"))
+            .arg(val_l("time-style"))
+            .arg(val_l("files0-from"))
+            // BSD/macOS
+            .arg(val('I', "ignore"))
+            .arg(files_arg())
+            .try_get_matches_from(args)
+            .map_err(|e| e.to_string())?;
+
+        // du always walks its operands; -L makes it follow symlinks out of them.
+        let recursion = if matches.get_count("dereference") > 0 {
+            Recursion::Following
+        } else {
+            Recursion::Yes
+        };
+
+        let positionals: Vec<&String> = matches
+            .get_many::<String>("files")
+            .map(|v| v.collect())
+            .unwrap_or_default();
+        let reads = if positionals.is_empty() {
+            vec![resolve_scoped(cwd, cwd, recursion)]
+        } else {
+            positionals
+                .iter()
+                .map(|p| resolve_scoped(p, cwd, recursion))
+                .collect()
+        };
+
+        Ok(CommandFileAccesses {
+            reads,
+            writes: Vec::new(),
+            inline_script_start: None,
+            file_only: None,
+            ..Default::default()
+        })
     }
 }
 
@@ -786,7 +813,7 @@ impl CommandParser for Base64Parser {
             .arg(files_arg());
         let matches = cmd.try_get_matches_from(args).map_err(|e| e.to_string())?;
 
-        let mut reads: Vec<String> = matches
+        let mut reads: Vec<AccessScope> = matches
             .get_many::<String>("files")
             .into_iter()
             .flatten()
@@ -795,7 +822,7 @@ impl CommandParser for Base64Parser {
         if let Some(vals) = matches.get_many::<String>("input") {
             reads.extend(vals.map(|f| resolve(f, cwd)));
         }
-        let writes: Vec<String> = matches
+        let writes: Vec<AccessScope> = matches
             .get_many::<String>("output")
             .into_iter()
             .flatten()
