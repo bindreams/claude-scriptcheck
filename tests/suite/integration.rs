@@ -2551,7 +2551,7 @@ fn creds_read_only(abs: &str) -> String {
     format!(r#"{{"allow":["Read(//{abs}/vault/creds)"]}}"#)
 }
 
-// The issue's table -------------------------------------------------------------------------------------------------
+// The issue's table ---------------------------------------------------------------------------------------------------
 
 #[skuld::test]
 fn hook_cat_allowed_file_is_allowed(#[fixture(temp_dir)] dir: &std::path::Path) {
@@ -2638,7 +2638,7 @@ fn hook_compound_redirect_to_dynamic_target_asks(#[fixture(temp_dir)] dir: &std:
     assert_eq!(run_bash_hook("{ echo hi; } > $FOO", &p.root), "ask");
 }
 
-// Deny rules the misclassifications bypassed ---------------------------------------------------------------------------
+// Deny rules the misclassifications bypassed --------------------------------------------------------------------------
 //
 // These carry `Bash(cat *)` deliberately: it proves the deny fires *through*
 // suppression, which is the property each bypass defeated.
