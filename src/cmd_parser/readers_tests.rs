@@ -590,7 +590,7 @@ fn otool_multiple_flags() {
     assert_eq!(r.reads, reads(&["/tmp/binary"]));
 }
 
-// Recursion scopes ================================================================================
+// Recursion scopes ====================================================================================================
 
 #[skuld::test]
 fn du_operand_is_subtree() {

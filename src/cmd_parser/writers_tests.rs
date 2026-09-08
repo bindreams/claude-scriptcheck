@@ -65,7 +65,7 @@ fn rm_bsd_overwrite_flag() {
     assert_eq!(r.writes, sub(&["/tmp/sensitive"]));
 }
 
-// Recursion scopes ================================================================================
+// Recursion scopes ====================================================================================================
 
 #[skuld::test]
 fn rm_recursive_operands_are_subtree() {

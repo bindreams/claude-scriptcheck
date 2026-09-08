@@ -112,7 +112,7 @@ fn tar_long_flag_equals() {
     assert_eq!(result.reads, r(&["/tmp/archive.tar"]));
 }
 
-// Recursion scopes ================================================================================
+// Recursion scopes ====================================================================================================
 
 #[skuld::test]
 fn tar_create_directory_source_is_subtree(#[fixture(temp_dir)] dir: &std::path::Path) {

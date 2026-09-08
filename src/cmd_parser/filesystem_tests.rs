@@ -450,7 +450,7 @@ fn touch_bsd_access_time_flag() {
     assert_eq!(r.writes, writes(&["/tmp/file.txt"]));
 }
 
-// Recursion scopes ================================================================================
+// Recursion scopes ====================================================================================================
 
 #[skuld::test]
 fn diff_recursive_operands_are_subtree() {
@@ -478,7 +478,7 @@ fn cp_without_r_sources_are_exact() {
     assert_eq!(r.writes, writes(&["/tmp/b.txt"]));
 }
 
-// Recursive writes and directory destinations =====================================================
+// Recursive writes and directory destinations =========================================================================
 
 #[skuld::test]
 fn chmod_recursive_targets_are_subtree() {

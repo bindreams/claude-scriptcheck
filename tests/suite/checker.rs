@@ -2091,7 +2091,7 @@ fn dynamic_cmd_name_allowed_by_bash_double_star_space_star() {
     assert_eq!(d.decision, Decision::Allow);
 }
 
-// Access scopes ===================================================================================
+// Access scopes =======================================================================================================
 
 // `check_file_accesses` uses cwd `/tmp`, and `make_perms_full` parses rules
 // against cwd `/tmp`, so `//repro/...` (Claude's absolute escape) keeps these

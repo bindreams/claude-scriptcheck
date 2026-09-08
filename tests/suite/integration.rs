@@ -2188,7 +2188,7 @@ fn run_search_hook(tool_name: &str, path: &str, project_root: &str) -> String {
     parse_decision(&output)
 }
 
-// Grep / Glob tools ---------------------------------------------------------
+// Grep / Glob tools ---------------------------------------------------------------------------------------------------
 
 #[skuld::test]
 fn hook_grep_tool_on_denied_directory_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
@@ -2239,7 +2239,7 @@ fn hook_read_tool_on_file_is_unaffected(#[fixture(temp_dir)] dir: &std::path::Pa
     assert_eq!(parse_decision(&output), "allow");
 }
 
-// Bash: deny rules beneath the search root --------------------------------
+// Bash: deny rules beneath the search root ----------------------------------------------------------------------------
 
 /// The issue's deny table. Every command reaches `vault/` or something under
 /// it; each one was `allow` before the access carried a scope.
@@ -2326,7 +2326,7 @@ fn hook_ls_recursive_above_vault_denies(#[fixture(temp_dir)] dir: &std::path::Pa
     assert_eq!(run_bash_hook(&format!("ls -R {}", p.root), &p.root), "deny");
 }
 
-// Bash: recursive writes, which the issue omits ---------------------------
+// Bash: recursive writes, which the issue omits -----------------------------------------------------------------------
 
 #[skuld::test]
 fn hook_rm_recursive_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
@@ -2399,7 +2399,7 @@ fn hook_grep_recursive_denies_on_nested_file_rule(#[fixture(temp_dir)] dir: &std
     );
 }
 
-// Bash: allow rules covering the search root ------------------------------
+// Bash: allow rules covering the search root --------------------------------------------------------------------------
 
 /// A subtree allow rule over the whole project. Every command below is
 /// file-only, so no `Bash(...)` rule is needed — an ask here would mean the
@@ -2495,7 +2495,7 @@ fn hook_du_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
     );
 }
 
-// Bash: suppression, refusal, and symlink-following ------------------------
+// Bash: suppression, refusal, and symlink-following -------------------------------------------------------------------
 
 #[skuld::test]
 fn hook_bash_allow_does_not_suppress_subtree_deny(#[fixture(temp_dir)] dir: &std::path::Path) {

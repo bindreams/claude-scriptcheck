@@ -192,7 +192,7 @@ fn grep_bsd_null_flag() {
 
 // ── sort GNU-only flags ──
 
-// Recursion scopes ================================================================================
+// Recursion scopes ====================================================================================================
 
 #[skuld::test]
 fn grep_recursive_flag_makes_operand_subtree() {

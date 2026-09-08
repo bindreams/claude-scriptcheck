@@ -101,7 +101,7 @@ fn find_newer_variant() {
     assert_eq!(result.reads, sub(&["/tmp"]));
 }
 
-// Recursion scopes ================================================================================
+// Recursion scopes ====================================================================================================
 
 #[skuld::test]
 fn find_search_path_is_subtree() {
