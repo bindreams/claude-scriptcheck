@@ -789,7 +789,7 @@ fn check_accesses_full(
 #[skuld::test]
 fn file_accesses_read_allowed() {
     let accesses = [FileAccess {
-        path: "/tmp/data.txt".into(),
+        scope: "/tmp/data.txt".into(),
         kind: AccessKind::Read,
     }];
     let result = check_file_accesses(&accesses, &make_perms(&["Read(/tmp/**)"], &[]), "/tmp");
@@ -804,7 +804,7 @@ fn file_accesses_read_allowed() {
 #[skuld::test]
 fn file_accesses_read_denied() {
     let accesses = [FileAccess {
-        path: "/etc/shadow".into(),
+        scope: "/etc/shadow".into(),
         kind: AccessKind::Read,
     }];
     let result = check_file_accesses(
@@ -824,7 +824,7 @@ fn file_accesses_read_denied() {
 fn file_accesses_read_no_matching_rule_asks() {
     let d = check_accesses(
         &[FileAccess {
-            path: "/home/user/secret.txt".into(),
+            scope: "/home/user/secret.txt".into(),
             kind: AccessKind::Read,
         }],
         &[],
@@ -845,7 +845,7 @@ fn file_accesses_read_no_matching_rule_asks() {
 fn file_accesses_read_ask_overrides_allow() {
     let d = check_accesses_full(
         &[FileAccess {
-            path: "/tmp/secret.txt".into(),
+            scope: "/tmp/secret.txt".into(),
             kind: AccessKind::Read,
         }],
         &["Read(/tmp/**)"],
@@ -859,7 +859,7 @@ fn file_accesses_read_ask_overrides_allow() {
 fn file_accesses_write_allowed() {
     let d = check_accesses(
         &[FileAccess {
-            path: "/tmp/out.txt".into(),
+            scope: "/tmp/out.txt".into(),
             kind: AccessKind::Write,
         }],
         &["Write(/tmp/**)"],
@@ -872,7 +872,7 @@ fn file_accesses_write_allowed() {
 fn file_accesses_write_allowed_by_edit_fallback() {
     let d = check_accesses(
         &[FileAccess {
-            path: "/tmp/out.txt".into(),
+            scope: "/tmp/out.txt".into(),
             kind: AccessKind::Write,
         }],
         &["Edit(/tmp/**)"],
@@ -885,7 +885,7 @@ fn file_accesses_write_allowed_by_edit_fallback() {
 fn file_accesses_write_denied() {
     let d = check_accesses(
         &[FileAccess {
-            path: "/etc/passwd".into(),
+            scope: "/etc/passwd".into(),
             kind: AccessKind::Write,
         }],
         &[],
@@ -904,11 +904,11 @@ fn file_accesses_empty_list_allows() {
 fn file_accesses_multiple_with_deny_stops_early() {
     let accesses = [
         FileAccess {
-            path: "/etc/shadow".into(),
+            scope: "/etc/shadow".into(),
             kind: AccessKind::Read,
         },
         FileAccess {
-            path: "/tmp/safe.txt".into(),
+            scope: "/tmp/safe.txt".into(),
             kind: AccessKind::Read,
         },
     ];
@@ -920,11 +920,11 @@ fn file_accesses_multiple_with_deny_stops_early() {
 fn file_accesses_multiple_unmatched_collected() {
     let accesses = [
         FileAccess {
-            path: "/home/a.txt".into(),
+            scope: "/home/a.txt".into(),
             kind: AccessKind::Read,
         },
         FileAccess {
-            path: "/home/b.txt".into(),
+            scope: "/home/b.txt".into(),
             kind: AccessKind::Read,
         },
     ];
@@ -944,7 +944,7 @@ fn file_accesses_multiple_unmatched_collected() {
 fn file_accesses_write_denied_by_edit_rule() {
     let d = check_accesses(
         &[FileAccess {
-            path: "/etc/config.json".into(),
+            scope: "/etc/config.json".into(),
             kind: AccessKind::Write,
         }],
         &[],

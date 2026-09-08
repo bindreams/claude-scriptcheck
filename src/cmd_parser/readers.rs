@@ -1,3 +1,5 @@
+use crate::file_access::AccessScope;
+
 use super::helpers::*;
 use super::{resolve, CommandFileAccesses, CommandParser};
 
@@ -786,7 +788,7 @@ impl CommandParser for Base64Parser {
             .arg(files_arg());
         let matches = cmd.try_get_matches_from(args).map_err(|e| e.to_string())?;
 
-        let mut reads: Vec<String> = matches
+        let mut reads: Vec<AccessScope> = matches
             .get_many::<String>("files")
             .into_iter()
             .flatten()
@@ -795,7 +797,7 @@ impl CommandParser for Base64Parser {
         if let Some(vals) = matches.get_many::<String>("input") {
             reads.extend(vals.map(|f| resolve(f, cwd)));
         }
-        let writes: Vec<String> = matches
+        let writes: Vec<AccessScope> = matches
             .get_many::<String>("output")
             .into_iter()
             .flatten()

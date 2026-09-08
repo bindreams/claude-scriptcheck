@@ -14,15 +14,15 @@ mod tar;
 mod wrappers;
 mod writers;
 
-use crate::file_access;
+use crate::file_access::{self, AccessScope};
 
 /// Resolved file paths a command will access.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CommandFileAccesses {
-    /// Absolute paths the command reads from.
-    pub reads: Vec<String>,
-    /// Absolute paths the command writes to.
-    pub writes: Vec<String>,
+    /// Path sets the command reads from.
+    pub reads: Vec<AccessScope>,
+    /// Path sets the command writes to.
+    pub writes: Vec<AccessScope>,
     /// If the command takes an inline script (e.g. `-c '...'` or `-e '...'`),
     /// the 0-based index into the parser's args slice (excluding the command
     /// name) where the script text begins.  Used by the checker to truncate
@@ -48,8 +48,8 @@ impl CommandFileAccesses {
     }
 
     pub fn filter_sentinel(mut self, sentinel: &str) -> Self {
-        self.reads.retain(|p| !p.contains(sentinel));
-        self.writes.retain(|p| !p.contains(sentinel));
+        self.reads.retain(|p| !p.path().contains(sentinel));
+        self.writes.retain(|p| !p.path().contains(sentinel));
         self // inline_script_start and effective_cmd_name preserved as-is
     }
 }
@@ -272,8 +272,16 @@ pub fn is_python_cmd(name: &str) -> bool {
     name == "python" || name.starts_with("python3")
 }
 
-/// Resolve a path relative to cwd. Re-exports from file_access for use by parsers.
-pub fn resolve(path: &str, cwd: &str) -> String {
+/// Resolve a path relative to cwd into an `Exact` access scope — the shape
+/// almost every parser wants for an operand it names directly.
+pub fn resolve(path: &str, cwd: &str) -> AccessScope {
+    AccessScope::Exact(resolve_str(path, cwd))
+}
+
+/// Resolve a path relative to cwd as a plain string, for parsers that do path
+/// arithmetic on the result (e.g. git's `--git-dir` / `--work-tree` handling)
+/// rather than recording it as an access.
+pub fn resolve_str(path: &str, cwd: &str) -> String {
     file_access::resolve_path(path, cwd)
 }
 

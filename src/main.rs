@@ -499,10 +499,7 @@ fn handle_file_search(
     let normalized = path_util::normalize_separators(&raw_path);
     let resolved = file_access::resolve_path(&normalized, cwd);
 
-    let accesses = [FileAccess {
-        path: resolved.clone(),
-        kind: AccessKind::Read,
-    }];
+    let accesses = [FileAccess::exact(resolved.clone(), AccessKind::Read)];
     let result = checker::check_file_accesses(&accesses, parsed_perms, cwd);
     let result = checker::apply_permission_mode(result, permission_mode);
 
@@ -562,10 +559,7 @@ fn handle_file_tool(
     let normalized = path_util::normalize_separators(&raw_path);
     let resolved = file_access::resolve_path(&normalized, cwd);
 
-    let accesses = [FileAccess {
-        path: resolved.clone(),
-        kind: access_kind,
-    }];
+    let accesses = [FileAccess::exact(resolved.clone(), access_kind)];
     let result = checker::check_file_accesses(&accesses, parsed_perms, cwd);
     let result = checker::apply_permission_mode(result, permission_mode);
 

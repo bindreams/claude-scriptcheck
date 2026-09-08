@@ -298,14 +298,12 @@ impl PermissionChecker<'_> {
                     let accesses = cfa
                         .reads
                         .into_iter()
-                        .map(|p| FileAccess {
-                            path: p,
-                            kind: AccessKind::Read,
-                        })
-                        .chain(cfa.writes.into_iter().map(|p| FileAccess {
-                            path: p,
-                            kind: AccessKind::Write,
-                        }))
+                        .map(|scope| FileAccess::scoped(scope, AccessKind::Read))
+                        .chain(
+                            cfa.writes
+                                .into_iter()
+                                .map(|scope| FileAccess::scoped(scope, AccessKind::Write)),
+                        )
                         .collect::<Vec<_>>();
                     (accesses, false, script_start, file_only, eff)
                 }
@@ -434,8 +432,9 @@ impl PermissionChecker<'_> {
             return;
         }
 
-        // Canonicalize the query path before matching against rules
-        let path = crate::canonicalize::best_effort_canonicalize(&access.path);
+        // Canonicalize the query path(s) before matching against rules
+        let scope = access.scope.canonicalized();
+        let path = scope.path().to_string();
 
         // Check deny first (Edit fallback for Write) — always runs, even when
         // suppressing, because file Deny is authoritative.
@@ -597,10 +596,10 @@ fn extract_redirect_access(redirect: &Redirect, cwd: &str) -> Option<FileAccess>
 
     let word = word?;
     let path = word.try_to_static_string()?;
-    Some(FileAccess {
-        path: file_access::resolve_path(&path, cwd),
+    Some(FileAccess::exact(
+        file_access::resolve_path(&path, cwd),
         kind,
-    })
+    ))
 }
 
 fn extract_redirect_accesses(redirects: &[Redirect], cwd: &str) -> Vec<FileAccess> {
