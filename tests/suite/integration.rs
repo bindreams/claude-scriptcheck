@@ -2128,21 +2128,21 @@ fn cli_check_rejects_invalid_mode() {
 
 // ── Recursive access scopes (issue #44) ─────────────────────────────────────
 
-/// The project root in two forms: as written into hook payloads, and as it
-/// must appear inside a rule after Claude's `//` absolute-path escape.
+/// The canonical project root: absolute, forward slashes, and free of the
+/// Windows `\\?\` verbatim prefix (`//?/` after slash-normalization).
+///
+/// The prefix has to go for two reasons: prepended to Claude's `//`
+/// absolute-path escape it would form `///?/…`, and embedded in a shell command
+/// it is not a path any command could open.
 struct VaultProject {
     root: String,
-    abs: String,
 }
 
-/// Canonicalize `dir` and derive both path forms. A Windows `\\?\` verbatim
-/// prefix (`//?/` after slash-normalization) is stripped so the `//` escape
-/// forms a clean absolute path rather than `///?/…`.
 fn vault_paths(dir: &std::path::Path) -> VaultProject {
     let canonical = std::fs::canonicalize(dir).unwrap();
-    let root = canonical.to_string_lossy().replace('\\', "/");
-    let abs = root.strip_prefix("//?/").unwrap_or(&root).to_string();
-    VaultProject { root, abs }
+    let slashed = canonical.to_string_lossy().replace('\\', "/");
+    let root = slashed.strip_prefix("//?/").unwrap_or(&slashed).to_string();
+    VaultProject { root }
 }
 
 /// Populate the project with `vault/creds` and a settings file.
@@ -2192,7 +2192,7 @@ fn run_search_hook(tool_name: &str, path: &str, project_root: &str) -> String {
 
 #[skuld::test]
 fn hook_grep_tool_on_denied_directory_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(
         dir,
         &format!(r#"{{"allow":["Read(//{abs}/**)"],"deny":["Read(//{abs}/vault/**)"]}}"#),
@@ -2205,7 +2205,7 @@ fn hook_grep_tool_on_denied_directory_denies(#[fixture(temp_dir)] dir: &std::pat
 
 #[skuld::test]
 fn hook_glob_tool_on_denied_directory_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(
         dir,
         &format!(r#"{{"allow":["Read(//{abs}/**)"],"deny":["Read(//{abs}/vault/**)"]}}"#),
@@ -2218,7 +2218,7 @@ fn hook_glob_tool_on_denied_directory_denies(#[fixture(temp_dir)] dir: &std::pat
 
 #[skuld::test]
 fn hook_grep_tool_on_allowed_directory_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &format!(r#"{{"allow":["Read(//{abs}/**)"]}}"#));
     assert_eq!(
         run_search_hook("Grep", &format!("{}/vault", p.root), &p.root),
@@ -2229,7 +2229,7 @@ fn hook_grep_tool_on_allowed_directory_allows(#[fixture(temp_dir)] dir: &std::pa
 #[skuld::test]
 fn hook_read_tool_on_file_is_unaffected(#[fixture(temp_dir)] dir: &std::path::Path) {
     // The Read tool still checks one exact path — only Grep/Glob walk a tree.
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(
         dir,
         &format!(r#"{{"allow":["Read(//{abs}/vault/creds)"]}}"#),
@@ -2250,7 +2250,7 @@ fn deny_rules(abs: &str) -> String {
 #[skuld::test]
 fn hook_cat_vault_file_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
     // Regression: the non-recursive read the issue reports as already denied.
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &deny_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("cat {}/vault/creds", p.root), &p.root),
@@ -2261,7 +2261,7 @@ fn hook_cat_vault_file_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
 #[skuld::test]
 fn hook_grep_recursive_at_vault_root_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
     // The issue's sharpest row: the search root *is* the protected directory.
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &deny_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("grep -rn TOKEN {}/vault", p.root), &p.root),
@@ -2271,7 +2271,7 @@ fn hook_grep_recursive_at_vault_root_denies(#[fixture(temp_dir)] dir: &std::path
 
 #[skuld::test]
 fn hook_grep_recursive_above_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &deny_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("grep -rn TOKEN {}", p.root), &p.root),
@@ -2281,7 +2281,7 @@ fn hook_grep_recursive_above_vault_denies(#[fixture(temp_dir)] dir: &std::path::
 
 #[skuld::test]
 fn hook_find_above_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &deny_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("find {} -type f", p.root), &p.root),
@@ -2291,7 +2291,7 @@ fn hook_find_above_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
 
 #[skuld::test]
 fn hook_tar_create_above_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &deny_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("tar cf - {} | cat", p.root), &p.root),
@@ -2301,7 +2301,7 @@ fn hook_tar_create_above_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path
 
 #[skuld::test]
 fn hook_cp_recursive_above_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &deny_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("cp -r {} /tmp/copy-44", p.root), &p.root),
@@ -2311,7 +2311,7 @@ fn hook_cp_recursive_above_vault_denies(#[fixture(temp_dir)] dir: &std::path::Pa
 
 #[skuld::test]
 fn hook_du_above_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &deny_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("du -sh {}", p.root), &p.root),
@@ -2321,7 +2321,7 @@ fn hook_du_above_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
 
 #[skuld::test]
 fn hook_ls_recursive_above_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &deny_rules(&abs));
     assert_eq!(run_bash_hook(&format!("ls -R {}", p.root), &p.root), "deny");
 }
@@ -2330,7 +2330,7 @@ fn hook_ls_recursive_above_vault_denies(#[fixture(temp_dir)] dir: &std::path::Pa
 
 #[skuld::test]
 fn hook_rm_recursive_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &deny_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("rm -rf {}/vault", p.root), &p.root),
@@ -2340,7 +2340,7 @@ fn hook_rm_recursive_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
 
 #[skuld::test]
 fn hook_chmod_recursive_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &deny_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("chmod -R 777 {}/vault", p.root), &p.root),
@@ -2350,7 +2350,7 @@ fn hook_chmod_recursive_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path)
 
 #[skuld::test]
 fn hook_chown_recursive_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &deny_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("chown -R nobody {}/vault", p.root), &p.root),
@@ -2361,7 +2361,7 @@ fn hook_chown_recursive_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path)
 #[skuld::test]
 fn hook_cp_recursive_into_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
     // The destination side of a recursive copy.
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &deny_rules(&abs));
     std::fs::create_dir_all(std::path::PathBuf::from(&p.root).join("payload")).unwrap();
     assert_eq!(
@@ -2376,7 +2376,7 @@ fn hook_cp_recursive_into_vault_denies(#[fixture(temp_dir)] dir: &std::path::Pat
 #[skuld::test]
 fn hook_mv_file_into_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
     // `mv x vault` writes `vault/x`, one level below the recorded destination.
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &deny_rules(&abs));
     std::fs::write(std::path::PathBuf::from(&p.root).join("secret.txt"), "x").unwrap();
     assert_eq!(
@@ -2391,7 +2391,7 @@ fn hook_mv_file_into_vault_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
 #[skuld::test]
 fn hook_grep_recursive_denies_on_nested_file_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
     // A deny rule scoped to a single file *inside* the walked tree must fire.
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &format!(r#"{{"deny":["Read(//{abs}/vault/creds)"]}}"#));
     assert_eq!(
         run_bash_hook(&format!("grep -rn TOKEN {}", p.root), &p.root),
@@ -2410,7 +2410,7 @@ fn allow_rules(abs: &str) -> String {
 
 #[skuld::test]
 fn hook_grep_recursive_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &allow_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("grep -rn TOKEN {}/vault", p.root), &p.root),
@@ -2420,7 +2420,7 @@ fn hook_grep_recursive_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::p
 
 #[skuld::test]
 fn hook_find_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &allow_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("find {} -type f", p.root), &p.root),
@@ -2430,7 +2430,7 @@ fn hook_find_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::path::Path)
 
 #[skuld::test]
 fn hook_cp_recursive_allowed_by_subtree_rules(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &allow_rules(&abs));
     assert_eq!(
         run_bash_hook(
@@ -2443,7 +2443,7 @@ fn hook_cp_recursive_allowed_by_subtree_rules(#[fixture(temp_dir)] dir: &std::pa
 
 #[skuld::test]
 fn hook_rm_recursive_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &allow_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("rm -rf {}/vault", p.root), &p.root),
@@ -2453,7 +2453,7 @@ fn hook_rm_recursive_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::pat
 
 #[skuld::test]
 fn hook_chmod_recursive_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &allow_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("chmod -R 755 {}/vault", p.root), &p.root),
@@ -2463,7 +2463,7 @@ fn hook_chmod_recursive_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::
 
 #[skuld::test]
 fn hook_tar_create_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &allow_rules(&abs));
     assert_eq!(
         run_bash_hook(
@@ -2477,7 +2477,7 @@ fn hook_tar_create_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::path:
 #[skuld::test]
 fn hook_ls_recursive_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
     // `ls` is file-only now, so a Read rule alone satisfies it.
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &allow_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("ls -R {}", p.root), &p.root),
@@ -2487,7 +2487,7 @@ fn hook_ls_recursive_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::pat
 
 #[skuld::test]
 fn hook_du_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &allow_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("du -sh {}", p.root), &p.root),
@@ -2500,7 +2500,7 @@ fn hook_du_allowed_by_subtree_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
 #[skuld::test]
 fn hook_bash_allow_does_not_suppress_subtree_deny(#[fixture(temp_dir)] dir: &std::path::Path) {
     // D5: a Bash allow rule suppresses secondary demands but never a file deny.
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(
         dir,
         &format!(r#"{{"allow":["Bash(grep *)"],"deny":["Read(//{abs}/vault/**)"]}}"#),
@@ -2514,7 +2514,7 @@ fn hook_bash_allow_does_not_suppress_subtree_deny(#[fixture(temp_dir)] dir: &std
 #[skuld::test]
 fn hook_exact_allow_does_not_satisfy_subtree_read(#[fixture(temp_dir)] dir: &std::path::Path) {
     // An allow rule naming only the root does not prove coverage of the tree.
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &format!(r#"{{"allow":["Read(//{abs}/vault)"]}}"#));
     assert_eq!(
         run_bash_hook(&format!("grep -rn TOKEN {}/vault", p.root), &p.root),
@@ -2528,7 +2528,7 @@ fn hook_symlink_following_recursion_asks_under_subtree_allow(
 ) {
     // `grep -R` follows symlinks out of the tree, so no subtree rule can prove
     // coverage — while the non-following `-r` form allows.
-    let abs = vault_paths(dir).abs;
+    let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &allow_rules(&abs));
     assert_eq!(
         run_bash_hook(&format!("grep -rn TOKEN {}", p.root), &p.root),
