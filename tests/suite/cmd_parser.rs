@@ -4,7 +4,11 @@ use pretty_assertions::assert_eq;
 
 #[skuld::test]
 fn unknown_command_returns_empty() {
-    let result = parse_file_accesses("my-custom-tool", &[ResolvedArg::Static("arg1".into())], "/tmp");
+    let result = parse_file_accesses(
+        "my-custom-tool",
+        &[ResolvedArg::Static("arg1".into())],
+        "/tmp",
+    );
     match result {
         CmdParseResult::Parsed(cfa) => {
             assert!(cfa.reads.is_empty());
@@ -94,7 +98,9 @@ fn sentinel_index_delimiter_prevents_prefix_collision() {
     // The trailing `__` is what keeps index 1 from matching inside index 11.
     assert!(!sentinel(11).contains(&sentinel(1)));
 
-    let mut args: Vec<ResolvedArg> = (0..12).map(|i| ResolvedArg::Static(format!("s{i}"))).collect();
+    let mut args: Vec<ResolvedArg> = (0..12)
+        .map(|i| ResolvedArg::Static(format!("s{i}")))
+        .collect();
     args[1] = ResolvedArg::Unresolved("$ONE".into());
     args[11] = ResolvedArg::Unresolved("$ELEVEN".into());
 
@@ -105,7 +111,7 @@ fn sentinel_index_delimiter_prevents_prefix_collision() {
         ],
         ..Default::default()
     };
-        assert_eq!(
+    assert_eq!(
         cfa.mark_unresolved(&args).reads,
         vec![
             AccessScope::Unresolved("$ONE".into()),
@@ -118,11 +124,7 @@ fn sentinel_index_delimiter_prevents_prefix_collision() {
 fn sentinel_prefix_in_a_static_arg_alone_is_left_alone() {
     // No argument is unresolved, so nothing was substituted and nothing is
     // scanned back out: a file genuinely named like a sentinel keeps its scope.
-    let result = parse_file_accesses(
-        "cat",
-        &[ResolvedArg::Static(sentinel(0))],
-        "/tmp",
-    );
+    let result = parse_file_accesses("cat", &[ResolvedArg::Static(sentinel(0))], "/tmp");
     match result {
         CmdParseResult::Parsed(cfa) => assert_eq!(
             cfa.reads,

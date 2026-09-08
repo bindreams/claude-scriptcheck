@@ -36,6 +36,7 @@ cargo install --git https://github.com/bindreams/claude-scriptcheck.git  # insta
 | `src/path_util.rs`           | Cross-platform path helpers: `is_absolute()`, `normalize_separators()`, `is_filesystem_root()`, `strip_pathext_suffix()`, `PATHEXT_SUFFIXES`.                                                                                                                                                                                                                                  |
 | `src/env_hooks.rs`           | Test-isolation env-var hooks: `hook_home()` overrides `dirs::home_dir()` for the hook dispatch path; `log_path_override()` overrides the log file location.                                                                                                                                                                                                                    |
 | `src/python_ast.rs`          | Python AST analysis for `python -c` inline scripts. Parses Python, extracts file accesses, detects unsafe patterns.                                                                                                                                                                                                                                                            |
+| `src/unresolved.rs`          | Renders a shell word thaum could not resolve back to approximate source text (`$FOO`, `~/evil.txt`), then sanitizes and caps it. Supplies the `AccessScope::Unresolved` payload.                                                                                                                                                                                                |
 | `src/cmd_parser.rs`          | Parser registry (`get_parser`), `CommandFileAccesses`, and `Recursion` / `resolve_scoped` — the per-operand classifier every parser uses.                                                                                                                                                                                                                                      |
 | `src/cmd_parser/ls.rs`       | `ls` parser: operands are reads, `-R` makes them subtrees, no operand means the cwd.                                                                                                                                                                                                                                                                                           |
 | `src/cmd_parser/git.rs`      | Git subcommand parser. Dispatches on subcommand, emits Write(.git) for local ops, file_only=false for network ops.                                                                                                                                                                                                                                                             |
@@ -63,9 +64,10 @@ ParseCtx<'a>    { home: &'a str, cwd: &'a str, project_root: &'a str }  // threa
 {Read,Write,Edit}Filter(String) — PathFilter; ::new(p) debug-asserts p is canonical
 AccessScope     = Exact(p) | Subtree(d) | UnboundedSubtree(d) | Pattern(q) | Unresolved(reason)
     // Subtree(d) = d plus everything beneath it. UnboundedSubtree adds "and whatever a
-    // symlink under d points at", so no allow rule can cover it. Pattern and Unresolved
-    // are matched and tested but nothing constructs them yet — they wait on the word
-    // resolver that can tell a globbed or unresolvable word from a literal path.
+    // symlink under d points at", so no allow rule can cover it. Unresolved carries
+    // unresolved::describe_word's rendering of the word that could not be resolved.
+    // Pattern is matched and tested but nothing constructs it yet — it waits on the
+    // word resolver that can tell a globbed word from a literal path.
 FileAccess       { scope: AccessScope, kind: AccessKind }   // AccessKind = Read | Write
 Recursion       = No | Yes | IfDir | Following   // resolve_scoped(path, cwd, recursion) -> AccessScope
 HookInput        { session_id, cwd, tool_name, tool_input, permission_mode? }
@@ -96,6 +98,8 @@ stdin JSON → parse permission_mode (PermissionMode::from_hook_str) →
       1. check deny Bash rules  →  hit? → Deny  (matcher uses raw_arg0 + static args + cwd)
       2. check allow Bash rules →  miss? → collect as unmatched
       3. extract file accesses (redirects + well-known command semantics)
+         a word that does not statically resolve records AccessScope::Unresolved,
+         never nothing — see the ask-don't-drop convention below
          if uv run: strip wrapper flags, dispatch to inner command's parser
       3b. if python/python3 -c (or effective_cmd_name is python) with static script text:
           parse Python AST → extract file accesses from open() calls and os.* file mutations
@@ -107,9 +111,12 @@ stdin JSON → parse permission_mode (PermissionMode::from_hook_str) →
       5. check allow file rules →  miss? → collect as unmatched
          (under-approximating: satisfied only if the rule provably covers EVERY path)
       6. decide if Bash rule needed:
-         file_only=Some(true) + static args + not bash_asked? → skip Bash rule
+         file_only=Some(true) + no unresolved word + not bash_asked? → skip Bash rule
          file_only=Some(false)? → require Bash rule
          file_only=None? → use is_file_only_command() + has_file_accesses guard
+         python_analyzed + no unresolved word + not bash_asked? → skip Bash rule
+         "no unresolved word" spans arguments AND redirect targets AND
+         parser-derived accesses; any one of them unknown keeps the Bash demand
       ★ suppression: if a `Bash(...)` allow rule matched in step 2, every
          `unmatched` push from steps 3b, 3c, 5, and 6 is skipped (as are the
          eval and parse-failure asks). Step 4's file Deny rules still fire.
@@ -147,6 +154,11 @@ stdin JSON → parse permission_mode (PermissionMode::from_hook_str) →
   - Rule patterns containing `[`, `{`, or a leading `!` skip the depth-based disjointness shortcut — a bracket class or brace alternative can match `/`, so the segment count understates the depth the pattern reaches.
 - **Which commands recurse.** Flag-driven: `grep -r`, `rm -r`, `cp -r`/`-a`, `chmod`/`chown`/`chgrp -R`, `zip -r`, `diff -r`, `ls -R`. Always: `find`, `du`, `unzip`/`tar -x` destinations. Stat-driven (`Recursion::IfDir` — directory or unstattable → subtree, regular file → exact): `rg` operands, `tar` create sources, `mv` sources, and the `Grep`/`Glob` tools' search path. With no path operand, `grep -r`, `rg`, `find`, `du`, `ls` read the cwd and `tar -x` / `unzip` write it.
 - **The `IfDir` stat is a check-time snapshot, and the race is accepted on purpose.** The hook stats, returns, and the command runs afterwards, so an operand swapped from file to directory in that window is scoped `Exact`. scriptcheck defends against accidents, not malice — an agent that has genuinely gone rogue circumvents the hook entirely — so precision wins. This is a recorded exception to the "never rely on data races" rule; the comment at `resolve_scoped` says so, and deleting the narrowing "for safety" reverses a deliberate decision.
+- **Ask, don't drop: a word that cannot be resolved records an access, never nothing.** An unresolvable redirect target or command argument becomes `AccessScope::Unresolved`, which matches no deny rule and satisfies no allow rule, so it always contributes an ask. It deliberately does *not* fire deny rules: a deny is authoritative in every mode and no rule the user adds can override it, so over-approximating there would turn `cat $F` into an unrecoverable block. The ask is instead made actionable by keeping the `Bash(...)` rule demand alive (step 6). Bash-allow suppression still applies — `Bash(cat *)` makes `cat x > $FOO` allow, per D5.
+  - Tilde and glob words are `Unresolved` **for now**. They become concrete paths and patterns once thaum's expansion API lands; until then `> ~/out.txt` asks and only a `Bash(...)` rule satisfies it.
+  - The payload is sanitized and capped at 64 characters (`unresolved::MAX_PAYLOAD_CHARS`): it is attacker-influenced text that reaches `permissionDecisionReason`, which is shown to the user and to the model. Control characters and `"` are neutralized so the reason stays one line and the datum cannot break out of its quoting.
+  - Parser-derived accesses carry provenance as a per-argument sentinel string recovered by substring search. A static path literally containing `__CLAUDE_DYNAMIC_<i>__` alongside an unresolved argument `i` is mislabelled; the damage is bounded to that one access on purpose, because failing the whole command instead would trade a firing deny for an ask. Structured provenance is the real fix and is tracked separately.
+- **Redirect classification follows the Bash manual arm by arm, and every "no file" case states its reason.** `<>` opens for reading *and* writing, so it emits both a `Read` and a `Write` (#49). `>&word` with no leading fd is a **file write** when the word is not all digits or `-` (Bash §3.6.8, #48); `2>&1`, `>&2` and `>&-` duplicate or close a descriptor and emit nothing. `<&word` requires digits or `-`, so a non-numeric word is a redirection error, not a file open. Here-docs and here-strings are inline text. A blanket "fd duplication" arm is what hid two of these, so do not reintroduce one.
 - **Symlink-following recursion can never be allowed by a path rule.** `grep -R`, `find -L`, `rg --follow`, `du -L` and `tar -h` walk out of the subtree they name, so they emit `UnboundedSubtree`: deny rules still fire, but no `Read`/`Write` rule proves coverage and the command asks (unless a `Bash(...)` allow rule suppresses it, per D5). The non-following forms are unaffected.
 - **A copy into an existing directory writes one level down.** `cp`/`mv`/`ln`/`install` write `dest/basename(src)` when `dest` is a directory, so both `dest` and each landing path are recorded — `mv secret.txt vault` trips `Deny(Edit(vault/**))`. `-t` names a directory without a stat; `-T` means the destination is the path itself. Each write inherits its source's scope, so moving a directory writes a subtree.
 - `ls` is file-only: it needs no `Bash(...)` rule, a `Read` rule satisfies it, and `Deny(Read(...))` rules apply to it.

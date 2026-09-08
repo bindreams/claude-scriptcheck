@@ -281,8 +281,7 @@ impl PermissionChecker<'_> {
         let redirect_accesses = extract_redirect_accesses(&cmd.redirects, self.cwd);
 
         // Extract file accesses from well-known command semantics (clap-based parsers)
-        let cmd_parse_result =
-            cmd_parser::parse_file_accesses(&cmd_name, &args[1..], self.cwd);
+        let cmd_parse_result = cmd_parser::parse_file_accesses(&cmd_name, &args[1..], self.cwd);
         let (cmd_accesses, parse_failed, inline_script_start, file_only_override, effective_cmd) =
             match cmd_parse_result {
                 CmdParseResult::Parsed(cfa) => {
@@ -375,7 +374,7 @@ impl PermissionChecker<'_> {
             let has_unresolved_word = args[1..].iter().any(|a| a.is_unresolved())
                 || redirect_accesses.iter().any(unresolved_access)
                 || cmd_accesses.iter().any(unresolved_access);
-            let can_skip = match file_only_override {
+            let file_only_suffices = match file_only_override {
                 // Parser explicitly declared this invocation's effects.
                 // Trust it even with zero file accesses (e.g. read-only git
                 // subcommands), but still require every word to be known.
@@ -390,10 +389,12 @@ impl PermissionChecker<'_> {
                         && !has_unresolved_word
                         && !bash_asked
                 }
-            // The Python shortcut sits outside the match and needs the same
-            // guard: analysing the inline script says nothing about a redirect
-            // target or an argument the analysis never saw.
-            } || (python_analyzed && !bash_asked && !has_unresolved_word);
+            };
+            // The Python shortcut is a separate route to the same skip, and it
+            // needs the same guard: analysing the inline script says nothing
+            // about a redirect target or an argument the analysis never saw.
+            let python_analysis_suffices = python_analyzed && !bash_asked && !has_unresolved_word;
+            let can_skip = file_only_suffices || python_analysis_suffices;
 
             if !can_skip {
                 // Build a name-form suggestion filter: `Arg0::Name(stripped

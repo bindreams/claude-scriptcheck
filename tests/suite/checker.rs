@@ -2280,7 +2280,10 @@ fn unresolved_payload_stays_bounded_and_single_line() {
         .iter()
         .find(|r| r.contains("<unresolved word:"))
         .unwrap_or_else(|| panic!("no unresolved entry in {:?}", result.missing_rules));
-    assert!(!entry.contains('\n'), "newline reached the reason: {entry:?}");
+    assert!(
+        !entry.contains('\n'),
+        "newline reached the reason: {entry:?}"
+    );
     assert!(!entry.contains('\r'), "CR reached the reason: {entry:?}");
     let payload = entry
         .split_once("<unresolved word: \"")
@@ -2322,7 +2325,10 @@ fn python_inline_script_with_unresolved_redirect_demands_a_bash_rule() {
     let result = check("python -c 'print(1)' > $FOO", &[], &[]);
     assert_eq!(result.decision, Decision::Ask);
     assert!(
-        result.missing_rules.iter().any(|r| r == "Bash(python -c *)"),
+        result
+            .missing_rules
+            .iter()
+            .any(|r| r == "Bash(python -c *)"),
         "no actionable rule offered: {:?}",
         result.missing_rules,
     );
@@ -2351,11 +2357,7 @@ fn unresolved_argument_names_itself_in_missing_rules() {
 
 #[skuld::test]
 fn unresolved_argument_does_not_flip_an_allowed_command() {
-    let result = check(
-        "cp /tmp/x /tmp/y",
-        &["Read(/tmp/x)", "Write(/tmp/y)"],
-        &[],
-    );
+    let result = check("cp /tmp/x /tmp/y", &["Read(/tmp/x)", "Write(/tmp/y)"], &[]);
     assert_eq!(result.decision, Decision::Allow);
 }
 

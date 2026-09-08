@@ -96,6 +96,11 @@ A recursive command is checked against its whole subtree, not just the path it
 names, so `grep -r dir` needs `Read(dir/**)` and trips any deny rule covering
 something under `dir`.
 
+A path the checker cannot work out — `cat x > $FOO`, `> ~/out.txt` — is recorded
+as an unresolved access rather than ignored. No `Read`/`Write` rule can cover an
+unknown path, so such a command asks, and the prompt names a `Bash(...)` rule
+that would settle it.
+
 - **All checks pass** → `allow` (auto-approved, no prompt)
 - **Any deny rule matches** → `deny` (blocked)
 - **Some rules missing** → `ask` (user prompted) + missing rules logged
