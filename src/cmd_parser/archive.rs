@@ -1,7 +1,7 @@
 use clap::ArgAction;
 
 use super::helpers::*;
-use super::{resolve, CommandFileAccesses, CommandParser};
+use super::{resolve, resolve_scoped, CommandFileAccesses, CommandParser, Recursion};
 
 // ─── zip / unzip ─────────────────────────────────────────────────────────────
 
@@ -50,11 +50,18 @@ impl CommandParser for ZipParser {
         let mut reads = Vec::new();
         let mut writes = Vec::new();
 
+        // -r walks directory operands.
+        let recursion = if matches.get_count("recurse-paths") > 0 {
+            Recursion::Yes
+        } else {
+            Recursion::No
+        };
+
         // First positional is the archive (write), rest are files to add (read)
         if let Some((archive, sources)) = positionals.split_first() {
             writes.push(resolve(archive, cwd));
             for src in sources {
-                reads.push(resolve(src, cwd));
+                reads.push(resolve_scoped(src, cwd, recursion));
             }
         }
 
@@ -104,10 +111,13 @@ impl CommandParser for UnzipParser {
             reads.push(resolve(archive, cwd));
         }
 
-        // -d DIR → write destination
-        if let Some(dir) = matches.get_one::<String>("directory") {
-            writes.push(resolve(dir, cwd));
-        }
+        // Extraction unpacks a whole tree into -d DIR, or into the working
+        // directory when -d is absent.
+        let dest = matches
+            .get_one::<String>("directory")
+            .map(|s| s.as_str())
+            .unwrap_or(cwd);
+        writes.push(resolve_scoped(dest, cwd, Recursion::Yes));
 
         Ok(CommandFileAccesses {
             reads,

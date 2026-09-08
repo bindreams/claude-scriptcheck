@@ -3,6 +3,21 @@ use super::CommandParser;
 use crate::file_access::AccessScope;
 use pretty_assertions::assert_eq;
 
+fn sub(paths: &[&str]) -> Vec<AccessScope> {
+    paths
+        .iter()
+        .map(|s| AccessScope::Subtree(s.to_string()))
+        .collect()
+}
+
+#[allow(dead_code)]
+fn unbounded(paths: &[&str]) -> Vec<AccessScope> {
+    paths
+        .iter()
+        .map(|s| AccessScope::UnboundedSubtree(s.to_string()))
+        .collect()
+}
+
 fn reads(paths: &[&str]) -> Vec<AccessScope> {
     paths
         .iter()
@@ -36,8 +51,8 @@ fn cp_with_t_flag() {
 #[skuld::test]
 fn cp_recursive() {
     let r = CpParser.parse(&["-r", "src/", "dst/"], "/tmp").unwrap();
-    assert_eq!(r.reads, reads(&["/tmp/src/"]));
-    assert_eq!(r.writes, writes(&["/tmp/dst/"]));
+    assert_eq!(r.reads, sub(&["/tmp/src/"]));
+    assert_eq!(r.writes, sub(&["/tmp/dst/"]));
 }
 
 // ── mv ──
@@ -417,4 +432,32 @@ fn touch_bsd_access_time_flag() {
     // macOS touch -A (adjust access time) — recognized as bool
     let r = TouchParser.parse(&["-A", "file.txt"], "/tmp").unwrap();
     assert_eq!(r.writes, writes(&["/tmp/file.txt"]));
+}
+
+// Recursion scopes ================================================================================
+
+#[skuld::test]
+fn diff_recursive_operands_are_subtree() {
+    let r = DiffParser.parse(&["-r", "a", "b"], "/tmp").unwrap();
+    assert_eq!(r.reads, sub(&["/tmp/a", "/tmp/b"]));
+}
+
+#[skuld::test]
+fn diff_without_r_operands_are_exact() {
+    let r = DiffParser.parse(&["a", "b"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/a", "/tmp/b"]));
+}
+
+#[skuld::test]
+fn cp_recursive_sources_are_subtree() {
+    let r = CpParser.parse(&["-r", "src", "dst"], "/tmp").unwrap();
+    assert_eq!(r.reads, sub(&["/tmp/src"]));
+    assert_eq!(r.writes, sub(&["/tmp/dst"]));
+}
+
+#[skuld::test]
+fn cp_without_r_sources_are_exact() {
+    let r = CpParser.parse(&["a.txt", "b.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/a.txt"]));
+    assert_eq!(r.writes, writes(&["/tmp/b.txt"]));
 }

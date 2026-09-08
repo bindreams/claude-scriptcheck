@@ -1,9 +1,21 @@
 use clap::{ArgAction, ArgMatches};
 
 use super::helpers::*;
-use super::{resolve, CommandFileAccesses, CommandParser};
+use super::{resolve, resolve_scoped, CommandFileAccesses, CommandParser, Recursion};
 
 // ─── Copy-like commands ──────────────────────────────────────────────────────
+
+/// `cp -r`/`-R`/`-a` walks directory operands.
+fn cp_recursion(matches: &ArgMatches) -> Recursion {
+    let recursive = matches.get_count("recursive") > 0
+        || matches.get_count("bool_R") > 0
+        || matches.get_count("archive") > 0;
+    if recursive {
+        Recursion::Yes
+    } else {
+        Recursion::No
+    }
+}
 
 pub(super) struct CpParser;
 impl CommandParser for CpParser {
@@ -42,7 +54,8 @@ impl CommandParser for CpParser {
             .try_get_matches_from(args)
             .map_err(|e| e.to_string())?;
 
-        parse_copy_like(&matches, cwd)
+        let recursion = cp_recursion(&matches);
+        parse_copy_like(&matches, cwd, recursion)
     }
 }
 
@@ -67,7 +80,7 @@ impl CommandParser for MvParser {
             .try_get_matches_from(args)
             .map_err(|e| e.to_string())?;
 
-        parse_copy_like(&matches, cwd)
+        parse_copy_like(&matches, cwd, Recursion::No)
     }
 }
 
@@ -91,14 +104,18 @@ impl CommandParser for LnParser {
             .try_get_matches_from(args)
             .map_err(|e| e.to_string())?;
 
-        parse_copy_like(&matches, cwd)
+        parse_copy_like(&matches, cwd, Recursion::No)
     }
 }
 
 /// Shared cp/mv/ln extraction:
 /// - With -t DIR: all positionals → reads, DIR → writes
 /// - Without -t: last positional → writes, rest → reads
-fn parse_copy_like(matches: &ArgMatches, cwd: &str) -> Result<CommandFileAccesses, String> {
+fn parse_copy_like(
+    matches: &ArgMatches,
+    cwd: &str,
+    recursion: Recursion,
+) -> Result<CommandFileAccesses, String> {
     let mut reads = Vec::new();
     let mut writes = Vec::new();
 
@@ -112,14 +129,14 @@ fn parse_copy_like(matches: &ArgMatches, cwd: &str) -> Result<CommandFileAccesse
     if let Some(dir) = target_dir {
         // -t DIR: all positionals are sources (read), DIR is write target
         for p in &positionals {
-            reads.push(resolve(p, cwd));
+            reads.push(resolve_scoped(p, cwd, recursion));
         }
-        writes.push(resolve(dir, cwd));
+        writes.push(resolve_scoped(dir, cwd, recursion));
     } else if let Some((last, rest)) = positionals.split_last() {
         for src in rest {
-            reads.push(resolve(src, cwd));
+            reads.push(resolve_scoped(src, cwd, recursion));
         }
-        writes.push(resolve(last, cwd));
+        writes.push(resolve_scoped(last, cwd, recursion));
     }
 
     Ok(CommandFileAccesses {
@@ -298,8 +315,23 @@ impl CommandParser for DiffParser {
             .try_get_matches_from(args)
             .map_err(|e| e.to_string())?;
 
-        // All positional files are read targets
-        Ok(extract_positional_reads(&matches, cwd))
+        // -r compares two directory trees.
+        let recursion = if matches.get_count("recursive") > 0 {
+            Recursion::Yes
+        } else {
+            Recursion::No
+        };
+        let reads = matches
+            .get_many::<String>("files")
+            .map(|vals| vals.map(|f| resolve_scoped(f, cwd, recursion)).collect())
+            .unwrap_or_default();
+        Ok(CommandFileAccesses {
+            reads,
+            writes: Vec::new(),
+            inline_script_start: None,
+            file_only: None,
+            ..Default::default()
+        })
     }
 }
 

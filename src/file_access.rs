@@ -122,6 +122,7 @@ pub fn is_file_only_command(cmd_name: &str) -> bool {
             | "grep"
             | "rg"
             | "find"
+            | "ls"
             | "sort"
             | "uniq"
             | "cut"

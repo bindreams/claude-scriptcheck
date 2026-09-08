@@ -1,4 +1,6 @@
-use super::{resolve, CommandFileAccesses, CommandParser};
+use crate::file_access::AccessScope;
+
+use super::{resolve_scoped, CommandFileAccesses, CommandParser, Recursion};
 
 // ─── find ────────────────────────────────────────────────────────────────────
 
@@ -8,18 +10,55 @@ pub(super) struct FindParser;
 
 impl CommandParser for FindParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
-        let mut reads = Vec::new();
+        let mut i = 0;
+        let mut follows_symlinks = false;
 
-        for arg in args {
+        // Global options precede the search paths. `-L` / `-follow` make the
+        // walk follow symlinks, so it can leave the named subtree.
+        while i < args.len() {
+            match args[i] {
+                "-L" | "-follow" => {
+                    follows_symlinks = true;
+                    i += 1;
+                }
+                "-H" | "-P" => i += 1,
+                "-D" => i += 2,
+                a if a.starts_with("-O") && a.len() > 2 => i += 1,
+                _ => break,
+            }
+        }
+
+        let recursion = if follows_symlinks {
+            Recursion::Following
+        } else {
+            Recursion::Yes
+        };
+
+        let mut reads: Vec<AccessScope> = Vec::new();
+        let mut rest = &args[i..];
+        while let Some(arg) = rest.first() {
             if is_find_expression_token(arg) {
                 break;
             }
-            reads.push(resolve(arg, cwd));
+            reads.push(resolve_scoped(arg, cwd, recursion));
+            rest = &rest[1..];
         }
+        if reads.is_empty() {
+            // No path operand: find walks the working directory.
+            reads.push(resolve_scoped(cwd, cwd, recursion));
+        }
+
+        // `-delete` / `-fprint`-style actions turn the walk into a write over
+        // the same set of paths.
+        let writes = if rest.contains(&"-delete") {
+            reads.clone()
+        } else {
+            Vec::new()
+        };
 
         Ok(CommandFileAccesses {
             reads,
-            writes: Vec::new(),
+            writes,
             inline_script_start: None,
             file_only: None,
             ..Default::default()
@@ -76,7 +115,6 @@ fn is_find_expression_token(arg: &str) -> bool {
         | "-daystart"
         | "-warn"
         | "-nowarn"
-        | "-follow"
         | "-regextype"
         | "-used"
         // Actions

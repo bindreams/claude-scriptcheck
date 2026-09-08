@@ -6,6 +6,7 @@ mod find;
 pub(crate) mod git;
 mod grep;
 mod helpers;
+mod ls;
 mod network;
 mod readers;
 mod script_runners;
@@ -109,6 +110,7 @@ pub fn get_parser(cmd_name: &str) -> Option<&'static dyn CommandParser> {
     use find::*;
     use git::*;
     use grep::*;
+    use ls::*;
     use network::*;
     use readers::*;
     use script_runners::*;
@@ -202,6 +204,7 @@ pub fn get_parser(cmd_name: &str) -> Option<&'static dyn CommandParser> {
 
         // Commands with special semantics
         "cp" => Some(&CpParser),
+        "ls" => Some(&LsParser),
         "mv" => Some(&MvParser),
         "install" => Some(&InstallParser),
         "ln" => Some(&LnParser),
@@ -278,6 +281,44 @@ pub fn resolve(path: &str, cwd: &str) -> AccessScope {
     AccessScope::Exact(resolve_str(path, cwd))
 }
 
+/// How far below an operand a command reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recursion {
+    /// The operand itself and nothing else.
+    No,
+    /// The operand and everything beneath it.
+    Yes,
+    /// Recursive only when the operand is a directory (`rg pat x`, `tar cf a.tar x`).
+    IfDir,
+    /// Recursive with symlinks followed, so the walk can leave the subtree.
+    Following,
+}
+
+/// Resolve an operand into the scope the command will actually touch.
+pub fn resolve_scoped(path: &str, cwd: &str, recursion: Recursion) -> AccessScope {
+    let resolved = resolve_str(path, cwd);
+    match recursion {
+        Recursion::No => AccessScope::Exact(resolved),
+        Recursion::Yes => AccessScope::Subtree(resolved),
+        Recursion::Following => AccessScope::UnboundedSubtree(resolved),
+        // The stat is a check-time snapshot and the command runs afterwards, so
+        // an operand swapped from file to directory inside that window is
+        // classified `Exact` and its subtree goes unchecked. Accepted
+        // deliberately (decision Q4 on scriptcheck#44): scriptcheck defends
+        // against accidents, not malice — an agent that has genuinely gone
+        // rogue circumvents the hook entirely — and the precision is worth more
+        // than closing the race. This is a recorded exception to the project's
+        // "never rely on data races" rule, not an oversight: do not "fix" it by
+        // deleting the narrowing without reading that decision first.
+        Recursion::IfDir => match std::fs::metadata(&resolved) {
+            Ok(meta) if !meta.is_dir() => AccessScope::Exact(resolved),
+            // A directory, or a path that cannot be stat'd at all: assume the
+            // walk happens.
+            _ => AccessScope::Subtree(resolved),
+        },
+    }
+}
+
 /// Resolve a path relative to cwd as a plain string, for parsers that do path
 /// arithmetic on the result (e.g. git's `--git-dir` / `--work-tree` handling)
 /// rather than recording it as an access.
@@ -293,6 +334,7 @@ mod find_tests;
 mod git_tests;
 mod grep_tests;
 mod helpers_tests;
+mod ls_tests;
 mod network_tests;
 mod readers_tests;
 mod script_runners_tests;
