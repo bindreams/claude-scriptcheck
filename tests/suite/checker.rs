@@ -2334,3 +2334,35 @@ fn python_inline_script_without_unresolved_words_still_skips_the_bash_rule() {
     let result = check("python -c 'print(1)'", &[], &[]);
     assert_eq!(result.decision, Decision::Allow);
 }
+
+#[skuld::test]
+fn unresolved_argument_names_itself_in_missing_rules() {
+    let result = check("cp /tmp/x $FOO", &["Read(/tmp/x)"], &[]);
+    assert_eq!(result.decision, Decision::Ask);
+    assert!(
+        result
+            .missing_rules
+            .iter()
+            .any(|r| r.contains("<unresolved word: \"$FOO\">")),
+        "unresolved argument not named: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn unresolved_argument_does_not_flip_an_allowed_command() {
+    let result = check(
+        "cp /tmp/x /tmp/y",
+        &["Read(/tmp/x)", "Write(/tmp/y)"],
+        &[],
+    );
+    assert_eq!(result.decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn unresolved_argument_matches_no_deny_rule() {
+    // A deny is authoritative in every mode and unrecoverable, so an unknown
+    // path must resolve to ask rather than to deny.
+    let result = check("cat $FOO", &[], &["Read(**)"]);
+    assert_eq!(result.decision, Decision::Ask);
+}

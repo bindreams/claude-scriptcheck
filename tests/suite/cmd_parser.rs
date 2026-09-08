@@ -27,7 +27,7 @@ fn no_file_access_command_returns_empty() {
 }
 
 #[skuld::test]
-fn sentinel_filtered_from_reads() {
+fn unresolved_arg_marks_read_scope() {
     let cfa = CommandFileAccesses {
         reads: vec![
             "/tmp/real.txt".into(),
@@ -38,15 +38,18 @@ fn sentinel_filtered_from_reads() {
         file_only: None,
         ..Default::default()
     };
-    let filtered = cfa.filter_sentinels(&[ResolvedArg::Unresolved("$SRC".into())]);
+    let filtered = cfa.mark_unresolved(&[ResolvedArg::Unresolved("$SRC".into())]);
     assert_eq!(
         filtered.reads,
-        vec![AccessScope::Exact("/tmp/real.txt".into())]
+        vec![
+            AccessScope::Exact("/tmp/real.txt".into()),
+            AccessScope::Unresolved("$SRC".into()),
+        ],
     );
 }
 
 #[skuld::test]
-fn sentinel_filtered_from_writes() {
+fn unresolved_arg_marks_write_scope() {
     let cfa = CommandFileAccesses {
         reads: vec![],
         writes: vec![
@@ -57,15 +60,18 @@ fn sentinel_filtered_from_writes() {
         file_only: None,
         ..Default::default()
     };
-    let filtered = cfa.filter_sentinels(&[ResolvedArg::Unresolved("$SRC".into())]);
+    let filtered = cfa.mark_unresolved(&[ResolvedArg::Unresolved("$SRC".into())]);
     assert_eq!(
         filtered.writes,
-        vec![AccessScope::Exact("/tmp/real.txt".into())]
+        vec![
+            AccessScope::Exact("/tmp/real.txt".into()),
+            AccessScope::Unresolved("$SRC".into()),
+        ],
     );
 }
 
 #[skuld::test]
-fn dynamic_arg_filtered_via_sentinel() {
+fn dynamic_arg_marked_unresolved() {
     let result = parse_file_accesses(
         "cp",
         &[
@@ -76,7 +82,7 @@ fn dynamic_arg_filtered_via_sentinel() {
     );
     match result {
         CmdParseResult::Parsed(cfa) => {
-            assert!(cfa.reads.is_empty(), "sentinel read should be filtered");
+            assert_eq!(cfa.reads, vec![AccessScope::Unresolved("$SRC".into())]);
             assert_eq!(cfa.writes, vec![AccessScope::Exact("/tmp/dest.txt".into())]);
         }
         _ => panic!("expected Parsed"),
@@ -99,7 +105,13 @@ fn sentinel_index_delimiter_prevents_prefix_collision() {
         ],
         ..Default::default()
     };
-    assert!(cfa.filter_sentinels(&args).reads.is_empty());
+        assert_eq!(
+        cfa.mark_unresolved(&args).reads,
+        vec![
+            AccessScope::Unresolved("$ONE".into()),
+            AccessScope::Unresolved("$ELEVEN".into()),
+        ],
+    );
 }
 
 #[skuld::test]
@@ -118,4 +130,57 @@ fn sentinel_prefix_in_a_static_arg_alone_is_left_alone() {
         ),
         _ => panic!("expected Parsed"),
     }
+}
+
+#[skuld::test]
+fn lowest_sentinel_index_wins() {
+    let args = [
+        ResolvedArg::Unresolved("$FIRST".into()),
+        ResolvedArg::Unresolved("$SECOND".into()),
+    ];
+    let cfa = CommandFileAccesses {
+        reads: vec![AccessScope::Exact(format!(
+            "/tmp/{}/{}",
+            sentinel(0),
+            sentinel(1)
+        ))],
+        ..Default::default()
+    };
+    assert_eq!(
+        cfa.mark_unresolved(&args).reads,
+        vec![AccessScope::Unresolved("$FIRST".into())],
+    );
+}
+
+#[skuld::test]
+fn recursive_scope_with_sentinel_collapses_to_unresolved() {
+    // The recursion tag is discarded: `Unresolved` already satisfies no allow
+    // rule, which is the strongest of the outcomes it replaces.
+    let args = [ResolvedArg::Unresolved("$DIR".into())];
+    let cfa = CommandFileAccesses {
+        reads: vec![AccessScope::Subtree(format!("/tmp/{}", sentinel(0)))],
+        writes: vec![AccessScope::UnboundedSubtree(format!(
+            "/tmp/{}",
+            sentinel(0)
+        ))],
+        ..Default::default()
+    };
+    let marked = cfa.mark_unresolved(&args);
+    assert_eq!(marked.reads, vec![AccessScope::Unresolved("$DIR".into())]);
+    assert_eq!(marked.writes, vec![AccessScope::Unresolved("$DIR".into())]);
+}
+
+#[skuld::test]
+fn sentinel_index_pointing_at_a_static_arg_leaves_the_scope_alone() {
+    // String provenance can collide. When it does, the honest path stays put so
+    // its deny evaluation keeps working; the cost is bounded to one mislabel.
+    let args = [ResolvedArg::Static("plain".into())];
+    let cfa = CommandFileAccesses {
+        reads: vec![AccessScope::Exact(format!("/tmp/{}", sentinel(0)))],
+        ..Default::default()
+    };
+    assert_eq!(
+        cfa.mark_unresolved(&args).reads,
+        vec![AccessScope::Exact(format!("/tmp/{}", sentinel(0)))],
+    );
 }

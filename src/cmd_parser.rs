@@ -48,10 +48,15 @@ impl CommandFileAccesses {
         Self::default()
     }
 
-    /// Drop every access whose resolved path came from an unresolved argument.
-    pub fn filter_sentinels(mut self, args: &[ResolvedArg]) -> Self {
-        self.reads.retain(|s| sentinel_index(s, args).is_none());
-        self.writes.retain(|s| sentinel_index(s, args).is_none());
+    /// Replace every access whose resolved path came from an unresolved
+    /// argument with an [`AccessScope::Unresolved`] naming that argument.
+    ///
+    /// Ask, don't drop. Deleting the access — the behaviour this replaces —
+    /// read "cannot resolve" as "no file access", so a command reached a path
+    /// with no rule consulted.
+    pub fn mark_unresolved(mut self, args: &[ResolvedArg]) -> Self {
+        mark_scopes(&mut self.reads, args);
+        mark_scopes(&mut self.writes, args);
         self // inline_script_start and effective_cmd_name preserved as-is
     }
 }
@@ -120,6 +125,23 @@ fn sentinel_index(scope: &AccessScope, args: &[ResolvedArg]) -> Option<usize> {
     (0..args.len()).find(|i| args[*i].is_unresolved() && path.contains(&sentinel(*i)))
 }
 
+/// Replace each sentinel-bearing scope with the rendering of the argument that
+/// produced it.
+///
+/// Any recursion classification the scope carried is discarded. Nothing is lost:
+/// `Unresolved` already satisfies no allow rule, the strongest of the outcomes
+/// `Subtree` and `UnboundedSubtree` produce.
+fn mark_scopes(scopes: &mut [AccessScope], args: &[ResolvedArg]) {
+    for scope in scopes {
+        let Some(i) = sentinel_index(scope, args) else {
+            continue;
+        };
+        if let Some(ResolvedArg::Unresolved(word)) = args.get(i) {
+            *scope = AccessScope::Unresolved(word.clone());
+        }
+    }
+}
+
 /// Main entry point: parse a known command's arguments into file accesses.
 ///
 /// `cmd_name` — the command name (e.g. "grep").
@@ -145,7 +167,7 @@ pub fn parse_file_accesses(cmd_name: &str, args: &[ResolvedArg], cwd: &str) -> C
     let str_args: Vec<&str> = concrete.iter().map(|s| s.as_str()).collect();
 
     match parser.parse(&str_args, cwd) {
-        Ok(accesses) => CmdParseResult::Parsed(accesses.filter_sentinels(args)),
+        Ok(accesses) => CmdParseResult::Parsed(accesses.mark_unresolved(args)),
         Err(msg) => CmdParseResult::ParseFailed {
             cmd_name: cmd_name.to_string(),
             message: msg,
