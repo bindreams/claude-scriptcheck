@@ -26,9 +26,10 @@ pub enum AccessScope {
     /// landed. Its matching is implemented and tested so that resolver has a
     /// scope to emit.
     Pattern(String),
-    /// A path-shaped word whose value could not be determined. Matches no rule
-    /// and satisfies none, so it always prompts. Nothing constructs this
-    /// variant yet, for the same reason as `Pattern`.
+    /// A path-shaped word whose value could not be determined, carrying
+    /// `unresolved::describe_word`'s rendering of that word. Matches no rule
+    /// and satisfies none, so it always prompts. Constructed wherever a word
+    /// fails to resolve: redirect targets and parser-derived operands.
     Unresolved(String),
 }
 
@@ -53,7 +54,11 @@ impl AccessScope {
             // otherwise render as `//**`, which reads as a UNC path.
             Self::Subtree(d) => format!("{}/**", d.trim_end_matches('/')),
             Self::UnboundedSubtree(d) => format!("{}/**+symlinks", d.trim_end_matches('/')),
-            Self::Unresolved(reason) => format!("<unresolved: {reason}>"),
+            // Quoted, because the payload is attacker-influenced text that
+            // lands in the approval prompt: it must read as a datum, not as
+            // scriptcheck's own words. `unresolved::describe_word` guarantees
+            // it is single-line, bounded, and free of `"`.
+            Self::Unresolved(word) => format!("<unresolved word: \"{word}\">"),
         }
     }
 
@@ -230,7 +235,7 @@ mod tests {
         );
         assert_eq!(
             AccessScope::Unresolved("$FOO".into()).display(),
-            "<unresolved: $FOO>",
+            "<unresolved word: \"$FOO\">",
         );
     }
 

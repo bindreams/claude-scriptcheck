@@ -7,6 +7,7 @@ use crate::filter::{Arg0Pattern, BashFilter, BashFilterItem, Filter, PathFilter}
 use crate::permission::ParsedPermissions;
 use crate::permission_mode::PermissionMode;
 use crate::python_ast::{self, PythonAnalysis};
+use crate::unresolved;
 
 /// Final decision for a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,8 +152,11 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
         if self.denied.is_some() {
             return;
         }
-        if let Some(access) = extract_redirect_access(redirect, self.cwd) {
+        for access in accesses_for_redirect(redirect, self.cwd) {
             self.check_file_access(&access, false);
+            if self.denied.is_some() {
+                return;
+            }
         }
     }
 
@@ -247,12 +251,10 @@ impl PermissionChecker<'_> {
                 if !bash_allowed {
                     self.unmatched.push("Bash(<dynamic command>)".to_string());
                 }
-                for redirect in &cmd.redirects {
-                    if let Some(access) = extract_redirect_access(redirect, self.cwd) {
-                        self.check_file_access(&access, bash_allowed);
-                        if self.denied.is_some() {
-                            return;
-                        }
+                for access in extract_redirect_accesses(&cmd.redirects, self.cwd) {
+                    self.check_file_access(&access, bash_allowed);
+                    if self.denied.is_some() {
+                        return;
                     }
                 }
                 return;
@@ -591,12 +593,23 @@ fn find_covers<F: PathFilter>(bucket: &[F], scope: &AccessScope) -> Option<Strin
 /// A symlink-following walk has no such rule: it can reach outside the tree it
 /// names, so `covers` rejects every path pattern. Saying `Read(D/**)` there
 /// would send the user round a loop — they add the rule, rerun, and are asked
-/// again — so that case names the rule shape that does resolve it instead.
+/// again — so that case names the rule shape that does resolve it instead. An
+/// unresolved access is in the same position for the same reason.
 fn rule_suggestion(kind: AccessKind, scope: &AccessScope) -> String {
     let shown = scope.display();
     if let AccessScope::UnboundedSubtree(dir) = scope {
         return format!(
             "Read({dir}/**) -- follows symlinks out of the tree, so no Read/Write rule \
+             can cover it; allow the command with a Bash(...) rule instead",
+        );
+    }
+    if matches!(scope, AccessScope::Unresolved(_)) {
+        let verb = match kind {
+            AccessKind::Read => "Read",
+            AccessKind::Write => "Write",
+        };
+        return format!(
+            "{verb}({shown}) -- the path is not statically known, so no Read/Write rule \
              can cover it; allow the command with a Bash(...) rule instead",
         );
     }
@@ -608,31 +621,69 @@ fn rule_suggestion(kind: AccessKind, scope: &AccessScope) -> String {
 
 // ─── Redirect file access extraction ─────────────────────────────────────────
 
-fn extract_redirect_access(redirect: &Redirect, cwd: &str) -> Option<FileAccess> {
-    let (word, kind) = match &redirect.kind {
-        RedirectKind::Input(w) => (Some(w), AccessKind::Read),
-        RedirectKind::Output(w) | RedirectKind::Clobber(w) => (Some(w), AccessKind::Write),
-        RedirectKind::Append(w) => (Some(w), AccessKind::Write),
-        RedirectKind::ReadWrite(w) => (Some(w), AccessKind::Write),
-        RedirectKind::BashOutputAll(w) | RedirectKind::BashAppendAll(w) => {
-            (Some(w), AccessKind::Write)
+/// The file accesses one redirect performs.
+///
+/// Empty means the redirect opens no file. Every such case is spelled out with
+/// its reason rather than defaulted: a blanket "fd duplication" arm is what hid
+/// `>&FILE` (#48), and classifying `<>` as write-only is what hid #49.
+fn accesses_for_redirect(redirect: &Redirect, cwd: &str) -> Vec<FileAccess> {
+    use AccessKind::{Read, Write};
+
+    let (word, kinds): (&Word, &[AccessKind]) = match &redirect.kind {
+        RedirectKind::Input(w) => (w, &[Read]),
+        RedirectKind::Output(w) | RedirectKind::Clobber(w) | RedirectKind::Append(w) => {
+            (w, &[Write])
         }
-        RedirectKind::HereDoc { .. } | RedirectKind::BashHereString(_) => return None,
-        RedirectKind::DupInput(_) | RedirectKind::DupOutput(_) => return None,
+        RedirectKind::BashOutputAll(w) | RedirectKind::BashAppendAll(w) => (w, &[Write]),
+        // `<>file` opens the file for reading *and* writing (Bash §3.6.10), so
+        // a `Read` deny rule has to fire on it as well as a `Write` one.
+        RedirectKind::ReadWrite(w) => (w, &[Read, Write]),
+        // The body is inline text — no file is named.
+        RedirectKind::HereDoc { .. } | RedirectKind::BashHereString(_) => return Vec::new(),
+        // `<&word` requires digits or `-` (Bash §3.6.8); any other word is a
+        // redirection error, not a file open. The file special case below is
+        // stated for output only.
+        RedirectKind::DupInput(_) => return Vec::new(),
+        RedirectKind::DupOutput(w) => {
+            // Bash §3.6.8: "if n is omitted, and word does not expand to one or
+            // more digits or '-', the standard output and standard error are
+            // redirected" — that is a file write. With n present, or a word
+            // that duplicates, nothing is opened.
+            if redirect.fd.is_some() || duplicates_a_descriptor(w) {
+                return Vec::new();
+            }
+            (w, &[Write])
+        }
     };
 
-    let word = word?;
-    let path = word.try_to_static_string()?;
-    Some(FileAccess::exact(
-        file_access::resolve_path(&path, cwd),
-        kind,
-    ))
+    let scope = match word.try_to_static_string() {
+        Some(path) => AccessScope::Exact(file_access::resolve_path(&path, cwd)),
+        // Ask, don't drop: an unknown target matches no deny rule and satisfies
+        // no allow rule, so it always surfaces.
+        None => AccessScope::Unresolved(unresolved::describe_word(word)),
+    };
+    kinds
+        .iter()
+        .map(|kind| FileAccess::scoped(scope.clone(), *kind))
+        .collect()
+}
+
+/// Does this `>&word` target duplicate or close a descriptor instead of naming
+/// a file?
+///
+/// Only a statically known all-digit word or `-` does. An unresolvable word
+/// might be either, and of the two readings only the file one needs checking.
+fn duplicates_a_descriptor(word: &Word) -> bool {
+    match word.try_to_static_string() {
+        Some(s) => s == "-" || (!s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())),
+        None => false,
+    }
 }
 
 fn extract_redirect_accesses(redirects: &[Redirect], cwd: &str) -> Vec<FileAccess> {
     redirects
         .iter()
-        .filter_map(|r| extract_redirect_access(r, cwd))
+        .flat_map(|r| accesses_for_redirect(r, cwd))
         .collect()
 }
 

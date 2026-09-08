@@ -2539,3 +2539,225 @@ fn hook_symlink_following_recursion_asks_under_subtree_allow(
         "ask",
     );
 }
+
+// ── Unresolved and misclassified redirect targets ───────────────────────────
+//
+// Issues #45 (an unresolvable redirect target vanished), #48 (`>&FILE` names a
+// file), #49 (`<>` opens for reading as well as writing). All three let a
+// command reach a path with no rule consulted.
+
+/// Settings allowing only the read the issue's table starts from.
+fn creds_read_only(abs: &str) -> String {
+    format!(r#"{{"allow":["Read(//{abs}/vault/creds)"]}}"#)
+}
+
+// The issue's table -------------------------------------------------------------------------------------------------
+
+#[skuld::test]
+fn hook_cat_allowed_file_is_allowed(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(dir, &creds_read_only(&abs));
+    assert_eq!(
+        run_bash_hook(&format!("cat {}/vault/creds", p.root), &p.root),
+        "allow",
+    );
+}
+
+#[skuld::test]
+fn hook_redirect_to_dynamic_target_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // The issue: a file-only command with a satisfied read and an unresolvable
+    // redirect target was an unconstrained write primitive.
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(dir, &creds_read_only(&abs));
+    assert_eq!(
+        run_bash_hook(&format!("cat {}/vault/creds > $FOO", p.root), &p.root),
+        "ask",
+    );
+}
+
+#[skuld::test]
+fn hook_redirect_to_tilde_target_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(dir, &creds_read_only(&abs));
+    assert_eq!(
+        run_bash_hook(&format!("cat {}/vault/creds > ~/evil.txt", p.root), &p.root),
+        "ask",
+    );
+}
+
+#[skuld::test]
+fn hook_dynamic_argument_still_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // The issue's contrast row: an unresolvable *argument* was already caught.
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(dir, &creds_read_only(&abs));
+    assert_eq!(
+        run_bash_hook(&format!("cp {}/vault/creds $FOO", p.root), &p.root),
+        "ask",
+    );
+}
+
+#[skuld::test]
+fn hook_append_to_dynamic_target_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(dir, &creds_read_only(&abs));
+    assert_eq!(
+        run_bash_hook(&format!("cat {}/vault/creds >> $FOO", p.root), &p.root),
+        "ask",
+    );
+}
+
+#[skuld::test]
+fn hook_input_redirect_from_dynamic_source_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // Contrived shell on purpose — `cat` ignores stdin once given an operand.
+    // It is the only shape where a dropped *input* redirect is the sole
+    // difference between allow and ask; `wc -l < $FOO` already asks for want of
+    // any other file access, so it would prove nothing.
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(dir, &creds_read_only(&abs));
+    assert_eq!(
+        run_bash_hook(&format!("cat {}/vault/creds < $FOO", p.root), &p.root),
+        "ask",
+    );
+}
+
+#[skuld::test]
+fn hook_dup_output_to_dynamic_file_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // `>&word` with no leading fd is a file write when the word is not digits.
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(dir, &creds_read_only(&abs));
+    assert_eq!(
+        run_bash_hook(&format!("cat {}/vault/creds >&$FOO", p.root), &p.root),
+        "ask",
+    );
+}
+
+#[skuld::test]
+fn hook_compound_redirect_to_dynamic_target_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // A compound redirect has no owning command, so no Bash rule suppresses it.
+    let p = write_vault_project(dir, r#"{"allow":["Bash(echo *)"]}"#);
+    assert_eq!(run_bash_hook("{ echo hi; } > $FOO", &p.root), "ask");
+}
+
+// Deny rules the misclassifications bypassed ---------------------------------------------------------------------------
+//
+// These carry `Bash(cat *)` deliberately: it proves the deny fires *through*
+// suppression, which is the property each bypass defeated.
+
+#[skuld::test]
+fn hook_dup_output_to_file_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(
+        dir,
+        &format!(r#"{{"allow":["Bash(cat *)"],"deny":["Write(//{abs}/vault/**)"]}}"#),
+    );
+    assert_eq!(
+        run_bash_hook(
+            &format!("cat {}/vault/creds >& {}/vault/x", p.root, p.root),
+            &p.root,
+        ),
+        "deny",
+    );
+}
+
+#[skuld::test]
+fn hook_read_write_redirect_denies_on_read_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // `<>` opens for reading as well as writing, so a Read deny must fire.
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(
+        dir,
+        &format!(r#"{{"allow":["Bash(cat *)"],"deny":["Read(//{abs}/vault/**)"]}}"#),
+    );
+    assert_eq!(
+        run_bash_hook(&format!("cat <> {}/vault/creds", p.root), &p.root),
+        "deny",
+    );
+}
+
+#[skuld::test]
+fn hook_read_write_redirect_denies_on_write_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(
+        dir,
+        &format!(r#"{{"allow":["Bash(cat *)"],"deny":["Write(//{abs}/vault/**)"]}}"#),
+    );
+    assert_eq!(
+        run_bash_hook(&format!("cat <> {}/vault/creds", p.root), &p.root),
+        "deny",
+    );
+}
+
+// Control direction ---------------------------------------------------------------------------------------------------
+//
+// None of these carries a `Bash(...)` allow rule: with one, suppression would
+// hide an over-eager unresolved access and the control would pass vacuously.
+
+#[skuld::test]
+fn hook_redirect_to_static_target_still_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(
+        dir,
+        &format!(r#"{{"allow":["Read(//{abs}/vault/creds)","Write(//{abs}/out.txt)"]}}"#),
+    );
+    assert_eq!(
+        run_bash_hook(
+            &format!("cat {}/vault/creds > {}/out.txt", p.root, p.root),
+            &p.root,
+        ),
+        "allow",
+    );
+}
+
+#[skuld::test]
+fn hook_fd_duplication_is_not_a_file_target(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(dir, &creds_read_only(&abs));
+    assert_eq!(
+        run_bash_hook(&format!("cat {}/vault/creds 2>&1", p.root), &p.root),
+        "allow",
+    );
+}
+
+#[skuld::test]
+fn hook_dup_output_to_fd_number_is_not_a_file_target(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(dir, &creds_read_only(&abs));
+    assert_eq!(
+        run_bash_hook(&format!("cat {}/vault/creds >&2", p.root), &p.root),
+        "allow",
+    );
+}
+
+#[skuld::test]
+fn hook_here_string_is_not_a_file_target(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(dir, &creds_read_only(&abs));
+    assert_eq!(
+        run_bash_hook(&format!("cat {}/vault/creds <<< hi", p.root), &p.root),
+        "allow",
+    );
+}
+
+#[skuld::test]
+fn hook_bash_allow_suppresses_unresolved_redirect(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // Spec D5, deliberately unchanged: a Bash allow rule suppresses the new ask.
+    let p = write_vault_project(dir, r#"{"allow":["Bash(cat *)"]}"#);
+    assert_eq!(
+        run_bash_hook(&format!("cat {}/vault/creds > $FOO", p.root), &p.root),
+        "allow",
+    );
+}
+
+#[skuld::test]
+fn hook_deny_rule_does_not_fire_on_unresolved_target(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // An unresolved access matches no deny rule: a deny is authoritative in
+    // every mode and unrecoverable, so uncertainty must resolve to ask.
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(
+        dir,
+        &format!(r#"{{"allow":["Read(//{abs}/vault/creds)"],"deny":["Write(**)"]}}"#),
+    );
+    assert_eq!(
+        run_bash_hook(&format!("cat {}/vault/creds > $FOO", p.root), &p.root),
+        "ask",
+    );
+}
