@@ -2753,3 +2753,42 @@ fn hook_find_fprint_inside_allowed_tree_allows(#[fixture(temp_dir)] dir: &std::p
         "allow",
     );
 }
+
+// ── rg preprocessor flags ───────────────────────────────────────────────────
+
+#[skuld::test]
+fn hook_rg_pre_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = read_only_project(dir);
+    assert_eq!(
+        run_bash_hook("rg --pre /tmp/evil.sh TOKEN .", &p.root),
+        "ask",
+    );
+}
+
+#[skuld::test]
+fn hook_rg_hostname_bin_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = read_only_project(dir);
+    assert_eq!(
+        run_bash_hook("rg --hostname-bin /tmp/evil.sh TOKEN .", &p.root),
+        "ask",
+    );
+}
+
+#[skuld::test]
+fn hook_rg_pre_allowed_by_bash_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(
+        dir,
+        &format!(r#"{{"allow":["Read(//{abs}/**)","Bash(rg *)"]}}"#),
+    );
+    assert_eq!(
+        run_bash_hook("rg --pre /tmp/evil.sh TOKEN .", &p.root),
+        "allow",
+    );
+}
+
+#[skuld::test]
+fn hook_rg_plain_still_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = read_only_project(dir);
+    assert_eq!(run_bash_hook("rg TOKEN .", &p.root), "allow");
+}

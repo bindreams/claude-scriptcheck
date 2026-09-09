@@ -119,6 +119,7 @@ impl CommandParser for RgParser {
             .arg(val_l("sortr"))
             .arg(val_l("pre"))
             .arg(val_l("pre-glob").action(ArgAction::Append))
+            .arg(val_l("hostname-bin"))
             .arg(val_l("engine"))
             .arg(val_l("binary"))
             // Bool flags (common subset)
@@ -181,8 +182,31 @@ impl CommandParser for RgParser {
             .map_err(|e| e.to_string())?;
 
         let recursion = rg_recursion(&matches);
-        parse_grep_like(&matches, cwd, recursion)
+        let mut accesses = parse_grep_like(&matches, cwd, recursion)?;
+        if rg_runs_a_program(&matches) {
+            accesses.file_only = Some(false);
+        }
+        Ok(accesses)
     }
+}
+
+/// Does this invocation run an arbitrary program? `--pre` runs a preprocessor
+/// per file and `--hostname-bin` runs a hostname resolver, neither of which a
+/// `Read` rule can gate — the invocation needs the `Bash(...)` rule that gates
+/// execution.
+///
+/// An empty `--pre` disables the preprocessor rather than running an empty
+/// command (verified against ripgrep 15.2.0), so it is not execution.
+///
+/// `-z`/`--search-zip` is deliberately absent: it spawns decompressors from a
+/// fixed internal list resolved through `PATH`, not a program the caller names.
+fn rg_runs_a_program(matches: &ArgMatches) -> bool {
+    let names_a_program = |flag: &str| {
+        matches
+            .get_one::<String>(flag)
+            .is_some_and(|v| !v.is_empty())
+    };
+    names_a_program("pre") || names_a_program("hostname-bin")
 }
 
 /// Shared grep/rg extraction: if -e was given, all positionals are files;

@@ -282,3 +282,53 @@ fn rg_follow_is_unbounded(#[fixture(temp_dir)] dir: &std::path::Path) {
     let r = RgParser.parse(&["--follow", "TODO", "sub"], &cwd).unwrap();
     assert_eq!(r.reads, unbounded(&[&format!("{cwd}/sub")]));
 }
+
+// Program execution ===================================================================================================
+
+#[skuld::test]
+fn rg_pre_requires_bash_rule() {
+    let result = RgParser
+        .parse(&["--pre", "/tmp/evil.sh", "TOKEN", "."], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}
+
+#[skuld::test]
+fn rg_empty_pre_stays_file_only() {
+    // An empty `--pre` disables the preprocessor (verified against rg 15.2.0),
+    // so nothing is executed.
+    let result = RgParser
+        .parse(&["--pre", "", "TOKEN", "."], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn rg_hostname_bin_requires_bash_rule() {
+    let result = RgParser
+        .parse(&["--hostname-bin", "/tmp/evil.sh", "TOKEN", "."], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}
+
+#[skuld::test]
+fn rg_plain_search_stays_file_only() {
+    let result = RgParser.parse(&["TOKEN", "."], "/cwd").unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn rg_pre_still_reads_the_searched_subtree() {
+    let result = RgParser
+        .parse(&["--pre", "/tmp/evil.sh", "TOKEN", "/tmp/src"], "/cwd")
+        .unwrap();
+    assert_eq!(result.reads, sub(&["/tmp/src"]));
+}
+
+#[skuld::test]
+fn grep_has_no_preprocessor_flag() {
+    // GNU grep has no exec-capable option; pins that the rg change did not leak
+    // into the shared extraction.
+    let result = GrepParser.parse(&["-rn", "TOKEN", "."], "/cwd").unwrap();
+    assert_eq!(result.file_only, None);
+}
