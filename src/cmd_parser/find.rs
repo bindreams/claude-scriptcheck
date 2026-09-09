@@ -1,6 +1,6 @@
 use crate::file_access::AccessScope;
 
-use super::{resolve_scoped, CommandFileAccesses, CommandParser, Recursion};
+use super::{resolve, resolve_scoped, CommandFileAccesses, CommandParser, Recursion};
 
 // ─── find ────────────────────────────────────────────────────────────────────
 
@@ -60,13 +60,14 @@ impl CommandParser for FindParser {
             reads.push(resolve_scoped(cwd, cwd, recursion));
         }
 
-        // `-delete` / `-fprint`-style actions turn the walk into a write over
-        // the same set of paths.
-        let writes = if rest.contains(&"-delete") {
+        // `-delete` turns the walk into a write over the same set of paths; the
+        // printing predicates write one named file each.
+        let mut writes = if rest.contains(&"-delete") {
             reads.clone()
         } else {
             Vec::new()
         };
+        writes.extend(written_files(rest, cwd));
 
         // A walk that runs a program is not file-only, however tame the paths
         // it touches look.
@@ -84,6 +85,33 @@ impl CommandParser for FindParser {
             ..Default::default()
         })
     }
+}
+
+/// Targets of the predicates that write a file. `-fprint FILE`, `-fprint0 FILE`,
+/// `-fls FILE` and `-fprintf FILE FORMAT` each create or truncate `FILE`
+/// (verified against GNU find 4.x). The operand is the token right after the
+/// predicate; a trailing predicate with no operand records nothing, matching
+/// find, which errors out.
+///
+/// Like `runs_a_program` this does not model predicate arity, so a value that
+/// spells `-fprint` yields one spurious `Write` demand — over-approximating on
+/// purpose.
+fn written_files(expression: &[&str], cwd: &str) -> Vec<AccessScope> {
+    let mut writes = Vec::new();
+    let mut i = 0;
+    while i < expression.len() {
+        if matches!(expression[i], "-fprint" | "-fprint0" | "-fls" | "-fprintf") {
+            if let Some(target) = expression.get(i + 1) {
+                writes.push(resolve(target, cwd));
+            }
+            // Skip the operand so a target spelled `-fprint` is not re-read as
+            // a predicate.
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    writes
 }
 
 /// Does this expression run an arbitrary program? `-exec`/`-execdir` run one per

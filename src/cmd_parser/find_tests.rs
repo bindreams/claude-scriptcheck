@@ -211,3 +211,84 @@ fn find_exec_still_reads_the_walked_subtree() {
         .unwrap();
     assert_eq!(result.reads, sub(&["/cwd/."]));
 }
+
+// Writing predicates ==================================================================================================
+
+fn exact(paths: &[&str]) -> Vec<AccessScope> {
+    paths
+        .iter()
+        .map(|p| AccessScope::Exact(p.to_string()))
+        .collect()
+}
+
+#[skuld::test]
+fn find_fprint_records_write() {
+    let result = FindParser
+        .parse(&[".", "-fprint", "/tmp/leak"], "/cwd")
+        .unwrap();
+    assert_eq!(result.writes, exact(&["/tmp/leak"]));
+}
+
+#[skuld::test]
+fn find_fprint0_records_write() {
+    let result = FindParser
+        .parse(&[".", "-fprint0", "/tmp/leak"], "/cwd")
+        .unwrap();
+    assert_eq!(result.writes, exact(&["/tmp/leak"]));
+}
+
+#[skuld::test]
+fn find_fls_records_write() {
+    let result = FindParser
+        .parse(&[".", "-fls", "/tmp/leak"], "/cwd")
+        .unwrap();
+    assert_eq!(result.writes, exact(&["/tmp/leak"]));
+}
+
+#[skuld::test]
+fn find_fprintf_records_only_the_file_operand() {
+    // `-fprintf FILE FORMAT` — the format string is not a path.
+    let result = FindParser
+        .parse(&[".", "-fprintf", "/tmp/leak", "%p\\n"], "/cwd")
+        .unwrap();
+    assert_eq!(result.writes, exact(&["/tmp/leak"]));
+}
+
+#[skuld::test]
+fn find_fprint_target_is_relative_to_cwd() {
+    let result = FindParser
+        .parse(&[".", "-fprint", "leak"], "/home/user")
+        .unwrap();
+    assert_eq!(result.writes, exact(&["/home/user/leak"]));
+}
+
+#[skuld::test]
+fn find_fprint_without_operand_records_nothing() {
+    let result = FindParser.parse(&[".", "-fprint"], "/cwd").unwrap();
+    assert!(result.writes.is_empty());
+}
+
+#[skuld::test]
+fn find_multiple_writing_predicates_record_each() {
+    let result = FindParser
+        .parse(&[".", "-fprint", "/tmp/a", "-fls", "/tmp/b"], "/cwd")
+        .unwrap();
+    assert_eq!(result.writes, exact(&["/tmp/a", "/tmp/b"]));
+}
+
+#[skuld::test]
+fn find_delete_still_writes_the_subtree() {
+    let result = FindParser.parse(&[".", "-delete"], "/cwd").unwrap();
+    assert_eq!(result.writes, sub(&["/cwd/."]));
+}
+
+#[skuld::test]
+fn find_delete_and_fprint_record_both() {
+    let result = FindParser
+        .parse(&[".", "-delete", "-fprint", "/tmp/leak"], "/cwd")
+        .unwrap();
+    assert_eq!(
+        result.writes,
+        [sub(&["/cwd/."]), exact(&["/tmp/leak"])].concat(),
+    );
+}

@@ -2704,3 +2704,52 @@ fn hook_find_exec_still_denies_on_subtree_deny(#[fixture(temp_dir)] dir: &std::p
         "deny",
     );
 }
+
+// ── find's file-writing predicates ──────────────────────────────────────────
+
+#[skuld::test]
+fn hook_find_fprint_outside_project_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // The walk is covered by the project read rule; the file it writes is not.
+    let p = read_only_project(dir);
+    assert_eq!(run_bash_hook("find . -fprint /tmp/leak", &p.root), "ask");
+}
+
+#[skuld::test]
+fn hook_find_fprintf_outside_project_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = read_only_project(dir);
+    assert_eq!(
+        run_bash_hook("find . -fprintf /tmp/leak '%p\\n'", &p.root),
+        "ask",
+    );
+}
+
+#[skuld::test]
+fn hook_find_fls_outside_project_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = read_only_project(dir);
+    assert_eq!(run_bash_hook("find . -fls /tmp/leak", &p.root), "ask");
+}
+
+#[skuld::test]
+fn hook_find_fprint_into_denied_dir_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(
+        dir,
+        &format!(
+            r#"{{"allow":["Read(//{abs}/**)","Write(//{abs}/**)"],"deny":["Edit(//{abs}/vault/**)"]}}"#
+        ),
+    );
+    assert_eq!(
+        run_bash_hook(&format!("find . -fprint {}/vault/leak", p.root), &p.root),
+        "deny",
+    );
+}
+
+#[skuld::test]
+fn hook_find_fprint_inside_allowed_tree_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // The new write demand is an ordinary one: a `Write` rule satisfies it.
+    let p = ordinary_work_project(dir);
+    assert_eq!(
+        run_bash_hook(&format!("find . -fprint {}/out.txt", p.root), &p.root),
+        "allow",
+    );
+}
