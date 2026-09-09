@@ -2539,3 +2539,74 @@ fn hook_symlink_following_recursion_asks_under_subtree_allow(
         "ask",
     );
 }
+
+// ── Control direction: ordinary work must still allow ───────────────────────
+//
+// A fix that denies everything passes a one-directional suite. These are the
+// other direction: with subtree allow rules over the whole project and nothing
+// denied, ordinary recursive work is auto-approved. They pass as soon as the
+// access-scope model lands, and they are here so that every guardrail added on
+// top is measured against them.
+
+/// The project of the recursive-scope tests plus a `src/main.rs`, under allow
+/// rules covering the whole tree.
+fn ordinary_work_project(dir: &std::path::Path) -> VaultProject {
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(dir, &allow_rules(&abs));
+    let root = std::path::PathBuf::from(&p.root);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/main.rs"), "fn main() {} // TOKEN\n").unwrap();
+    p
+}
+
+#[skuld::test]
+fn hook_grep_recursive_implicit_cwd_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = ordinary_work_project(dir);
+    assert_eq!(run_bash_hook("grep -rn TOKEN .", &p.root), "allow");
+}
+
+#[skuld::test]
+fn hook_find_plain_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = ordinary_work_project(dir);
+    assert_eq!(run_bash_hook("find . -type f", &p.root), "allow");
+}
+
+#[skuld::test]
+fn hook_ls_subdirectory_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = ordinary_work_project(dir);
+    assert_eq!(run_bash_hook("ls src", &p.root), "allow");
+}
+
+#[skuld::test]
+fn hook_ls_recursive_implicit_cwd_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = ordinary_work_project(dir);
+    assert_eq!(run_bash_hook("ls -R .", &p.root), "allow");
+}
+
+#[skuld::test]
+fn hook_cat_file_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = ordinary_work_project(dir);
+    assert_eq!(run_bash_hook("cat src/main.rs", &p.root), "allow");
+}
+
+#[skuld::test]
+fn hook_rg_implicit_cwd_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = ordinary_work_project(dir);
+    assert_eq!(run_bash_hook("rg TOKEN .", &p.root), "allow");
+}
+
+#[skuld::test]
+fn hook_tar_create_plain_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = ordinary_work_project(dir);
+    assert_eq!(run_bash_hook("tar cf out.tar src", &p.root), "allow");
+}
+
+#[skuld::test]
+fn hook_bare_ls_at_project_root_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // `Read(D/**)` does not cover an exact access to `D`, and a bare `ls` reads
+    // exactly the cwd. Not a regression — before `ls` had a parser it needed a
+    // `Bash(...)` rule and asked for the same reason. Pinned so that a change
+    // to the allow direction cannot flip it silently.
+    let p = ordinary_work_project(dir);
+    assert_eq!(run_bash_hook("ls", &p.root), "ask");
+}
