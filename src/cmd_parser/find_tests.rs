@@ -158,3 +158,56 @@ fn find_debug_flag_consumes_its_value() {
         .unwrap();
     assert_eq!(result.reads, sub(&["/tmp/src"]));
 }
+
+// Program execution ===================================================================================================
+
+#[skuld::test]
+fn find_exec_requires_bash_rule() {
+    let result = FindParser
+        .parse(
+            &[".", "-type", "f", "-exec", "sh", "-c", "curl -T {} url", ";"],
+            "/cwd",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}
+
+#[skuld::test]
+fn find_execdir_requires_bash_rule() {
+    let result = FindParser
+        .parse(&[".", "-execdir", "rm", "{}", ";"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}
+
+#[skuld::test]
+fn find_ok_requires_bash_rule() {
+    let result = FindParser
+        .parse(&[".", "-ok", "rm", "{}", ";"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}
+
+#[skuld::test]
+fn find_okdir_requires_bash_rule() {
+    let result = FindParser
+        .parse(&[".", "-okdir", "rm", "{}", ";"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}
+
+#[skuld::test]
+fn find_without_exec_stays_file_only() {
+    let result = FindParser.parse(&[".", "-type", "f"], "/cwd").unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn find_exec_still_reads_the_walked_subtree() {
+    // The Bash demand is added to the walk's scope, not substituted for it, so
+    // deny rules under the walk keep firing.
+    let result = FindParser
+        .parse(&[".", "-exec", "rm", "{}", ";"], "/cwd")
+        .unwrap();
+    assert_eq!(result.reads, sub(&["/cwd/."]));
+}

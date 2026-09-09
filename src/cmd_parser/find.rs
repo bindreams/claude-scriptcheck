@@ -68,14 +68,37 @@ impl CommandParser for FindParser {
             Vec::new()
         };
 
+        // A walk that runs a program is not file-only, however tame the paths
+        // it touches look.
+        let file_only = if runs_a_program(rest) {
+            Some(false)
+        } else {
+            None
+        };
+
         Ok(CommandFileAccesses {
             reads,
             writes,
             inline_script_start: None,
-            file_only: None,
+            file_only,
             ..Default::default()
         })
     }
+}
+
+/// Does this expression run an arbitrary program? `-exec`/`-execdir` run one per
+/// match, `-ok`/`-okdir` do the same after a prompt `find` itself issues — none
+/// of which a `Read`/`Write` rule can gate. The invocation needs the `Bash(...)`
+/// rule that gates execution.
+///
+/// The scan is a flat token search: it does not model predicate arity, so a
+/// value that happens to spell `-exec` (`find . -name -exec`) forces the rule
+/// too. That is the over-approximating direction — a spurious prompt, never a
+/// missed one.
+fn runs_a_program(expression: &[&str]) -> bool {
+    expression
+        .iter()
+        .any(|arg| matches!(*arg, "-exec" | "-execdir" | "-ok" | "-okdir"))
 }
 
 fn is_find_expression_token(arg: &str) -> bool {
