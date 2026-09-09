@@ -3063,3 +3063,67 @@ fn hook_abbreviated_exec_option_still_denies_on_file_rule(
         "deny",
     );
 }
+
+// ── tar -C in create mode ───────────────────────────────────────────────────
+//
+// `-C` applies to the operands that follow it, so a create-mode positional
+// resolves against that directory, not the working one. Resolving it against
+// the cwd put the access inside the project's own allow rule and auto-approved
+// an archive built from somewhere else entirely.
+
+#[skuld::test]
+fn hook_tar_create_from_outside_project_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = ordinary_work_project(dir);
+    assert_eq!(run_bash_hook("tar -cf ./out.tar -C /etc .", &p.root), "ask",);
+}
+
+#[skuld::test]
+fn hook_tar_create_named_file_outside_project_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = ordinary_work_project(dir);
+    assert_eq!(
+        run_bash_hook("tar -cf ./out.tar -C /etc passwd", &p.root),
+        "ask",
+    );
+}
+
+#[skuld::test]
+fn hook_tar_create_from_denied_directory_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(
+        dir,
+        &format!(
+            r#"{{"allow":["Read(//{abs}/**)","Write(//{abs}/**)"],"deny":["Read(//{abs}/vault/**)"]}}"#
+        ),
+    );
+    assert_eq!(
+        run_bash_hook(&format!("tar -cf ./out.tar -C {}/vault .", p.root), &p.root,),
+        "deny",
+    );
+}
+
+#[skuld::test]
+fn hook_tar_create_inside_project_still_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // The control direction: a `-C` that stays inside the workspace is allowed.
+    let p = ordinary_work_project(dir);
+    assert_eq!(
+        run_bash_hook(&format!("tar -cf ./out.tar -C {}/src .", p.root), &p.root),
+        "allow",
+    );
+}
+
+#[skuld::test]
+fn hook_tar_extract_change_dir_still_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // The other direction must not regress: extraction into a denied directory
+    // is still caught.
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(
+        dir,
+        &format!(
+            r#"{{"allow":["Read(//{abs}/**)","Write(//{abs}/**)"],"deny":["Edit(//{abs}/vault/**)"]}}"#
+        ),
+    );
+    assert_eq!(
+        run_bash_hook(&format!("tar -xf out.tar -C {}/vault", p.root), &p.root),
+        "deny",
+    );
+}

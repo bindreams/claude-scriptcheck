@@ -99,8 +99,10 @@ fn tar_long_flags(#[fixture(temp_dir)] dir: &std::path::Path) {
             &cwd,
         )
         .unwrap();
-    // `.` is the working directory, so tar recurses into it.
-    assert_eq!(result.reads, sub(&[&format!("{cwd}/.")]));
+    // `--directory /src` puts `.` at /src, so that is what gets archived —
+    // verified against GNU tar 1.35. The archive itself stays relative to the
+    // working directory: tar opens it before changing directory.
+    assert_eq!(result.reads, sub(&["/src/."]));
     assert_eq!(result.writes, w(&[&format!("{cwd}/archive.tar")]));
 }
 
@@ -320,4 +322,87 @@ fn tar_ambiguous_long_abbreviation_is_skipped() {
     assert!(!result
         .writes
         .contains(&AccessScope::Subtree("/etc".to_string())));
+}
+
+// -C / --directory in create mode =====================================================================================
+
+#[skuld::test]
+fn tar_create_positional_resolves_against_change_dir() {
+    // `tar -cf out.tar -C /etc .` archives /etc, not the working directory
+    // (verified against GNU tar 1.35).
+    let result = TarParser
+        .parse(&["-cf", "out.tar", "-C", "/nowhere", "."], "/cwd")
+        .unwrap();
+    assert_eq!(result.reads, sub(&["/nowhere/."]));
+    assert_eq!(result.writes, w(&["/cwd/out.tar"]));
+}
+
+#[skuld::test]
+fn tar_create_named_positional_resolves_against_change_dir() {
+    let result = TarParser
+        .parse(&["-cf", "out.tar", "-C", "/nowhere", "passwd"], "/cwd")
+        .unwrap();
+    assert_eq!(result.reads, sub(&["/nowhere/passwd"]));
+}
+
+#[skuld::test]
+fn tar_change_dir_applies_only_to_following_positionals() {
+    // Verified: `tar -cf a.tar p.txt -C /tmp/one o.txt` takes p.txt from the
+    // working directory and o.txt from /tmp/one.
+    let result = TarParser
+        .parse(
+            &["-cf", "out.tar", "p.txt", "-C", "/nowhere", "o.txt"],
+            "/cwd",
+        )
+        .unwrap();
+    assert_eq!(result.reads, sub(&["/cwd/p.txt", "/nowhere/o.txt"]));
+}
+
+#[skuld::test]
+fn tar_nested_change_dirs_compose() {
+    // Verified: a relative second `-C` resolves against the first.
+    let result = TarParser
+        .parse(&["-cf", "out.tar", "-C", "/base", "-C", "sub", "f"], "/cwd")
+        .unwrap();
+    assert_eq!(result.reads, sub(&["/base/sub/f"]));
+}
+
+#[skuld::test]
+fn tar_change_dir_long_form_applies_to_create() {
+    let result = TarParser
+        .parse(&["-cf", "out.tar", "--directory=/nowhere", "."], "/cwd")
+        .unwrap();
+    assert_eq!(result.reads, sub(&["/nowhere/."]));
+}
+
+#[skuld::test]
+fn tar_legacy_bundle_change_dir_applies_to_create() {
+    let result = TarParser
+        .parse(&["cfC", "out.tar", "/nowhere", "."], "/cwd")
+        .unwrap();
+    assert_eq!(result.reads, sub(&["/nowhere/."]));
+}
+
+#[skuld::test]
+fn tar_create_without_change_dir_still_uses_cwd() {
+    let result = TarParser.parse(&["-cf", "out.tar", "src"], "/cwd").unwrap();
+    assert_eq!(result.reads, sub(&["/cwd/src"]));
+}
+
+#[skuld::test]
+fn tar_extract_records_every_change_dir_as_a_write() {
+    // Members following each `-C` extract into that directory, so all of them
+    // are write destinations. An absolute `-C` replaces the previous one.
+    let result = TarParser
+        .parse(&["-xf", "a.tar", "-C", "/d1", "-C", "/d2"], "/cwd")
+        .unwrap();
+    assert_eq!(result.writes, sub(&["/d1", "/d2"]));
+}
+
+#[skuld::test]
+fn tar_extract_relative_change_dir_composes() {
+    let result = TarParser
+        .parse(&["-xf", "a.tar", "-C", "/d1", "-C", "sub"], "/cwd")
+        .unwrap();
+    assert_eq!(result.writes, sub(&["/d1", "/d1/sub"]));
 }

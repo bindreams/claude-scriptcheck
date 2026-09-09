@@ -1,5 +1,5 @@
 use super::helpers::strip_program_options;
-use super::{resolve, resolve_scoped, CommandFileAccesses, CommandParser, Recursion};
+use super::{resolve, resolve_scoped, resolve_str, CommandFileAccesses, CommandParser, Recursion};
 
 // ─── tar ─────────────────────────────────────────────────────────────────────
 
@@ -22,9 +22,14 @@ impl CommandParser for TarParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
         let mut mode = TarMode::Unknown;
         let mut archive: Option<&str> = None;
-        let mut change_dir: Option<&str> = None;
         let mut dereference = false;
-        let mut file_args: Vec<&str> = Vec::new();
+        // `-C` applies to the operands that *follow* it, and a relative `-C`
+        // resolves against the one before it (both verified against GNU tar
+        // 1.35), so the directory is carried along and each operand is paired
+        // with the one in effect where it appeared.
+        let mut current_dir = cwd.to_string();
+        let mut change_dirs: Vec<String> = Vec::new();
+        let mut file_args: Vec<(&str, String)> = Vec::new();
         let mut i = 0;
 
         // Long options naming a program come off first, by prefix, so no
@@ -73,7 +78,8 @@ impl CommandParser for TarParser {
                     i += 1;
                 }
                 if need_dir && i < args.len() {
-                    change_dir = Some(args[i]);
+                    current_dir = resolve_str(args[i], &current_dir);
+                    change_dirs.push(current_dir.clone());
                     i += 1;
                 }
                 if need_program && i < args.len() {
@@ -89,7 +95,7 @@ impl CommandParser for TarParser {
             if arg == "--" {
                 i += 1;
                 while i < args.len() {
-                    file_args.push(args[i]);
+                    file_args.push((args[i], current_dir.clone()));
                     i += 1;
                 }
                 break;
@@ -119,7 +125,12 @@ impl CommandParser for TarParser {
                     Some("diff") | Some("compare") => mode = TarMode::Diff,
                     Some("dereference") => dereference = true,
                     Some("file") => archive = take_value(&mut i),
-                    Some("directory") => change_dir = take_value(&mut i),
+                    Some("directory") => {
+                        if let Some(dir) = take_value(&mut i) {
+                            current_dir = resolve_str(dir, &current_dir);
+                            change_dirs.push(current_dir.clone());
+                        }
+                    }
                     // Unresolvable: an unknown option, or an abbreviation the
                     // real tar would call ambiguous and exit over.
                     _ => {}
@@ -155,14 +166,15 @@ impl CommandParser for TarParser {
                             break;
                         }
                         'C' => {
-                            if j + 1 < chars.len() {
-                                let rest: String = chars[j + 1..].iter().collect();
-                                change_dir = Some(Box::leak(rest.into_boxed_str()));
+                            let dir = if j + 1 < chars.len() {
+                                Some(chars[j + 1..].iter().collect::<String>())
                             } else {
                                 i += 1;
-                                if i < args.len() {
-                                    change_dir = Some(args[i]);
-                                }
+                                args.get(i).map(|d| (*d).to_string())
+                            };
+                            if let Some(dir) = dir {
+                                current_dir = resolve_str(&dir, &current_dir);
+                                change_dirs.push(current_dir.clone());
                             }
                             break;
                         }
@@ -184,8 +196,8 @@ impl CommandParser for TarParser {
                 continue;
             }
 
-            // Positional arg
-            file_args.push(arg);
+            // Positional arg, tagged with the directory in effect here.
+            file_args.push((arg, current_dir.clone()));
             i += 1;
         }
 
@@ -205,10 +217,16 @@ impl CommandParser for TarParser {
         }
 
         // Extraction unpacks a whole tree into -C DIR, or into the working
-        // directory when -C is absent.
+        // directory when -C is absent. Members following each `-C` land in that
+        // directory, so every one of them is a destination.
         if mode == TarMode::Extract {
-            let dest = change_dir.unwrap_or(cwd);
-            writes.push(resolve_scoped(dest, cwd, Recursion::Yes));
+            if change_dirs.is_empty() {
+                writes.push(resolve_scoped(cwd, cwd, Recursion::Yes));
+            } else {
+                for dest in &change_dirs {
+                    writes.push(resolve_scoped(dest, cwd, Recursion::Yes));
+                }
+            }
         }
 
         // Positional files: in create mode → reads (files to archive). tar
@@ -219,8 +237,8 @@ impl CommandParser for TarParser {
             } else {
                 Recursion::IfDir
             };
-            for f in &file_args {
-                reads.push(resolve_scoped(f, cwd, recursion));
+            for (f, dir) in &file_args {
+                reads.push(resolve_scoped(f, dir, recursion));
             }
         }
 
