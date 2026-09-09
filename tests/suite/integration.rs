@@ -2865,3 +2865,71 @@ fn hook_zip_plain_still_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = ordinary_work_project(dir);
     assert_eq!(run_bash_hook("zip -r out.zip src", &p.root), "allow");
 }
+
+// ── A rule over a directory's contents reaches the directory ────────────────
+
+/// A project-wide read allow plus a deny over the vault's contents — the shape
+/// under which `ls vault` was allowed while `ls -R vault` was denied.
+fn vault_contents_denied(dir: &std::path::Path) -> VaultProject {
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(
+        dir,
+        &format!(r#"{{"allow":["Read(//{abs}/**)"],"deny":["Read(//{abs}/vault/**)"]}}"#),
+    );
+    let root = std::path::PathBuf::from(&p.root);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/main.rs"), "fn main() {} // TOKEN\n").unwrap();
+    p
+}
+
+#[skuld::test]
+fn hook_ls_denied_directory_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // The cheap form. `ls vault` lists every name the deny rule protects.
+    let p = vault_contents_denied(dir);
+    assert_eq!(
+        run_bash_hook(&format!("ls {}/vault", p.root), &p.root),
+        "deny",
+    );
+}
+
+#[skuld::test]
+fn hook_ls_recursive_denied_directory_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // The sibling that already worked; the two must agree.
+    let p = vault_contents_denied(dir);
+    assert_eq!(
+        run_bash_hook(&format!("ls -R {}/vault", p.root), &p.root),
+        "deny",
+    );
+}
+
+#[skuld::test]
+fn hook_cat_denied_directory_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // The fix is in the matcher, so it reaches every exact access, not just ls.
+    let p = vault_contents_denied(dir);
+    assert_eq!(
+        run_bash_hook(&format!("cat {}/vault", p.root), &p.root),
+        "deny",
+    );
+}
+
+#[skuld::test]
+fn hook_ls_project_root_unaffected_by_nested_file_deny(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // The blast-radius guard. A deny rule naming one file inside the tree must
+    // not deny listing the tree's root — that is what keeps this change from
+    // widening the known over-approximation.
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(
+        dir,
+        &format!(r#"{{"allow":["Read(//{abs}/**)"],"deny":["Read(//{abs}/.env)"]}}"#),
+    );
+    assert_ne!(run_bash_hook(&format!("ls {}", p.root), &p.root), "deny");
+}
+
+#[skuld::test]
+fn hook_ls_allowed_subdirectory_still_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = ordinary_work_project(dir);
+    assert_eq!(
+        run_bash_hook(&format!("ls {}/src", p.root), &p.root),
+        "allow",
+    );
+}

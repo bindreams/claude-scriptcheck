@@ -16,7 +16,9 @@ use crate::path_util::{glob_match_for_platform, paths_equal_for_platform};
 /// Could `pattern` match any member of `scope`? Used for deny and ask rules.
 pub fn could_match(pattern: &str, scope: &AccessScope) -> bool {
     match scope {
-        AccessScope::Exact(p) => glob_match_for_platform(pattern, p),
+        AccessScope::Exact(p) => {
+            glob_match_for_platform(pattern, p) || matches_contents_root(pattern, p)
+        }
         AccessScope::Subtree(d) | AccessScope::UnboundedSubtree(d) => {
             glob_match_for_platform(pattern, d) || could_match_under(pattern, d)
         }
@@ -36,6 +38,45 @@ pub fn covers(pattern: &str, scope: &AccessScope) -> bool {
         AccessScope::Pattern(q) => covers_pattern(pattern, q),
         AccessScope::Unresolved(_) => false,
     }
+}
+
+/// Does `pattern` cover the whole contents of the directory at `path`? The
+/// deny/ask direction only.
+///
+/// Someone writing `Deny(Read(secrets/**))` means "this directory is off
+/// limits", and `ls secrets` reveals every filename in it. Treating the listing
+/// as outside the rule is the letter of the pattern defeating its evident
+/// purpose — and it left the cheap form allowed while `ls -R secrets`, whose
+/// access set is a superset, was denied.
+///
+/// Only a trailing run of segments that are *exactly* `*` or `**` counts. A
+/// pattern naming a specific descendant (`Deny(Read(<project>/.env))`) does not
+/// reach the directory, and that restraint is load-bearing: without it every
+/// deny rule anywhere in a tree would deny `cat` and `ls` at the tree's root.
+/// Do not generalize this to "could the pattern match anything below `path`".
+///
+/// The allow direction is deliberately not changed — `covers` stays
+/// under-approximating, so the asymmetry always resolves toward prompting.
+fn matches_contents_root(pattern: &str, path: &str) -> bool {
+    contents_root(pattern).is_some_and(|root| glob_match_for_platform(root, path))
+}
+
+/// `pattern` with its trailing run of wildcard-only segments removed, or `None`
+/// when nothing was stripped or nothing survives. `/vault/**` → `/vault`,
+/// `/vault/**/*` → `/vault`, `/**` → `/`, `/vault/*.pem` → `None`, `**` → `None`.
+fn contents_root(pattern: &str) -> Option<&str> {
+    let segs = segments(pattern);
+    let kept = segs
+        .iter()
+        .rposition(|s| !matches!(*s, "*" | "**"))
+        .map(|last| last + 1)?;
+    if kept == segs.len() {
+        return None; // no trailing wildcard segment: not a contents rule
+    }
+    // The segments are borrowed slices of `pattern`, so the prefix can be cut
+    // from the original rather than rebuilt.
+    let len: usize = segs[..kept].iter().map(|s| s.len() + 1).sum::<usize>() - 1;
+    Some(if len == 0 { "/" } else { &pattern[..len] })
 }
 
 /// Split a path or pattern into segments, dropping trailing empty ones.
@@ -359,6 +400,57 @@ mod tests {
         assert!(could_match("/a/**/c/d", &pattern("/a/x/y/c/*")));
         // A literal mismatch before any `**` is still provable.
         assert!(!patterns_intersect("/a/**/c/d", "/b/x/**"));
+    }
+
+    #[test]
+    fn contents_rule_could_match_the_directory_itself() {
+        assert!(could_match("/vault/**", &exact("/vault")));
+    }
+
+    #[test]
+    fn single_star_contents_rule_could_match_the_directory_itself() {
+        assert!(could_match("/vault/*", &exact("/vault")));
+    }
+
+    #[test]
+    fn named_descendant_rule_does_not_match_the_directory() {
+        // The blast-radius guard: `Deny(Read(<project>/.env))` must leave
+        // `cat <project>` and `ls <project>` alone.
+        assert!(!could_match("/vault/creds", &exact("/vault")));
+        assert!(!could_match("/project/.env", &exact("/project")));
+    }
+
+    #[test]
+    fn suffix_pattern_does_not_match_the_directory() {
+        assert!(!could_match("/vault/*.pem", &exact("/vault")));
+    }
+
+    #[test]
+    fn contents_rule_does_not_match_a_sibling() {
+        assert!(!could_match("/vault/**", &exact("/other")));
+    }
+
+    #[test]
+    fn contents_rule_does_not_match_the_parent() {
+        assert!(!could_match("/vault/sub/**", &exact("/vault")));
+    }
+
+    #[test]
+    fn filesystem_root_contents_rule_matches_the_root() {
+        assert!(could_match("/**", &exact("/")));
+    }
+
+    #[test]
+    fn allow_direction_is_unchanged_for_exact() {
+        // Allow stays under-approximating: the asymmetry always resolves
+        // toward prompting.
+        assert!(!covers("/vault/**", &exact("/vault")));
+        assert!(!covers("/vault/*", &exact("/vault")));
+    }
+
+    #[test]
+    fn negated_contents_rule_stays_conservative() {
+        assert!(could_match("!/vault/**", &exact("/zzz")));
     }
 
     #[test]
