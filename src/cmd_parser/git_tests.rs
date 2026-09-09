@@ -1,20 +1,13 @@
 use super::git::*;
 use super::CommandParser;
-use crate::file_access::AccessScope;
 use pretty_assertions::assert_eq;
 
-fn r(paths: &[&str]) -> Vec<AccessScope> {
-    paths
-        .iter()
-        .map(|s| AccessScope::Exact(s.to_string()))
-        .collect()
+fn r(paths: &[&str]) -> Vec<String> {
+    paths.iter().map(|s| s.to_string()).collect()
 }
 
-fn w(paths: &[&str]) -> Vec<AccessScope> {
-    paths
-        .iter()
-        .map(|s| AccessScope::Exact(s.to_string()))
-        .collect()
+fn w(paths: &[&str]) -> Vec<String> {
+    paths.iter().map(|s| s.to_string()).collect()
 }
 
 // Read-only subcommands ===============================================================================================
@@ -448,12 +441,8 @@ fn checkout_file_with_separator() {
         .parse(&["checkout", "--", "file.txt"], "/repo")
         .unwrap();
     assert_eq!(result.file_only, Some(true));
-    assert!(result
-        .writes
-        .contains(&AccessScope::Exact("/repo/file.txt".to_string())));
-    assert!(result
-        .writes
-        .contains(&AccessScope::Exact("/repo/.git".to_string())));
+    assert!(result.writes.contains(&"/repo/file.txt".to_string()));
+    assert!(result.writes.contains(&"/repo/.git".to_string()));
 }
 
 #[skuld::test]
@@ -462,12 +451,8 @@ fn checkout_ref_and_file() {
         .parse(&["checkout", "HEAD~1", "--", "file.txt"], "/repo")
         .unwrap();
     assert_eq!(result.file_only, Some(true));
-    assert!(result
-        .writes
-        .contains(&AccessScope::Exact("/repo/file.txt".to_string())));
-    assert!(result
-        .writes
-        .contains(&AccessScope::Exact("/repo/.git".to_string())));
+    assert!(result.writes.contains(&"/repo/file.txt".to_string()));
+    assert!(result.writes.contains(&"/repo/.git".to_string()));
 }
 
 #[skuld::test]
@@ -566,62 +551,25 @@ fn stash_apply_writes_cwd_and_git() {
 fn rm_writes_paths_and_git() {
     let result = GitParser.parse(&["rm", "file.txt"], "/repo").unwrap();
     assert_eq!(result.file_only, Some(true));
-    assert!(result
-        .writes
-        .contains(&AccessScope::Exact("/repo/file.txt".to_string())));
-    assert!(result
-        .writes
-        .contains(&AccessScope::Exact("/repo/.git".to_string())));
+    assert!(result.writes.contains(&"/repo/file.txt".to_string()));
+    assert!(result.writes.contains(&"/repo/.git".to_string()));
 }
 
 #[skuld::test]
 fn rm_recursive() {
-    // -r deletes the whole tree, so a rule scoped inside `dir` must be consulted.
     let result = GitParser.parse(&["rm", "-r", "dir/"], "/repo").unwrap();
     assert_eq!(result.file_only, Some(true));
-    assert!(result
-        .writes
-        .contains(&AccessScope::Subtree("/repo/dir/".to_string())));
-    assert!(result
-        .writes
-        .contains(&AccessScope::Exact("/repo/.git".to_string())));
+    assert!(result.writes.contains(&"/repo/dir/".to_string()));
+    assert!(result.writes.contains(&"/repo/.git".to_string()));
 }
 
 #[skuld::test]
-fn mv_reads_src_writes_dst_and_git(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let repo = dir.to_string_lossy().replace('\\', "/");
-    std::fs::write(dir.join("a.txt"), "x").unwrap();
-    let result = GitParser.parse(&["mv", "a.txt", "b.txt"], &repo).unwrap();
+fn mv_reads_src_writes_dst_and_git() {
+    let result = GitParser.parse(&["mv", "a.txt", "b.txt"], "/repo").unwrap();
     assert_eq!(result.file_only, Some(true));
-    assert_eq!(result.reads, r(&[&format!("{repo}/a.txt")]));
-    assert!(result
-        .writes
-        .contains(&AccessScope::Exact(format!("{repo}/b.txt"))));
-    assert!(result
-        .writes
-        .contains(&AccessScope::Exact(format!("{repo}/.git"))));
-}
-
-#[skuld::test]
-fn mv_directory_source_is_subtree(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let repo = dir.to_string_lossy().replace('\\', "/");
-    std::fs::create_dir(dir.join("srcdir")).unwrap();
-    let result = GitParser.parse(&["mv", "srcdir", "dstdir"], &repo).unwrap();
-    assert_eq!(
-        result.reads,
-        vec![AccessScope::Subtree(format!("{repo}/srcdir"))]
-    );
-    assert!(result
-        .writes
-        .contains(&AccessScope::Subtree(format!("{repo}/dstdir"))));
-}
-
-#[skuld::test]
-fn rm_without_recursive_is_exact() {
-    let result = GitParser.parse(&["rm", "file.txt"], "/repo").unwrap();
-    assert!(result
-        .writes
-        .contains(&AccessScope::Exact("/repo/file.txt".to_string())));
+    assert_eq!(result.reads, r(&["/repo/a.txt"]));
+    assert!(result.writes.contains(&"/repo/b.txt".to_string()));
+    assert!(result.writes.contains(&"/repo/.git".to_string()));
 }
 
 #[skuld::test]
@@ -760,16 +708,10 @@ fn c_flag_affects_paths() {
         .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert!(
-        result
-            .writes
-            .contains(&AccessScope::Exact("/other/dir/.".to_string()))
-            || result
-                .writes
-                .contains(&AccessScope::Exact("/other/dir/.git".to_string()))
+        result.writes.contains(&"/other/dir/.".to_string())
+            || result.writes.contains(&"/other/dir/.git".to_string())
     );
-    assert!(result
-        .writes
-        .contains(&AccessScope::Exact("/other/dir/.git".to_string())));
+    assert!(result.writes.contains(&"/other/dir/.git".to_string()));
 }
 
 #[skuld::test]
@@ -1084,7 +1026,7 @@ fn worktree_add_with_commit_ish() {
         .unwrap();
     assert_eq!(result.file_only, Some(true));
     assert_eq!(result.writes, w(&["/repo/.worktrees/foo", "/repo/.git"]));
-    assert!(!result.writes.iter().any(|p| p.path().contains("HEAD")));
+    assert!(!result.writes.iter().any(|p| p.contains("HEAD")));
 }
 
 #[skuld::test]

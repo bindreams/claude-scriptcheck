@@ -1,35 +1,13 @@
 use super::readers::*;
 use super::CommandParser;
-use crate::file_access::AccessScope;
 use pretty_assertions::assert_eq;
 
-fn sub(paths: &[&str]) -> Vec<AccessScope> {
-    paths
-        .iter()
-        .map(|s| AccessScope::Subtree(s.to_string()))
-        .collect()
+fn reads(paths: &[&str]) -> Vec<String> {
+    paths.iter().map(|s| s.to_string()).collect()
 }
 
-#[allow(dead_code)]
-fn unbounded(paths: &[&str]) -> Vec<AccessScope> {
-    paths
-        .iter()
-        .map(|s| AccessScope::UnboundedSubtree(s.to_string()))
-        .collect()
-}
-
-fn reads(paths: &[&str]) -> Vec<AccessScope> {
-    paths
-        .iter()
-        .map(|s| AccessScope::Exact(s.to_string()))
-        .collect()
-}
-
-fn writes(paths: &[&str]) -> Vec<AccessScope> {
-    paths
-        .iter()
-        .map(|s| AccessScope::Exact(s.to_string()))
-        .collect()
+fn writes(paths: &[&str]) -> Vec<String> {
+    paths.iter().map(|s| s.to_string()).collect()
 }
 
 #[skuld::test]
@@ -270,13 +248,13 @@ fn readlink_reads_file() {
 #[skuld::test]
 fn du_reads_dirs() {
     let r = DuParser.parse(&["-sh", "dir1", "dir2"], "/tmp").unwrap();
-    assert_eq!(r.reads, sub(&["/tmp/dir1", "/tmp/dir2"]));
+    assert_eq!(r.reads, reads(&["/tmp/dir1", "/tmp/dir2"]));
 }
 
 #[skuld::test]
 fn du_max_depth_not_file() {
     let r = DuParser.parse(&["-d", "2", "dir/"], "/tmp").unwrap();
-    assert_eq!(r.reads, sub(&["/tmp/dir/"]));
+    assert_eq!(r.reads, reads(&["/tmp/dir/"]));
 }
 
 #[skuld::test]
@@ -327,7 +305,7 @@ fn stat_bsd_ls_format() {
 fn du_bsd_exclude_pattern() {
     // BSD du -I PATTERN (exclude, equivalent to GNU --exclude)
     let r = DuParser.parse(&["-I", "*.o", "src/"], "/tmp").unwrap();
-    assert_eq!(r.reads, sub(&["/tmp/src/"]));
+    assert_eq!(r.reads, reads(&["/tmp/src/"]));
 }
 
 #[skuld::test]
@@ -336,7 +314,7 @@ fn du_gnu_exclude() {
     let r = DuParser
         .parse(&["--exclude", "*.o", "src/"], "/tmp")
         .unwrap();
-    assert_eq!(r.reads, sub(&["/tmp/src/"]));
+    assert_eq!(r.reads, reads(&["/tmp/src/"]));
 }
 
 // ── tar BSD vs GNU ──
@@ -367,40 +345,37 @@ fn tar_gnu_long_flags() {
         )
         .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/archive.tar"]));
-    assert_eq!(r.writes, sub(&["/dest"]));
+    assert_eq!(r.writes, writes(&["/dest"]));
 }
 
 #[skuld::test]
-fn tar_gnu_gzip_flag(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let cwd = dir.to_string_lossy().replace('\\', "/");
-    std::fs::create_dir(dir.join("dir")).unwrap();
+fn tar_gnu_gzip_flag() {
+    // GNU tar -z (gzip compression) — should not fail
     let r = super::tar::TarParser
-        .parse(&["-czf", "archive.tar.gz", "dir/"], &cwd)
+        .parse(&["-czf", "archive.tar.gz", "dir/"], "/tmp")
         .unwrap();
-    assert_eq!(r.reads, sub(&[&format!("{cwd}/dir/")]));
-    assert_eq!(r.writes, writes(&[&format!("{cwd}/archive.tar.gz")]));
+    assert_eq!(r.reads, reads(&["/tmp/dir/"]));
+    assert_eq!(r.writes, writes(&["/tmp/archive.tar.gz"]));
 }
 
 #[skuld::test]
-fn tar_gnu_xz_flag(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let cwd = dir.to_string_lossy().replace('\\', "/");
-    std::fs::create_dir(dir.join("dir")).unwrap();
+fn tar_gnu_xz_flag() {
+    // GNU tar -J (xz compression)
     let r = super::tar::TarParser
-        .parse(&["-cJf", "archive.tar.xz", "dir/"], &cwd)
+        .parse(&["-cJf", "archive.tar.xz", "dir/"], "/tmp")
         .unwrap();
-    assert_eq!(r.reads, sub(&[&format!("{cwd}/dir/")]));
-    assert_eq!(r.writes, writes(&[&format!("{cwd}/archive.tar.xz")]));
+    assert_eq!(r.reads, reads(&["/tmp/dir/"]));
+    assert_eq!(r.writes, writes(&["/tmp/archive.tar.xz"]));
 }
 
 #[skuld::test]
-fn tar_gnu_bzip2_flag(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let cwd = dir.to_string_lossy().replace('\\', "/");
-    std::fs::create_dir(dir.join("src")).unwrap();
+fn tar_gnu_bzip2_flag() {
+    // GNU tar -j (bzip2 compression)
     let r = super::tar::TarParser
-        .parse(&["-cjf", "archive.tar.bz2", "src/"], &cwd)
+        .parse(&["-cjf", "archive.tar.bz2", "src/"], "/tmp")
         .unwrap();
-    assert_eq!(r.reads, sub(&[&format!("{cwd}/src/")]));
-    assert_eq!(r.writes, writes(&[&format!("{cwd}/archive.tar.bz2")]));
+    assert_eq!(r.reads, reads(&["/tmp/src/"]));
+    assert_eq!(r.writes, writes(&["/tmp/archive.tar.bz2"]));
 }
 
 // ── sed BSD vs GNU ──
@@ -588,24 +563,4 @@ fn otool_load_commands() {
 fn otool_multiple_flags() {
     let r = OtoolParser.parse(&["-l", "-v", "binary"], "/tmp").unwrap();
     assert_eq!(r.reads, reads(&["/tmp/binary"]));
-}
-
-// Recursion scopes ====================================================================================================
-
-#[skuld::test]
-fn du_operand_is_subtree() {
-    let r = DuParser.parse(&["-sh", "/tmp/src"], "/tmp").unwrap();
-    assert_eq!(r.reads, sub(&["/tmp/src"]));
-}
-
-#[skuld::test]
-fn du_no_operand_reads_cwd() {
-    let r = DuParser.parse(&["-sh"], "/tmp/proj").unwrap();
-    assert_eq!(r.reads, sub(&["/tmp/proj"]));
-}
-
-#[skuld::test]
-fn du_dereference_is_following() {
-    let r = DuParser.parse(&["-L", "/tmp/src"], "/tmp").unwrap();
-    assert_eq!(r.reads, unbounded(&["/tmp/src"]));
 }

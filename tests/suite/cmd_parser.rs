@@ -1,5 +1,4 @@
 use claude_scriptcheck::cmd_parser::*;
-use claude_scriptcheck::file_access::AccessScope;
 use pretty_assertions::assert_eq;
 
 #[skuld::test]
@@ -29,39 +28,27 @@ fn no_file_access_command_returns_empty() {
 #[skuld::test]
 fn sentinel_filtered_from_reads() {
     let cfa = CommandFileAccesses {
-        reads: vec![
-            "/tmp/real.txt".into(),
-            AccessScope::Exact(format!("/tmp/{SENTINEL}")),
-        ],
+        reads: vec!["/tmp/real.txt".into(), format!("/tmp/{SENTINEL}")],
         writes: vec![],
         inline_script_start: None,
         file_only: None,
         ..Default::default()
     };
     let filtered = cfa.filter_sentinel(SENTINEL);
-    assert_eq!(
-        filtered.reads,
-        vec![AccessScope::Exact("/tmp/real.txt".into())]
-    );
+    assert_eq!(filtered.reads, vec!["/tmp/real.txt"]);
 }
 
 #[skuld::test]
 fn sentinel_filtered_from_writes() {
     let cfa = CommandFileAccesses {
         reads: vec![],
-        writes: vec![
-            "/tmp/real.txt".into(),
-            AccessScope::Exact(format!("/tmp/{SENTINEL}")),
-        ],
+        writes: vec!["/tmp/real.txt".into(), format!("/tmp/{SENTINEL}")],
         inline_script_start: None,
         file_only: None,
         ..Default::default()
     };
     let filtered = cfa.filter_sentinel(SENTINEL);
-    assert_eq!(
-        filtered.writes,
-        vec![AccessScope::Exact("/tmp/real.txt".into())]
-    );
+    assert_eq!(filtered.writes, vec!["/tmp/real.txt"]);
 }
 
 #[skuld::test]
@@ -70,7 +57,7 @@ fn dynamic_arg_filtered_via_sentinel() {
     match result {
         CmdParseResult::Parsed(cfa) => {
             assert!(cfa.reads.is_empty(), "sentinel read should be filtered");
-            assert_eq!(cfa.writes, vec![AccessScope::Exact("/tmp/dest.txt".into())]);
+            assert_eq!(cfa.writes, vec!["/tmp/dest.txt"]);
         }
         _ => panic!("expected Parsed"),
     }
