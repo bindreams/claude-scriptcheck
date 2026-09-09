@@ -23,14 +23,14 @@ mod tests {
 
     fn read(path: &str) -> FileAccess {
         FileAccess {
-            scope: path.to_string().into(),
+            path: path.to_string(),
             kind: AccessKind::Read,
         }
     }
 
     fn write(path: &str) -> FileAccess {
         FileAccess {
-            scope: path.to_string().into(),
+            path: path.to_string(),
             kind: AccessKind::Write,
         }
     }

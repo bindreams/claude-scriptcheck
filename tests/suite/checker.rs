@@ -1,5 +1,5 @@
 use claude_scriptcheck::checker::{check_file_accesses, check_program, CheckResult, Decision};
-use claude_scriptcheck::file_access::{AccessKind, AccessScope, FileAccess};
+use claude_scriptcheck::file_access::{AccessKind, FileAccess};
 use claude_scriptcheck::path_util;
 use claude_scriptcheck::permission::{self, ParsedPermissions};
 use claude_scriptcheck::settings::Permissions;
@@ -789,7 +789,7 @@ fn check_accesses_full(
 #[skuld::test]
 fn file_accesses_read_allowed() {
     let accesses = [FileAccess {
-        scope: "/tmp/data.txt".into(),
+        path: "/tmp/data.txt".into(),
         kind: AccessKind::Read,
     }];
     let result = check_file_accesses(&accesses, &make_perms(&["Read(/tmp/**)"], &[]), "/tmp");
@@ -804,7 +804,7 @@ fn file_accesses_read_allowed() {
 #[skuld::test]
 fn file_accesses_read_denied() {
     let accesses = [FileAccess {
-        scope: "/etc/shadow".into(),
+        path: "/etc/shadow".into(),
         kind: AccessKind::Read,
     }];
     let result = check_file_accesses(
@@ -824,7 +824,7 @@ fn file_accesses_read_denied() {
 fn file_accesses_read_no_matching_rule_asks() {
     let d = check_accesses(
         &[FileAccess {
-            scope: "/home/user/secret.txt".into(),
+            path: "/home/user/secret.txt".into(),
             kind: AccessKind::Read,
         }],
         &[],
@@ -845,7 +845,7 @@ fn file_accesses_read_no_matching_rule_asks() {
 fn file_accesses_read_ask_overrides_allow() {
     let d = check_accesses_full(
         &[FileAccess {
-            scope: "/tmp/secret.txt".into(),
+            path: "/tmp/secret.txt".into(),
             kind: AccessKind::Read,
         }],
         &["Read(/tmp/**)"],
@@ -859,7 +859,7 @@ fn file_accesses_read_ask_overrides_allow() {
 fn file_accesses_write_allowed() {
     let d = check_accesses(
         &[FileAccess {
-            scope: "/tmp/out.txt".into(),
+            path: "/tmp/out.txt".into(),
             kind: AccessKind::Write,
         }],
         &["Write(/tmp/**)"],
@@ -872,7 +872,7 @@ fn file_accesses_write_allowed() {
 fn file_accesses_write_allowed_by_edit_fallback() {
     let d = check_accesses(
         &[FileAccess {
-            scope: "/tmp/out.txt".into(),
+            path: "/tmp/out.txt".into(),
             kind: AccessKind::Write,
         }],
         &["Edit(/tmp/**)"],
@@ -885,7 +885,7 @@ fn file_accesses_write_allowed_by_edit_fallback() {
 fn file_accesses_write_denied() {
     let d = check_accesses(
         &[FileAccess {
-            scope: "/etc/passwd".into(),
+            path: "/etc/passwd".into(),
             kind: AccessKind::Write,
         }],
         &[],
@@ -904,11 +904,11 @@ fn file_accesses_empty_list_allows() {
 fn file_accesses_multiple_with_deny_stops_early() {
     let accesses = [
         FileAccess {
-            scope: "/etc/shadow".into(),
+            path: "/etc/shadow".into(),
             kind: AccessKind::Read,
         },
         FileAccess {
-            scope: "/tmp/safe.txt".into(),
+            path: "/tmp/safe.txt".into(),
             kind: AccessKind::Read,
         },
     ];
@@ -920,11 +920,11 @@ fn file_accesses_multiple_with_deny_stops_early() {
 fn file_accesses_multiple_unmatched_collected() {
     let accesses = [
         FileAccess {
-            scope: "/home/a.txt".into(),
+            path: "/home/a.txt".into(),
             kind: AccessKind::Read,
         },
         FileAccess {
-            scope: "/home/b.txt".into(),
+            path: "/home/b.txt".into(),
             kind: AccessKind::Read,
         },
     ];
@@ -944,7 +944,7 @@ fn file_accesses_multiple_unmatched_collected() {
 fn file_accesses_write_denied_by_edit_rule() {
     let d = check_accesses(
         &[FileAccess {
-            scope: "/etc/config.json".into(),
+            path: "/etc/config.json".into(),
             kind: AccessKind::Write,
         }],
         &[],
@@ -2089,146 +2089,4 @@ fn dynamic_cmd_name_allowed_by_bash_double_star_space_star() {
     // BashFilter::matches falls through to empty-prefix + wildcard).
     let d = check("$CMD arg", &["Bash(** *)"], &[]);
     assert_eq!(d.decision, Decision::Allow);
-}
-
-// Access scopes =======================================================================================================
-
-// `check_file_accesses` uses cwd `/tmp`, and `make_perms_full` parses rules
-// against cwd `/tmp`, so `/repro/...` (Claude's absolute escape) keeps these
-// paths off the project root.
-
-fn scoped(scope: AccessScope, kind: AccessKind) -> [FileAccess; 1] {
-    [FileAccess::scoped(scope, kind)]
-}
-
-fn canonical(path: &str) -> String {
-    claude_scriptcheck::canonicalize::best_effort_canonicalize(path)
-}
-
-#[skuld::test]
-fn subtree_read_hits_deny_rule_beneath_root() {
-    let accesses = scoped(
-        AccessScope::Subtree("/repro/vault".into()),
-        AccessKind::Read,
-    );
-    let result = check_accesses_full(&accesses, &[], &["Read(/repro/vault/**)"], &[]);
-    assert!(matches!(result.decision, Decision::Deny(_)));
-}
-
-#[skuld::test]
-fn subtree_read_hits_deny_rule_on_nested_file() {
-    let accesses = scoped(AccessScope::Subtree("/repro".into()), AccessKind::Read);
-    let result = check_accesses_full(&accesses, &[], &["Read(/repro/vault/creds)"], &[]);
-    assert!(matches!(result.decision, Decision::Deny(_)));
-}
-
-#[skuld::test]
-fn subtree_read_satisfied_by_globstar_allow() {
-    let accesses = scoped(
-        AccessScope::Subtree("/repro/vault".into()),
-        AccessKind::Read,
-    );
-    let result = check_accesses_full(&accesses, &["Read(/repro/vault/**)"], &[], &[]);
-    assert_eq!(result.decision, Decision::Allow);
-    assert!(result.missing_rules.is_empty());
-}
-
-#[skuld::test]
-fn subtree_read_not_satisfied_by_exact_allow() {
-    let accesses = scoped(
-        AccessScope::Subtree("/repro/vault".into()),
-        AccessKind::Read,
-    );
-    let result = check_accesses_full(&accesses, &["Read(/repro/vault)"], &[], &[]);
-    assert_eq!(result.decision, Decision::Ask);
-    let expected = format!("Read({}/**)", canonical("/repro/vault"));
-    assert_eq!(result.missing_rules, vec![expected]);
-}
-
-#[skuld::test]
-fn subtree_read_unaffected_by_fixed_depth_ask_rule() {
-    let accesses = scoped(AccessScope::Subtree("/repro/foo".into()), AccessKind::Read);
-    let result = check_accesses_full(
-        &accesses,
-        &["Read(/repro/**)"],
-        &[],
-        &["Read(/repro/*.log)"],
-    );
-    assert_eq!(result.decision, Decision::Allow);
-}
-
-#[skuld::test]
-fn subtree_write_hits_edit_deny_rule() {
-    let accesses = scoped(
-        AccessScope::Subtree("/repro/vault".into()),
-        AccessKind::Write,
-    );
-    let result = check_accesses_full(&accesses, &[], &["Edit(/repro/vault/**)"], &[]);
-    assert!(matches!(result.decision, Decision::Deny(_)));
-}
-
-#[skuld::test]
-fn unbounded_subtree_asks_under_globstar_allow() {
-    // A symlink-following walk can leave the subtree, so no allow rule proves
-    // coverage — the same command with a bounded scope allows.
-    let unbounded = scoped(
-        AccessScope::UnboundedSubtree("/repro/vault".into()),
-        AccessKind::Read,
-    );
-    let bounded = scoped(
-        AccessScope::Subtree("/repro/vault".into()),
-        AccessKind::Read,
-    );
-    assert_eq!(
-        check_accesses_full(&unbounded, &["Read(/repro/**)"], &[], &[]).decision,
-        Decision::Ask,
-    );
-    assert_eq!(
-        check_accesses_full(&bounded, &["Read(/repro/**)"], &[], &[]).decision,
-        Decision::Allow,
-    );
-}
-
-#[skuld::test]
-fn unbounded_subtree_still_denies() {
-    let accesses = scoped(
-        AccessScope::UnboundedSubtree("/repro".into()),
-        AccessKind::Read,
-    );
-    let result = check_accesses_full(&accesses, &[], &["Read(/repro/vault/**)"], &[]);
-    assert!(matches!(result.decision, Decision::Deny(_)));
-}
-
-#[skuld::test]
-fn unresolved_scope_asks_when_unsuppressed() {
-    let accesses = scoped(AccessScope::Unresolved("$FOO".into()), AccessKind::Read);
-    let result = check_accesses_full(&accesses, &["Read(**)"], &[], &[]);
-    assert_eq!(result.decision, Decision::Ask);
-    assert_eq!(result.missing_rules, vec!["Read(<unresolved: $FOO>)"]);
-}
-
-#[skuld::test]
-fn exact_access_to_subtree_root_still_asks_under_globstar_allow() {
-    // `Read(vault/**)` covers a recursive read rooted at
-    // `vault`, but a plain `cat vault` is untouched and still asks.
-    let accesses = scoped(AccessScope::Exact("/repro/vault".into()), AccessKind::Read);
-    let result = check_accesses_full(&accesses, &["Read(/repro/vault/**)"], &[], &[]);
-    assert_eq!(result.decision, Decision::Ask);
-}
-
-#[skuld::test]
-fn unbounded_subtree_suggestion_does_not_name_an_unusable_rule() {
-    // `covers` rejects every path pattern for a symlink-following walk, so a
-    // `Read(D/**)` suggestion would loop the user forever.
-    let accesses = scoped(
-        AccessScope::UnboundedSubtree("/repro/vault".into()),
-        AccessKind::Read,
-    );
-    let result = check_accesses_full(&accesses, &["Read(/repro/**)"], &[], &[]);
-    assert_eq!(result.decision, Decision::Ask);
-    let suggestion = result.missing_rules.first().expect("a missing rule");
-    assert!(
-        suggestion.contains("Bash(...)") && suggestion.contains("follows symlinks"),
-        "suggestion should point at a rule that can actually work, got: {suggestion}",
-    );
 }

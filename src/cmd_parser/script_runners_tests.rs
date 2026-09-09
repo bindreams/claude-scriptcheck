@@ -1,13 +1,9 @@
 use super::script_runners::*;
 use super::CommandParser;
-use crate::file_access::AccessScope;
 use pretty_assertions::assert_eq;
 
-fn r(paths: &[&str]) -> Vec<AccessScope> {
-    paths
-        .iter()
-        .map(|s| AccessScope::Exact(s.to_string()))
-        .collect()
+fn r(paths: &[&str]) -> Vec<String> {
+    paths.iter().map(|s| s.to_string()).collect()
 }
 
 #[skuld::test]

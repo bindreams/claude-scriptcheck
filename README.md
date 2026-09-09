@@ -92,10 +92,6 @@ For each simple command in the parsed AST:
 | Does it read files?      | `<` redirects, `cat`, `head`, `source`, ...            | `Read(glob)`                 |
 | Does it write files?     | `>`, `>>`, `&>` redirects, `cp` dest, `rm`, `tee`, ... | `Write(glob)`, `Edit(glob)`  |
 
-A recursive command is checked against its whole subtree, not just the path it
-names, so `grep -r dir` needs `Read(dir/**)` and trips any deny rule covering
-something under `dir`.
-
 - **All checks pass** → `allow` (auto-approved, no prompt)
 - **Any deny rule matches** → `deny` (blocked)
 - **Some rules missing** → `ask` (user prompted) + missing rules logged

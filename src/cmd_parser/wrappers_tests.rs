@@ -2,7 +2,6 @@
 mod tests {
     use crate::cmd_parser::wrappers::UvParser;
     use crate::cmd_parser::CommandParser;
-    use crate::file_access::AccessScope;
 
     #[test]
     fn uv_run_python_c_sets_inline_script() {
@@ -40,10 +39,7 @@ mod tests {
     #[test]
     fn uv_run_script_py() {
         let result = UvParser.parse(&["run", "script.py"], "/tmp").unwrap();
-        assert_eq!(
-            result.reads,
-            vec![AccessScope::Exact("/tmp/script.py".into())]
-        );
+        assert_eq!(result.reads, vec!["/tmp/script.py"]);
         assert_eq!(result.effective_cmd_name.as_deref(), Some("script.py"));
     }
 

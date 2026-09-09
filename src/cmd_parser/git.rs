@@ -1,6 +1,4 @@
-use crate::file_access::AccessScope;
-
-use super::{resolve_str, CommandFileAccesses, CommandParser, Recursion};
+use super::{resolve, CommandFileAccesses, CommandParser};
 
 pub(super) struct GitParser;
 
@@ -26,7 +24,7 @@ impl GitContext {
     fn write_git(&self) -> CommandFileAccesses {
         CommandFileAccesses {
             reads: vec![],
-            writes: vec![self.git_dir_access()],
+            writes: vec![self.git_dir.clone()],
             inline_script_start: None,
             file_only: Some(true),
             ..Default::default()
@@ -44,7 +42,7 @@ impl GitContext {
     fn network_write_git(&self) -> CommandFileAccesses {
         CommandFileAccesses {
             reads: vec![],
-            writes: vec![self.git_dir_access()],
+            writes: vec![self.git_dir.clone()],
             inline_script_start: None,
             file_only: Some(false),
             ..Default::default()
@@ -55,19 +53,8 @@ impl GitContext {
         self.network_write_git()
     }
 
-    fn resolve(&self, path: &str) -> AccessScope {
-        AccessScope::Exact(resolve_str(path, &self.work_tree))
-    }
-
-    /// Resolve an operand whose reach depends on how far the subcommand walks.
-    fn resolve_scoped(&self, path: &str, recursion: Recursion) -> AccessScope {
-        super::resolve_scoped(path, &self.work_tree, recursion)
-    }
-
-    /// The `.git` directory as an access — the permission anchor for every
-    /// local-write subcommand.
-    fn git_dir_access(&self) -> AccessScope {
-        AccessScope::Exact(self.git_dir.clone())
+    fn resolve(&self, path: &str) -> String {
+        resolve(path, &self.work_tree)
     }
 }
 
@@ -138,7 +125,7 @@ impl CommandParser for GitParser {
             "fetch" => Ok(ctx.network_write_git()),
             "pull" => Ok(ctx.network_write_worktree_and_git()),
             "push" => Ok(CommandFileAccesses {
-                reads: vec![ctx.git_dir_access()],
+                reads: vec![ctx.git_dir.clone()],
                 writes: vec![],
                 inline_script_start: None,
                 file_only: Some(false),
@@ -188,7 +175,7 @@ fn parse_global_options<'a>(args: &'a [&'a str], cwd: &str) -> GlobalOptions<'a>
         if arg == "-C" {
             i += 1;
             if i < args.len() {
-                effective_cwd = resolve_str(args[i], &effective_cwd);
+                effective_cwd = resolve(args[i], &effective_cwd);
             }
             i += 1;
             continue;
@@ -209,14 +196,14 @@ fn parse_global_options<'a>(args: &'a [&'a str], cwd: &str) -> GlobalOptions<'a>
 
         // --git-dir=<path> or --git-dir <path>
         if let Some(val) = arg.strip_prefix("--git-dir=") {
-            git_dir = Some(resolve_str(val, &effective_cwd));
+            git_dir = Some(resolve(val, &effective_cwd));
             i += 1;
             continue;
         }
         if arg == "--git-dir" {
             i += 1;
             if i < args.len() {
-                git_dir = Some(resolve_str(args[i], &effective_cwd));
+                git_dir = Some(resolve(args[i], &effective_cwd));
             }
             i += 1;
             continue;
@@ -224,14 +211,14 @@ fn parse_global_options<'a>(args: &'a [&'a str], cwd: &str) -> GlobalOptions<'a>
 
         // --work-tree=<path> or --work-tree <path>
         if let Some(val) = arg.strip_prefix("--work-tree=") {
-            work_tree = Some(resolve_str(val, &effective_cwd));
+            work_tree = Some(resolve(val, &effective_cwd));
             i += 1;
             continue;
         }
         if arg == "--work-tree" {
             i += 1;
             if i < args.len() {
-                work_tree = Some(resolve_str(args[i], &effective_cwd));
+                work_tree = Some(resolve(args[i], &effective_cwd));
             }
             i += 1;
             continue;
@@ -462,34 +449,25 @@ fn parse_reset(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, S
 
 fn parse_rm(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, String> {
     let mut cached = false;
-    let mut recursion = Recursion::No;
-    let mut operands = Vec::new();
+    let mut paths = Vec::new();
 
     for arg in args {
         if matches!(*arg, "--cached") {
             cached = true;
-        } else if *arg == "-r" || *arg == "--recursive" {
-            // -r deletes every file beneath a directory operand.
-            recursion = Recursion::Yes;
-        } else if *arg == "-f" || *arg == "--force" {
+        } else if *arg == "-r" || *arg == "--recursive" || *arg == "-f" || *arg == "--force" {
             // skip flags
         } else if *arg == "--" {
             // skip separator
         } else if !arg.starts_with('-') {
-            operands.push(*arg);
+            paths.push(ctx.resolve(arg));
         }
     }
-
-    let paths: Vec<AccessScope> = operands
-        .iter()
-        .map(|p| ctx.resolve_scoped(p, recursion))
-        .collect();
 
     if cached {
         Ok(ctx.write_git())
     } else {
-        let mut writes: Vec<AccessScope> = paths;
-        writes.push(ctx.git_dir_access());
+        let mut writes: Vec<String> = paths;
+        writes.push(ctx.git_dir.clone());
         Ok(CommandFileAccesses {
             reads: vec![],
             writes,
@@ -512,8 +490,8 @@ fn parse_checkout(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses
     // Look for `--` separator → file restore mode
     if let Some(sep_pos) = args.iter().position(|a| *a == "--") {
         let paths_after = &args[sep_pos + 1..];
-        let mut writes: Vec<AccessScope> = paths_after.iter().map(|p| ctx.resolve(p)).collect();
-        writes.push(ctx.git_dir_access());
+        let mut writes: Vec<String> = paths_after.iter().map(|p| ctx.resolve(p)).collect();
+        writes.push(ctx.git_dir.clone());
         return Ok(CommandFileAccesses {
             reads: vec![],
             writes,
@@ -543,18 +521,11 @@ fn parse_mv(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, Stri
         .collect();
 
     if positionals.len() >= 2 {
-        // Moving a directory moves everything under it.
-        let src = ctx.resolve_scoped(positionals[0], Recursion::IfDir);
-        let dst = ctx.resolve_scoped(
-            positionals[positionals.len() - 1],
-            match src {
-                AccessScope::Subtree(_) | AccessScope::UnboundedSubtree(_) => Recursion::Yes,
-                _ => Recursion::No,
-            },
-        );
+        let src = ctx.resolve(positionals[0]);
+        let dst = ctx.resolve(positionals[positionals.len() - 1]);
         Ok(CommandFileAccesses {
             reads: vec![src],
-            writes: vec![dst, ctx.git_dir_access()],
+            writes: vec![dst, ctx.git_dir.clone()],
             inline_script_start: None,
             file_only: Some(true),
             ..Default::default()
@@ -603,13 +574,13 @@ fn parse_init(args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
     }
 
     let target = match dir {
-        Some(d) => format!("{}/.git", resolve_str(d, cwd)),
+        Some(d) => format!("{}/.git", resolve(d, cwd)),
         None => format!("{cwd}/.git"),
     };
 
     Ok(CommandFileAccesses {
         reads: vec![],
-        writes: vec![target.into()],
+        writes: vec![target],
         inline_script_start: None,
         file_only: Some(true),
         ..Default::default()
@@ -655,7 +626,7 @@ fn parse_clone(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, S
         ctx.resolve(positionals[1])
     } else {
         // No directory given → conservative: writes to cwd
-        AccessScope::Exact(ctx.work_tree.clone())
+        ctx.work_tree.clone()
     };
 
     Ok(CommandFileAccesses {
@@ -769,7 +740,7 @@ fn parse_worktree_add(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAcce
     // commit-ish (branch, tag, HEAD~1) — NOT a path.
     Ok(CommandFileAccesses {
         reads: vec![],
-        writes: vec![ctx.resolve(positionals[0]), ctx.git_dir_access()],
+        writes: vec![ctx.resolve(positionals[0]), ctx.git_dir.clone()],
         inline_script_start: None,
         file_only: Some(true),
         ..Default::default()
@@ -813,7 +784,7 @@ fn parse_worktree_remove(ctx: &GitContext, args: &[&str]) -> Result<CommandFileA
     match path {
         Some(p) => Ok(CommandFileAccesses {
             reads: vec![],
-            writes: vec![ctx.resolve(p), ctx.git_dir_access()],
+            writes: vec![ctx.resolve(p), ctx.git_dir.clone()],
             inline_script_start: None,
             file_only: Some(true),
             ..Default::default()
@@ -832,7 +803,7 @@ fn parse_worktree_move(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAcc
     if positionals.len() >= 2 {
         Ok(CommandFileAccesses {
             reads: vec![ctx.resolve(positionals[0])],
-            writes: vec![ctx.resolve(positionals[1]), ctx.git_dir_access()],
+            writes: vec![ctx.resolve(positionals[1]), ctx.git_dir.clone()],
             inline_script_start: None,
             file_only: Some(true),
             ..Default::default()
@@ -850,7 +821,7 @@ fn parse_config(ctx: &GitContext, args: &[&str]) -> Result<CommandFileAccesses, 
         return Ok(ctx.read_only());
     }
 
-    let mut file_paths: Vec<AccessScope> = Vec::new();
+    let mut file_paths: Vec<String> = Vec::new();
     let mut is_explicit_read = false;
     let mut is_explicit_write = false;
     let mut positional_values: Vec<&str> = Vec::new();

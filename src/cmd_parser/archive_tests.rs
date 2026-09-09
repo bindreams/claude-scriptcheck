@@ -1,35 +1,13 @@
 use super::archive::*;
 use super::CommandParser;
-use crate::file_access::AccessScope;
 use pretty_assertions::assert_eq;
 
-fn sub(paths: &[&str]) -> Vec<AccessScope> {
-    paths
-        .iter()
-        .map(|s| AccessScope::Subtree(s.to_string()))
-        .collect()
+fn reads(paths: &[&str]) -> Vec<String> {
+    paths.iter().map(|s| s.to_string()).collect()
 }
 
-#[allow(dead_code)]
-fn unbounded(paths: &[&str]) -> Vec<AccessScope> {
-    paths
-        .iter()
-        .map(|s| AccessScope::UnboundedSubtree(s.to_string()))
-        .collect()
-}
-
-fn reads(paths: &[&str]) -> Vec<AccessScope> {
-    paths
-        .iter()
-        .map(|s| AccessScope::Exact(s.to_string()))
-        .collect()
-}
-
-fn writes(paths: &[&str]) -> Vec<AccessScope> {
-    paths
-        .iter()
-        .map(|s| AccessScope::Exact(s.to_string()))
-        .collect()
+fn writes(paths: &[&str]) -> Vec<String> {
+    paths.iter().map(|s| s.to_string()).collect()
 }
 
 #[skuld::test]
@@ -46,7 +24,7 @@ fn zip_recursive() {
     let r = ZipParser
         .parse(&["-r", "archive.zip", "dir/"], "/tmp")
         .unwrap();
-    assert_eq!(r.reads, sub(&["/tmp/dir/"]));
+    assert_eq!(r.reads, reads(&["/tmp/dir/"]));
     assert_eq!(r.writes, writes(&["/tmp/archive.zip"]));
 }
 
@@ -56,15 +34,14 @@ fn unzip_extracts() {
         .parse(&["archive.zip", "-d", "/dest"], "/tmp")
         .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/archive.zip"]));
-    assert_eq!(r.writes, sub(&["/dest"]));
+    assert_eq!(r.writes, writes(&["/dest"]));
 }
 
 #[skuld::test]
 fn unzip_no_dest() {
-    // Extraction without -d unpacks into the working directory.
     let r = UnzipParser.parse(&["archive.zip"], "/tmp").unwrap();
     assert_eq!(r.reads, reads(&["/tmp/archive.zip"]));
-    assert_eq!(r.writes, sub(&["/tmp"]));
+    assert!(r.writes.is_empty());
 }
 
 // ── patch ──
@@ -123,31 +100,3 @@ fn csplit_reads_input() {
 // ══════════════════════════════════════════════════════════════════════
 // SELinux variant tests
 // ══════════════════════════════════════════════════════════════════════
-
-// Recursion scopes ====================================================================================================
-
-#[skuld::test]
-fn zip_recurse_paths_sources_are_subtree() {
-    let r = ZipParser.parse(&["-r", "a.zip", "dir"], "/tmp").unwrap();
-    assert_eq!(r.reads, sub(&["/tmp/dir"]));
-    assert_eq!(r.writes, writes(&["/tmp/a.zip"]));
-}
-
-#[skuld::test]
-fn zip_without_r_sources_are_exact() {
-    let r = ZipParser.parse(&["a.zip", "f.txt"], "/tmp").unwrap();
-    assert_eq!(r.reads, reads(&["/tmp/f.txt"]));
-}
-
-#[skuld::test]
-fn unzip_destination_directory_is_subtree() {
-    let r = UnzipParser.parse(&["a.zip", "-d", "out"], "/tmp").unwrap();
-    assert_eq!(r.reads, reads(&["/tmp/a.zip"]));
-    assert_eq!(r.writes, sub(&["/tmp/out"]));
-}
-
-#[skuld::test]
-fn unzip_without_d_writes_cwd() {
-    let r = UnzipParser.parse(&["a.zip"], "/tmp/proj").unwrap();
-    assert_eq!(r.writes, sub(&["/tmp/proj"]));
-}

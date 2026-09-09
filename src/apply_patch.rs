@@ -22,14 +22,20 @@ pub fn extract_file_accesses(command: &str, cwd: &str) -> Result<Vec<FileAccess>
         }
         if let Some(path) = line.strip_prefix("*** Update File: ") {
             let resolved = resolve_patch_path(path, cwd)?;
-            accesses.push(FileAccess::exact(resolved.clone(), AccessKind::Write));
+            accesses.push(FileAccess {
+                path: resolved.clone(),
+                kind: AccessKind::Write,
+            });
             pending_update_source = Some(resolved);
             continue;
         }
         if let Some(path) = line.strip_prefix("*** Move to: ") {
             let target = write_access(path, cwd)?;
             if let Some(source) = pending_update_source.take() {
-                accesses.push(FileAccess::exact(source, AccessKind::Write));
+                accesses.push(FileAccess {
+                    path: source,
+                    kind: AccessKind::Write,
+                });
             }
             accesses.push(target);
         }
@@ -39,16 +45,16 @@ pub fn extract_file_accesses(command: &str, cwd: &str) -> Result<Vec<FileAccess>
         return Err("apply_patch command did not reference any files".into());
     }
 
-    accesses.sort_by(|a, b| a.scope.path().cmp(b.scope.path()));
-    accesses.dedup_by(|a, b| a.scope == b.scope && a.kind == b.kind);
+    accesses.sort_by(|a, b| a.path.cmp(&b.path));
+    accesses.dedup_by(|a, b| a.path == b.path && a.kind == b.kind);
     Ok(accesses)
 }
 
 fn write_access(path: &str, cwd: &str) -> Result<FileAccess, String> {
-    Ok(FileAccess::exact(
-        resolve_patch_path(path, cwd)?,
-        AccessKind::Write,
-    ))
+    Ok(FileAccess {
+        path: resolve_patch_path(path, cwd)?,
+        kind: AccessKind::Write,
+    })
 }
 
 fn resolve_patch_path(path: &str, cwd: &str) -> Result<String, String> {
@@ -74,7 +80,7 @@ mod tests {
         assert_eq!(
             accesses,
             vec![FileAccess {
-                scope: "/repo/src/main.rs".into(),
+                path: "/repo/src/main.rs".into(),
                 kind: AccessKind::Write,
             }]
         );
@@ -91,11 +97,11 @@ mod tests {
             accesses,
             vec![
                 FileAccess {
-                    scope: "/repo/new.txt".into(),
+                    path: "/repo/new.txt".into(),
                     kind: AccessKind::Write,
                 },
                 FileAccess {
-                    scope: "/repo/old.txt".into(),
+                    path: "/repo/old.txt".into(),
                     kind: AccessKind::Write,
                 },
             ]
@@ -121,7 +127,7 @@ mod tests {
         assert_eq!(
             accesses,
             vec![FileAccess {
-                scope: "/repo/src/secret.rs".into(),
+                path: "/repo/src/secret.rs".into(),
                 kind: AccessKind::Write,
             }]
         );

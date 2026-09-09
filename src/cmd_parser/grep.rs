@@ -1,7 +1,7 @@
 use clap::{ArgAction, ArgMatches};
 
 use super::helpers::*;
-use super::{resolve, resolve_scoped, CommandFileAccesses, CommandParser, Recursion};
+use super::{resolve, CommandFileAccesses, CommandParser};
 
 // ─── Pattern-then-files ─────────────────────────────────────────────────────
 
@@ -59,34 +59,7 @@ impl CommandParser for GrepParser {
             .try_get_matches_from(args)
             .map_err(|e| e.to_string())?;
 
-        parse_grep_like(&matches, cwd, grep_recursion(&matches))
-    }
-}
-
-/// grep recurses only when asked. `-R` additionally follows symlinks, so the
-/// walk can leave the operand's subtree entirely.
-fn grep_recursion(matches: &ArgMatches) -> Recursion {
-    if matches.get_count("dereference-recursive") > 0 {
-        return Recursion::Following;
-    }
-    if matches.get_count("recursive") > 0 {
-        return Recursion::Yes;
-    }
-    if matches
-        .get_one::<String>("directories")
-        .is_some_and(|d| d == "recurse")
-    {
-        return Recursion::Yes;
-    }
-    Recursion::No
-}
-
-/// ripgrep walks directories by default; `--follow` makes it follow symlinks.
-fn rg_recursion(matches: &ArgMatches) -> Recursion {
-    if matches.get_count("follow") > 0 {
-        Recursion::Following
-    } else {
-        Recursion::IfDir
+        parse_grep_like(&matches, cwd)
     }
 }
 
@@ -180,19 +153,14 @@ impl CommandParser for RgParser {
             .try_get_matches_from(args)
             .map_err(|e| e.to_string())?;
 
-        let recursion = rg_recursion(&matches);
-        parse_grep_like(&matches, cwd, recursion)
+        parse_grep_like(&matches, cwd)
     }
 }
 
 /// Shared grep/rg extraction: if -e was given, all positionals are files;
 /// otherwise first positional is pattern (skipped), rest are files.
 /// -f FILE is always a read access.
-fn parse_grep_like(
-    matches: &ArgMatches,
-    cwd: &str,
-    recursion: Recursion,
-) -> Result<CommandFileAccesses, String> {
+fn parse_grep_like(matches: &ArgMatches, cwd: &str) -> Result<CommandFileAccesses, String> {
     let mut reads = Vec::new();
 
     // -f FILE → read access
@@ -206,24 +174,18 @@ fn parse_grep_like(
     let has_f = matches.get_many::<String>("file").is_some();
     let explicit_pattern = has_e || has_f;
 
-    let positionals: Vec<&String> = matches
-        .get_many::<String>("files")
-        .map(|v| v.collect())
-        .unwrap_or_default();
-    // Without -e/-f the first positional is the pattern, not a path.
-    let paths: Vec<&&String> = if explicit_pattern {
-        positionals.iter().collect()
-    } else {
-        positionals.iter().skip(1).collect()
-    };
-    if paths.is_empty() {
-        // No path operand: a recursive search walks the working directory.
-        if recursion != Recursion::No {
-            reads.push(resolve_scoped(cwd, cwd, recursion));
-        }
-    } else {
-        for p in paths {
-            reads.push(resolve_scoped(p, cwd, recursion));
+    if let Some(positionals) = matches.get_many::<String>("files") {
+        let positionals: Vec<&String> = positionals.collect();
+        if explicit_pattern {
+            // -e or -f was given, so all positionals are files
+            for p in &positionals {
+                reads.push(resolve(p, cwd));
+            }
+        } else {
+            // First positional is pattern (skip), rest are files
+            for p in positionals.iter().skip(1) {
+                reads.push(resolve(p, cwd));
+            }
         }
     }
 

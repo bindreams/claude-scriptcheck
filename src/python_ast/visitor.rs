@@ -60,7 +60,10 @@ impl PythonVisitor {
 
     fn add_access(&mut self, path: &str, kind: AccessKind) {
         let resolved = file_access::resolve_path(path, &self.cwd);
-        self.accesses.push(FileAccess::exact(resolved, kind));
+        self.accesses.push(FileAccess {
+            path: resolved,
+            kind,
+        });
     }
 
     /// Resolve a local name to its qualified module path.
