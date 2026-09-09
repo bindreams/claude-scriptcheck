@@ -8,7 +8,7 @@ use claude_scriptcheck::checker::{CheckResult, Decision};
 use claude_scriptcheck::codex_settings;
 use claude_scriptcheck::file_access::{self, AccessKind, FileAccess};
 use claude_scriptcheck::permission_mode::PermissionMode;
-use claude_scriptcheck::{checker, cli, hook, logging, path_util, permission};
+use claude_scriptcheck::{checker, cli, cmd_parser, hook, logging, path_util, permission};
 use thaum::ast::{Command as ShellCommand, Expression};
 use thaum::span::Span;
 
@@ -499,10 +499,12 @@ fn handle_file_search(
     let normalized = path_util::normalize_separators(&raw_path);
     let resolved = file_access::resolve_path(&normalized, cwd);
 
-    let accesses = [FileAccess {
-        path: resolved.clone(),
-        kind: AccessKind::Read,
-    }];
+    // Grep and Glob walk the whole tree under their search path, so rules
+    // covering anything beneath it must be consulted. A path that is a regular
+    // file searches only that file — the same check-time stat, and the same
+    // accepted race, as `Recursion::IfDir`.
+    let scope = cmd_parser::resolve_scoped(&resolved, cwd, cmd_parser::Recursion::IfDir);
+    let accesses = [FileAccess::scoped(scope, AccessKind::Read)];
     let result = checker::check_file_accesses(&accesses, parsed_perms, cwd);
     let result = checker::apply_permission_mode(result, permission_mode);
 
@@ -562,10 +564,7 @@ fn handle_file_tool(
     let normalized = path_util::normalize_separators(&raw_path);
     let resolved = file_access::resolve_path(&normalized, cwd);
 
-    let accesses = [FileAccess {
-        path: resolved.clone(),
-        kind: access_kind,
-    }];
+    let accesses = [FileAccess::exact(resolved.clone(), access_kind)];
     let result = checker::check_file_accesses(&accesses, parsed_perms, cwd);
     let result = checker::apply_permission_mode(result, permission_mode);
 

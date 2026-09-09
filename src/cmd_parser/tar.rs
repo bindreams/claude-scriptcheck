@@ -1,4 +1,4 @@
-use super::{resolve, CommandFileAccesses, CommandParser};
+use super::{resolve, resolve_scoped, CommandFileAccesses, CommandParser, Recursion};
 
 // ─── tar ─────────────────────────────────────────────────────────────────────
 
@@ -22,6 +22,7 @@ impl CommandParser for TarParser {
         let mut mode = TarMode::Unknown;
         let mut archive: Option<&str> = None;
         let mut change_dir: Option<&str> = None;
+        let mut dereference = false;
         let mut file_args: Vec<&str> = Vec::new();
         let mut i = 0;
 
@@ -42,6 +43,7 @@ impl CommandParser for TarParser {
                         'd' => mode = TarMode::Diff,
                         'f' => need_archive = true,
                         'C' => need_dir = true,
+                        'h' => dereference = true,
                         // Other single-char flags (v, z, j, J, p, k, etc.) — skip
                         _ => {}
                     }
@@ -87,6 +89,7 @@ impl CommandParser for TarParser {
                         "append" => mode = TarMode::Append,
                         "update" => mode = TarMode::Update,
                         "diff" | "compare" => mode = TarMode::Diff,
+                        "dereference" => dereference = true,
                         "file" => {
                             i += 1;
                             if i < args.len() {
@@ -120,6 +123,7 @@ impl CommandParser for TarParser {
                         'r' => mode = TarMode::Append,
                         'u' => mode = TarMode::Update,
                         'd' => mode = TarMode::Diff,
+                        'h' => dereference = true,
                         'f' => {
                             // Rest of bundled chars or next arg is the archive
                             if j + 1 < chars.len() {
@@ -174,17 +178,23 @@ impl CommandParser for TarParser {
             }
         }
 
-        // -C DIR in extract mode → write destination
-        if let Some(dir) = change_dir {
-            if mode == TarMode::Extract {
-                writes.push(resolve(dir, cwd));
-            }
+        // Extraction unpacks a whole tree into -C DIR, or into the working
+        // directory when -C is absent.
+        if mode == TarMode::Extract {
+            let dest = change_dir.unwrap_or(cwd);
+            writes.push(resolve_scoped(dest, cwd, Recursion::Yes));
         }
 
-        // Positional files: in create mode → reads (files to archive)
+        // Positional files: in create mode → reads (files to archive). tar
+        // recurses into directory operands; -h follows symlinks out of them.
         if mode == TarMode::Create || mode == TarMode::Append || mode == TarMode::Update {
+            let recursion = if dereference {
+                Recursion::Following
+            } else {
+                Recursion::IfDir
+            };
             for f in &file_args {
-                reads.push(resolve(f, cwd));
+                reads.push(resolve_scoped(f, cwd, recursion));
             }
         }
 
