@@ -262,6 +262,12 @@ fn parse_copy_like(
 pub(super) struct InstallParser;
 impl CommandParser for InstallParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
+        // `--strip-program=CMD` runs CMD on every installed file (verified
+        // against GNU coreutils 9.7). `--strip` is a complete option of its own
+        // and a strict prefix of it, so the exact spelling must resolve to
+        // itself.
+        let (args, runs_a_program) = strip_program_options(args, &["strip-program"], &["strip"]);
+        let args: &[&str] = &args;
         let matches = base_cmd("install")
             .arg(flag('d', "directory"))
             .arg(val('t', "target-directory"))
@@ -328,7 +334,7 @@ impl CommandParser for InstallParser {
             reads,
             writes,
             inline_script_start: None,
-            file_only: None,
+            file_only: if runs_a_program { Some(false) } else { None },
             ..Default::default()
         })
     }
@@ -463,6 +469,11 @@ impl CommandParser for DiffParser {
 pub(super) struct SortParser;
 impl CommandParser for SortParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
+        // `--compress-program=CMD` runs CMD on every temporary file. Stripped
+        // before clap so an abbreviation still resolves and the operands' file
+        // accesses survive.
+        let (args, runs_a_program) = strip_program_options(args, &["compress-program"], &[]);
+        let args: &[&str] = &args;
         let matches = base_cmd("sort")
             .arg(val('o', "output"))
             .arg(val('k', "key").action(ArgAction::Append))
@@ -509,12 +520,10 @@ impl CommandParser for SortParser {
             reads,
             writes,
             inline_script_start: None,
-            // `--compress-program` runs the named command on every temporary
-            // file, which no `Read`/`Write` rule can gate. GNU-only — BSD sort
-            // ignores the flag — but treated as exec-capable everywhere,
-            // because over-approximating costs a prompt and the alternative
-            // leaves the hole.
-            file_only: names_a_program(&matches, "compress-program"),
+            // GNU-only — BSD sort ignores the flag — but treated as
+            // exec-capable everywhere, because over-approximating costs a
+            // prompt and the alternative leaves the hole.
+            file_only: if runs_a_program { Some(false) } else { None },
             ..Default::default()
         })
     }

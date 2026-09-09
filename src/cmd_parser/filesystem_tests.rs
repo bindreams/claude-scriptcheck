@@ -709,11 +709,14 @@ fn sort_compress_program_requires_bash_rule() {
 }
 
 #[skuld::test]
-fn sort_empty_compress_program_stays_file_only() {
+fn sort_empty_compress_program_still_requires_bash_rule() {
+    // An empty value does not disable the program here, unlike `rg --pre ''`:
+    // GNU sort 9.7 tries to execute it and reports "couldn't execute compress
+    // program". Same for `install --strip-program=''` and `tar`.
     let result = SortParser
         .parse(&["--compress-program", "", "big.txt"], "/cwd")
         .unwrap();
-    assert_eq!(result.file_only, None);
+    assert_eq!(result.file_only, Some(false));
 }
 
 #[skuld::test]
@@ -721,4 +724,56 @@ fn sort_plain_stays_file_only() {
     let result = SortParser.parse(&["big.txt"], "/cwd").unwrap();
     assert_eq!(result.file_only, None);
     assert_eq!(result.reads, reads(&["/cwd/big.txt"]));
+}
+
+// install / sort program options ======================================================================================
+
+#[skuld::test]
+fn install_strip_program_requires_bash_rule() {
+    // `install --strip-program=CMD -s src dst` executes CMD (verified against
+    // GNU coreutils 9.7).
+    let result = InstallParser
+        .parse(&["--strip-program=/bin/sh", "-s", "a.txt", "b.txt"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}
+
+#[skuld::test]
+fn install_abbreviated_strip_program_requires_bash_rule() {
+    for arg in ["--strip-prog=/bin/sh", "--strip-p=/bin/sh"] {
+        let result = InstallParser
+            .parse(&[arg, "-s", "a.txt", "b.txt"], "/cwd")
+            .unwrap();
+        assert_eq!(result.file_only, Some(false), "{arg}");
+    }
+}
+
+#[skuld::test]
+fn install_strip_alone_stays_file_only() {
+    // `--strip` is a complete option and a strict prefix of `--strip-program`.
+    let result = InstallParser
+        .parse(&["--strip", "a.txt", "b.txt"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn install_program_option_keeps_its_file_accesses() {
+    let result = InstallParser
+        .parse(&["--strip-program=/bin/sh", "-s", "a.txt", "b.txt"], "/cwd")
+        .unwrap();
+    assert_eq!(result.reads, reads(&["/cwd/a.txt"]));
+    assert_eq!(result.writes, writes(&["/cwd/b.txt"]));
+}
+
+#[skuld::test]
+fn sort_abbreviated_compress_program_requires_bash_rule() {
+    for arg in [
+        "--compress-program=/bin/sh",
+        "--compress-prog=/bin/sh",
+        "--compress=/bin/sh",
+    ] {
+        let result = SortParser.parse(&[arg, "big.txt"], "/cwd").unwrap();
+        assert_eq!(result.file_only, Some(false), "{arg}");
+    }
 }

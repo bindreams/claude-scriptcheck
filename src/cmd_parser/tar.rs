@@ -1,3 +1,4 @@
+use super::helpers::strip_program_options;
 use super::{resolve, resolve_scoped, CommandFileAccesses, CommandParser, Recursion};
 
 // ─── tar ─────────────────────────────────────────────────────────────────────
@@ -23,9 +24,15 @@ impl CommandParser for TarParser {
         let mut archive: Option<&str> = None;
         let mut change_dir: Option<&str> = None;
         let mut dereference = false;
-        let mut runs_a_program = false;
         let mut file_args: Vec<&str> = Vec::new();
         let mut i = 0;
+
+        // Long options naming a program come off first, by prefix, so no
+        // abbreviation can slip past the guardrail into the "skip unknown long
+        // flags" arm below.
+        let (args, mut runs_a_program) =
+            strip_program_options(args, PROGRAM_OPTIONS, NON_EXEC_PREFIXES);
+        let args: &[&str] = &args;
 
         // Check for legacy bundled syntax: first arg without '-' prefix
         if let Some(first) = args.first() {
@@ -91,48 +98,31 @@ impl CommandParser for TarParser {
             // Long flags
             if let Some(rest) = arg.strip_prefix("--") {
                 let (name, inline_value) = match rest.split_once('=') {
-                    Some((n, _)) => (n, true),
-                    None => (rest, false),
+                    Some((name, value)) => (name, Some(value)),
+                    None => (rest, None),
                 };
-                if is_program_option(name) {
-                    runs_a_program = true;
-                    if !inline_value {
-                        // Consume the program name so it is not mistaken for a
-                        // positional.
-                        i += 1;
+                // A value-taking option takes the next token when it was not
+                // written with `=`.
+                let take_value = |i: &mut usize| match inline_value {
+                    Some(value) => Some(value),
+                    None => {
+                        *i += 1;
+                        args.get(*i).copied()
                     }
-                    i += 1;
-                    continue;
-                }
-                if let Some(val) = rest.strip_prefix("file=") {
-                    archive = Some(val);
-                } else if let Some(val) = rest.strip_prefix("directory=") {
-                    change_dir = Some(val);
-                } else {
-                    match rest {
-                        "create" => mode = TarMode::Create,
-                        "extract" | "get" => mode = TarMode::Extract,
-                        "list" => mode = TarMode::List,
-                        "append" => mode = TarMode::Append,
-                        "update" => mode = TarMode::Update,
-                        "diff" | "compare" => mode = TarMode::Diff,
-                        "dereference" => dereference = true,
-                        "file" => {
-                            i += 1;
-                            if i < args.len() {
-                                archive = Some(args[i]);
-                            }
-                        }
-                        "directory" => {
-                            i += 1;
-                            if i < args.len() {
-                                change_dir = Some(args[i]);
-                            }
-                        }
-                        // Other long flags — skip (no value consumption needed for
-                        // flags like --verbose, --gzip, --bzip2, etc.)
-                        _ => {}
-                    }
+                };
+                match resolve_long(name) {
+                    Some("create") => mode = TarMode::Create,
+                    Some("extract") | Some("get") => mode = TarMode::Extract,
+                    Some("list") => mode = TarMode::List,
+                    Some("append") => mode = TarMode::Append,
+                    Some("update") => mode = TarMode::Update,
+                    Some("diff") | Some("compare") => mode = TarMode::Diff,
+                    Some("dereference") => dereference = true,
+                    Some("file") => archive = take_value(&mut i),
+                    Some("directory") => change_dir = take_value(&mut i),
+                    // Unresolvable: an unknown option, or an abbreviation the
+                    // real tar would call ambiguous and exit over.
+                    _ => {}
                 }
                 i += 1;
                 continue;
@@ -249,19 +239,66 @@ impl CommandParser for TarParser {
 /// scripts and `--checkpoint-action=exec=…`. No `Read`/`Write` rule can gate
 /// them, so the invocation needs the `Bash(...)` rule that gates execution.
 ///
-/// The short spellings `-I` and `-F` are handled alongside `-f` and `-C` in the
-/// flag loops. `-I` is GNU's `--use-compress-program`; bsdtar reads it as a list
-/// of member names instead. Treated as exec-capable on every platform, because
-/// over-approximating costs a prompt while under-approximating leaves the hole.
-fn is_program_option(name: &str) -> bool {
-    matches!(
-        name,
-        "use-compress-program"
-            | "to-command"
-            | "rmt-command"
-            | "rsh-command"
-            | "info-script"
-            | "new-volume-script"
-            | "checkpoint-action"
-    )
+/// Matched by prefix — see `strip_program_options`. GNU tar 1.35 executes the
+/// program for `--use-compress-program`, `--use-compress-prog`, `--use-compress`,
+/// `--use-comp` and `--use` alike.
+///
+/// The fixed-program filters (`-z`, `-j`, `-J`, `--zstd`, `--lzip`, …) are
+/// excluded on the same reasoning as `rg -z`: they run a decompressor from a
+/// fixed internal list resolved through `PATH`, not one the caller names.
+const PROGRAM_OPTIONS: &[&str] = &[
+    "use-compress-program",
+    "to-command",
+    "rmt-command",
+    "rsh-command",
+    "info-script",
+    "new-volume-script",
+    "checkpoint-action",
+];
+
+/// `--checkpoint` displays progress and is harmless, but it is also a strict
+/// prefix of `--checkpoint-action`, which executes one. The exact spelling
+/// resolves to itself in `getopt_long`, and must here too.
+const NON_EXEC_PREFIXES: &[&str] = &["checkpoint"];
+
+/// The long options this parser acts on. `-I`/`-F`, the short spellings of two
+/// `PROGRAM_OPTIONS` entries, are handled in the flag loops instead: `-I` is
+/// GNU's `--use-compress-program` while bsdtar reads it as a list of member
+/// names, so it is treated as exec-capable on every platform — over-approximating
+/// costs a prompt, under-approximating leaves the hole.
+const LONG_OPTIONS: &[&str] = &[
+    "append",
+    "compare",
+    "create",
+    "dereference",
+    "diff",
+    "directory",
+    "extract",
+    "file",
+    "get",
+    "list",
+    "update",
+];
+
+/// Resolve a long-option name the way `getopt_long` does: exact match first,
+/// then a unique prefix. An ambiguous abbreviation resolves to nothing, which
+/// matches the real tar — it exits with an error, so the command never runs.
+///
+/// This table is a subset of tar's options, so an abbreviation can be unique
+/// here while being ambiguous for tar itself. That direction is harmless: tar
+/// does nothing while scriptcheck has merely recorded an extra access. The
+/// dangerous direction — an abbreviation of an exec-bearing option resolving to
+/// something harmless — cannot happen, because `strip_program_options` has
+/// already matched those against the full exec set by prefix.
+fn resolve_long(name: &str) -> Option<&'static str> {
+    if let Some(exact) = LONG_OPTIONS.iter().find(|option| **option == name) {
+        return Some(exact);
+    }
+    let mut matches = LONG_OPTIONS
+        .iter()
+        .filter(|option| option.starts_with(name));
+    match (matches.next(), matches.next()) {
+        (Some(only), None) => Some(only),
+        _ => None,
+    }
 }

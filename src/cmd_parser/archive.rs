@@ -5,34 +5,61 @@ use super::{resolve, resolve_scoped, CommandFileAccesses, CommandParser, Recursi
 
 // ─── zip / unzip ─────────────────────────────────────────────────────────────
 
-/// Lift `-TT <cmd>` / `--unzip-command <cmd>` / `--unzip-command=<cmd>` out of
-/// `args`, reporting whether one was present.
+/// Long options naming a program `zip` runs to test the finished archive
+/// instead of `unzip -tqq`. Matched by prefix — see `strip_program_options`.
+const ZIP_PROGRAM_OPTIONS: &[&str] = &["unzip-command"];
+
+/// `zip` short options that take a value. In a bundle the value is the rest of
+/// the token, so scanning must stop at one of these rather than keep reading
+/// letters: the `TT` in `-nTT` is a suffix list, not `-TT`.
+const ZIP_VALUE_SHORTS: &[char] = &['x', 'i', 'b', 't', 'n', 'O', 'z'];
+
+/// Lift `-TT <cmd>` and its long spelling out of `args`, reporting whether one
+/// was present.
 ///
-/// The flag names a command `zip` runs to test the finished archive instead of
-/// `unzip -tqq`, so the invocation is not file-only. It has to be handled before
-/// clap: `-TT` is one flag to `zip` but two `-T`s to clap, which would then take
-/// the command name as the archive positional.
+/// `-TT` has to be handled before clap: it is one flag to `zip` but two `-T`s to
+/// clap, which would then take the command name as the archive positional. It
+/// also bundles — `zip -rTT cmd -T out.zip src` executes `cmd`, verified against
+/// Zip 3.0 — so the scan decomposes short bundles rather than matching the
+/// `-TT` token whole.
 fn strip_unzip_command<'a>(args: &[&'a str]) -> (Vec<&'a str>, bool) {
-    let mut kept = Vec::with_capacity(args.len());
-    let mut found = false;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i] {
-            "-TT" | "--unzip-command" => {
-                found = true;
-                i += 2; // the flag and the command it names
-            }
-            arg if arg.starts_with("--unzip-command=") => {
-                found = true;
-                i += 1;
-            }
-            arg => {
-                kept.push(arg);
-                i += 1;
-            }
+    let (mut kept, mut found) = strip_program_options(args, ZIP_PROGRAM_OPTIONS, &[]);
+
+    let mut out: Vec<&str> = Vec::with_capacity(kept.len());
+    let mut drop_next = false;
+    for arg in kept.drain(..) {
+        if drop_next {
+            drop_next = false; // the command `-TT` named
+            continue;
         }
+        if bundles_double_t(arg) {
+            found = true;
+            drop_next = true;
+        }
+        out.push(arg);
     }
-    (kept, found)
+    (out, found)
+}
+
+/// Does this short-option bundle contain `TT`?
+fn bundles_double_t(arg: &str) -> bool {
+    let Some(bundle) = arg.strip_prefix('-') else {
+        return false;
+    };
+    if bundle.starts_with('-') {
+        return false; // a long option
+    }
+    let mut previous_was_t = false;
+    for ch in bundle.chars() {
+        if previous_was_t && ch == 'T' {
+            return true;
+        }
+        if ZIP_VALUE_SHORTS.contains(&ch) {
+            return false; // the rest of the token is this option's value
+        }
+        previous_was_t = ch == 'T';
+    }
+    false
 }
 
 pub(super) struct ZipParser;
@@ -236,6 +263,11 @@ impl CommandParser for PatchParser {
 pub(super) struct SplitParser;
 impl CommandParser for SplitParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
+        // `--filter=CMD` pipes every output chunk through a shell command
+        // instead of writing a file. Stripped before clap so an abbreviation
+        // still resolves and the input file access survives.
+        let (args, runs_a_program) = strip_program_options(args, &["filter"], &[]);
+        let args: &[&str] = &args;
         let matches = base_cmd("split")
             .arg(val('b', "bytes"))
             .arg(val('C', "line-bytes"))
@@ -267,11 +299,9 @@ impl CommandParser for SplitParser {
             reads,
             writes: Vec::new(),
             inline_script_start: None,
-            // `--filter` pipes every output chunk through a shell command
-            // instead of writing a file. GNU-only — BSD split has no long
-            // options — but treated as exec-capable everywhere, on the same
-            // reasoning as `tar -I`.
-            file_only: names_a_program(&matches, "filter"),
+            // GNU-only — BSD split has no long options — but treated as
+            // exec-capable everywhere, on the same reasoning as `tar -I`.
+            file_only: if runs_a_program { Some(false) } else { None },
             ..Default::default()
         })
     }

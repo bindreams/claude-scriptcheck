@@ -245,3 +245,79 @@ fn tar_plain_create_stays_file_only() {
     assert_eq!(result.writes, w(&["/cwd/out.tar"]));
     assert_eq!(result.reads, sub(&["/cwd/sub"]));
 }
+
+// Long-option abbreviations ===========================================================================================
+
+#[skuld::test]
+fn tar_abbreviated_exec_options_require_bash_rule() {
+    // GNU tar 1.35 executes the program for every one of these spellings.
+    for arg in [
+        "--use-compress-program=/tmp/evil.sh",
+        "--use-compress-prog=/tmp/evil.sh",
+        "--use-compress=/tmp/evil.sh",
+        "--use-comp=/tmp/evil.sh",
+        "--use=/tmp/evil.sh",
+        "--to-comm=/tmp/evil.sh",
+        "--rmt-comm=/tmp/evil.sh",
+        "--info-scr=/tmp/evil.sh",
+        "--new-vol=/tmp/evil.sh",
+        "--checkpoint-a=exec=/tmp/evil.sh",
+    ] {
+        let result = TarParser
+            .parse(&[arg, "-cf", "a.tar", "sub"], "/cwd")
+            .unwrap();
+        assert_eq!(result.file_only, Some(false), "{arg}");
+    }
+}
+
+#[skuld::test]
+fn tar_abbreviated_exec_option_with_separate_value_requires_bash_rule() {
+    let result = TarParser
+        .parse(
+            &["--use-comp", "/tmp/evil.sh", "-cf", "a.tar", "sub"],
+            "/cwd",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+    // The program name is consumed, not read as a member to archive.
+    assert_eq!(result.reads, sub(&["/cwd/sub"]));
+}
+
+#[skuld::test]
+fn tar_checkpoint_alone_stays_file_only() {
+    // `--checkpoint` is a complete option and a strict prefix of
+    // `--checkpoint-action`; the exact match wins, as in getopt_long.
+    let result = TarParser
+        .parse(&["--checkpoint=100", "-cf", "a.tar", "sub"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn tar_abbreviated_directory_resolves() {
+    // `--dir` abbreviates `--directory`, so the extraction destination must be
+    // recorded — otherwise the write lands somewhere unchecked.
+    let result = TarParser
+        .parse(&["--dir=/etc", "-xf", "a.tar"], "/cwd")
+        .unwrap();
+    assert_eq!(result.writes, sub(&["/etc"]));
+}
+
+#[skuld::test]
+fn tar_abbreviated_file_resolves() {
+    let result = TarParser.parse(&["--fi=a.tar", "-x"], "/cwd").unwrap();
+    assert_eq!(result.reads, r(&["/cwd/a.tar"]));
+}
+
+#[skuld::test]
+fn tar_ambiguous_long_abbreviation_is_skipped() {
+    // `--d` could be --directory, --diff or --dereference. The real tar calls it
+    // ambiguous and exits, so resolving it to nothing is right.
+    let result = TarParser
+        .parse(&["--d", "/etc", "-xf", "a.tar"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+    assert!(!result
+        .writes
+        .contains(&AccessScope::Subtree("/etc".to_string())));
+}

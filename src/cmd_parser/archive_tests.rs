@@ -186,3 +186,53 @@ fn zip_plain_stays_file_only() {
     let result = ZipParser.parse(&["-r", "out.zip", "src"], "/cwd").unwrap();
     assert_eq!(result.file_only, None);
 }
+
+// Long-option abbreviations and bundled shorts ========================================================================
+
+#[skuld::test]
+fn zip_bundled_unzip_command_requires_bash_rule() {
+    // `zip -rTT cmd -T out.zip src` executes `cmd` (verified against Zip 3.0);
+    // clap reads `-rTT` as `-r -T -T` and the command name became a positional.
+    let result = ZipParser
+        .parse(&["-rTT", "/tmp/evil.sh", "-T", "out.zip", "src"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+    assert_eq!(result.writes, writes(&["/cwd/out.zip"]));
+}
+
+#[skuld::test]
+fn zip_abbreviated_unzip_command_requires_bash_rule() {
+    for arg in ["--unzip-command", "--unzip-comm", "--unzip-c", "--unzip"] {
+        let result = ZipParser
+            .parse(&[arg, "/tmp/evil.sh", "-T", "out.zip", "src"], "/cwd")
+            .unwrap();
+        assert_eq!(result.file_only, Some(false), "{arg}");
+    }
+}
+
+#[skuld::test]
+fn zip_value_taking_short_swallows_its_bundled_value() {
+    // `-n` takes a suffix list, so the `TT` here is that value, not `-TT`.
+    let result = ZipParser
+        .parse(&["-nTT", "out.zip", "src"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn split_abbreviated_filter_requires_bash_rule() {
+    for arg in ["--filter=cmd", "--filte=cmd", "--filt=cmd", "--fil=cmd"] {
+        let result = SplitParser.parse(&[arg, "big.txt"], "/cwd").unwrap();
+        assert_eq!(result.file_only, Some(false), "{arg}");
+    }
+}
+
+#[skuld::test]
+fn split_abbreviated_filter_keeps_its_file_access() {
+    // The option is stripped rather than merely flagged, so the read survives
+    // and deny rules covering it still fire.
+    let result = SplitParser
+        .parse(&["--filt=cmd", "big.txt"], "/cwd")
+        .unwrap();
+    assert_eq!(result.reads, reads(&["/cwd/big.txt"]));
+}
