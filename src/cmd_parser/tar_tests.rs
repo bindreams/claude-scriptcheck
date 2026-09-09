@@ -161,7 +161,13 @@ fn tar_extract_without_c_writes_cwd() {
 #[skuld::test]
 fn tar_use_compress_program_requires_bash_rule() {
     for args in [
-        vec!["--use-compress-program", "/tmp/evil.sh", "-cf", "a.tar", "sub"],
+        vec![
+            "--use-compress-program",
+            "/tmp/evil.sh",
+            "-cf",
+            "a.tar",
+            "sub",
+        ],
         vec!["--use-compress-program=/tmp/evil.sh", "-cf", "a.tar", "sub"],
     ] {
         let result = TarParser.parse(&args, "/cwd").unwrap();
@@ -219,7 +225,13 @@ fn tar_legacy_bundle_i_requires_bash_rule() {
 fn tar_exec_flag_value_is_not_a_positional_read() {
     let result = TarParser
         .parse(
-            &["--use-compress-program", "/tmp/comp.sh", "-cf", "a.tar", "sub"],
+            &[
+                "--use-compress-program",
+                "/tmp/comp.sh",
+                "-cf",
+                "a.tar",
+                "sub",
+            ],
             "/cwd",
         )
         .unwrap();
@@ -228,9 +240,7 @@ fn tar_exec_flag_value_is_not_a_positional_read() {
 
 #[skuld::test]
 fn tar_plain_create_stays_file_only() {
-    let result = TarParser
-        .parse(&["cf", "out.tar", "sub"], "/cwd")
-        .unwrap();
+    let result = TarParser.parse(&["cf", "out.tar", "sub"], "/cwd").unwrap();
     assert_eq!(result.file_only, None);
     assert_eq!(result.writes, w(&["/cwd/out.tar"]));
     assert_eq!(result.reads, sub(&["/cwd/sub"]));

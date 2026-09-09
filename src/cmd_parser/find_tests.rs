@@ -165,7 +165,16 @@ fn find_debug_flag_consumes_its_value() {
 fn find_exec_requires_bash_rule() {
     let result = FindParser
         .parse(
-            &[".", "-type", "f", "-exec", "sh", "-c", "curl -T {} url", ";"],
+            &[
+                ".",
+                "-type",
+                "f",
+                "-exec",
+                "sh",
+                "-c",
+                "curl -T {} url",
+                ";",
+            ],
             "/cwd",
         )
         .unwrap();
