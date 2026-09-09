@@ -697,3 +697,28 @@ fn cp_destination_stat_error_other_than_missing_takes_directory_branch(
     let r = CpParser.parse(&["a.txt", "gone/b.txt"], &cwd).unwrap();
     assert_eq!(r.writes, writes(&[&format!("{cwd}/gone/b.txt")]));
 }
+
+// Program execution ===================================================================================================
+
+#[skuld::test]
+fn sort_compress_program_requires_bash_rule() {
+    let result = SortParser
+        .parse(&["--compress-program", "/tmp/evil.sh", "big.txt"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}
+
+#[skuld::test]
+fn sort_empty_compress_program_stays_file_only() {
+    let result = SortParser
+        .parse(&["--compress-program", "", "big.txt"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn sort_plain_stays_file_only() {
+    let result = SortParser.parse(&["big.txt"], "/cwd").unwrap();
+    assert_eq!(result.file_only, None);
+    assert_eq!(result.reads, reads(&["/cwd/big.txt"]));
+}

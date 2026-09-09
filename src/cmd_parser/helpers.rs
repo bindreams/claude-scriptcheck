@@ -140,3 +140,14 @@ pub(super) fn strip_legacy_numeric(args: &[&str], allow_plus: bool) -> Vec<Strin
     }
     result
 }
+
+/// `Some(false)` when `flag` carries a non-empty value, meaning the invocation
+/// executes a program the caller named and therefore needs a `Bash(...)` rule
+/// that no `Read`/`Write` rule can substitute for; `None` to leave the verdict
+/// to `is_file_only_command`. An empty value names no program.
+pub(super) fn names_a_program(matches: &ArgMatches, flag: &str) -> Option<bool> {
+    matches
+        .get_one::<String>(flag)
+        .filter(|v| !v.is_empty())
+        .map(|_| false)
+}

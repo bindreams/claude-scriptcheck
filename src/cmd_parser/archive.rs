@@ -5,9 +5,40 @@ use super::{resolve, resolve_scoped, CommandFileAccesses, CommandParser, Recursi
 
 // ─── zip / unzip ─────────────────────────────────────────────────────────────
 
+/// Lift `-TT <cmd>` / `--unzip-command <cmd>` / `--unzip-command=<cmd>` out of
+/// `args`, reporting whether one was present.
+///
+/// The flag names a command `zip` runs to test the finished archive instead of
+/// `unzip -tqq`, so the invocation is not file-only. It has to be handled before
+/// clap: `-TT` is one flag to `zip` but two `-T`s to clap, which would then take
+/// the command name as the archive positional.
+fn strip_unzip_command<'a>(args: &[&'a str]) -> (Vec<&'a str>, bool) {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut found = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "-TT" | "--unzip-command" => {
+                found = true;
+                i += 2; // the flag and the command it names
+            }
+            arg if arg.starts_with("--unzip-command=") => {
+                found = true;
+                i += 1;
+            }
+            arg => {
+                kept.push(arg);
+                i += 1;
+            }
+        }
+    }
+    (kept, found)
+}
+
 pub(super) struct ZipParser;
 impl CommandParser for ZipParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
+        let (args, runs_a_program) = strip_unzip_command(args);
         let matches = base_cmd("zip")
             .arg(flag('r', "recurse-paths"))
             .arg(flag('j', "junk-paths"))
@@ -39,7 +70,7 @@ impl CommandParser for ZipParser {
             .arg(val('n', "suffixes"))
             .arg(bool_s('@'))
             .arg(files_arg())
-            .try_get_matches_from(args)
+            .try_get_matches_from(&args)
             .map_err(|e| e.to_string())?;
 
         let positionals: Vec<&String> = matches
@@ -69,7 +100,7 @@ impl CommandParser for ZipParser {
             reads,
             writes,
             inline_script_start: None,
-            file_only: None,
+            file_only: if runs_a_program { Some(false) } else { None },
             ..Default::default()
         })
     }
@@ -236,7 +267,11 @@ impl CommandParser for SplitParser {
             reads,
             writes: Vec::new(),
             inline_script_start: None,
-            file_only: None,
+            // `--filter` pipes every output chunk through a shell command
+            // instead of writing a file. GNU-only — BSD split has no long
+            // options — but treated as exec-capable everywhere, on the same
+            // reasoning as `tar -I`.
+            file_only: names_a_program(&matches, "filter"),
             ..Default::default()
         })
     }

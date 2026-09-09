@@ -509,7 +509,12 @@ impl CommandParser for SortParser {
             reads,
             writes,
             inline_script_start: None,
-            file_only: None,
+            // `--compress-program` runs the named command on every temporary
+            // file, which no `Read`/`Write` rule can gate. GNU-only — BSD sort
+            // ignores the flag — but treated as exec-capable everywhere,
+            // because over-approximating costs a prompt and the alternative
+            // leaves the hole.
+            file_only: names_a_program(&matches, "compress-program"),
             ..Default::default()
         })
     }
