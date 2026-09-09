@@ -155,3 +155,83 @@ fn tar_extract_without_c_writes_cwd() {
     let result = TarParser.parse(&["xf", "/tmp/a.tar"], "/tmp/proj").unwrap();
     assert_eq!(result.writes, sub(&["/tmp/proj"]));
 }
+
+// Program execution ===================================================================================================
+
+#[skuld::test]
+fn tar_use_compress_program_requires_bash_rule() {
+    for args in [
+        vec!["--use-compress-program", "/tmp/evil.sh", "-cf", "a.tar", "sub"],
+        vec!["--use-compress-program=/tmp/evil.sh", "-cf", "a.tar", "sub"],
+    ] {
+        let result = TarParser.parse(&args, "/cwd").unwrap();
+        assert_eq!(result.file_only, Some(false), "{args:?}");
+    }
+}
+
+#[skuld::test]
+fn tar_program_long_flags_require_bash_rule() {
+    for flag in [
+        "--to-command",
+        "--rmt-command",
+        "--rsh-command",
+        "--info-script",
+        "--new-volume-script",
+        "--checkpoint-action",
+    ] {
+        let result = TarParser
+            .parse(&[flag, "/tmp/evil.sh", "-cf", "a.tar", "sub"], "/cwd")
+            .unwrap();
+        assert_eq!(result.file_only, Some(false), "{flag}");
+    }
+}
+
+#[skuld::test]
+fn tar_short_i_requires_bash_rule() {
+    // GNU's `-I` is `--use-compress-program`; bsdtar reads it as a name list.
+    // Treated as exec-capable on every platform — a prompt, never a hole.
+    let result = TarParser
+        .parse(&["-I", "zstd", "-cf", "a.tar.zst", "sub"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}
+
+#[skuld::test]
+fn tar_short_f_info_script_requires_bash_rule() {
+    let result = TarParser
+        .parse(&["-F", "/tmp/evil.sh", "-cf", "a.tar", "sub"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}
+
+#[skuld::test]
+fn tar_legacy_bundle_i_requires_bash_rule() {
+    // The no-dash bundled form. Only `file_only` is asserted: the legacy bundle
+    // consumes its values in a fixed order rather than the order the letters
+    // appear, a pre-existing approximation this does not change.
+    let result = TarParser
+        .parse(&["cIf", "/tmp/evil.sh", "a.tar", "sub"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}
+
+#[skuld::test]
+fn tar_exec_flag_value_is_not_a_positional_read() {
+    let result = TarParser
+        .parse(
+            &["--use-compress-program", "/tmp/comp.sh", "-cf", "a.tar", "sub"],
+            "/cwd",
+        )
+        .unwrap();
+    assert_eq!(result.reads, sub(&["/cwd/sub"]));
+}
+
+#[skuld::test]
+fn tar_plain_create_stays_file_only() {
+    let result = TarParser
+        .parse(&["cf", "out.tar", "sub"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+    assert_eq!(result.writes, w(&["/cwd/out.tar"]));
+    assert_eq!(result.reads, sub(&["/cwd/sub"]));
+}

@@ -2792,3 +2792,32 @@ fn hook_rg_plain_still_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = read_only_project(dir);
     assert_eq!(run_bash_hook("rg TOKEN .", &p.root), "allow");
 }
+
+// ── tar program options ─────────────────────────────────────────────────────
+
+#[skuld::test]
+fn hook_tar_use_compress_program_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = ordinary_work_project(dir);
+    assert_eq!(
+        run_bash_hook(
+            "tar --use-compress-program /tmp/evil.sh -cf out.tar .",
+            &p.root,
+        ),
+        "ask",
+    );
+}
+
+#[skuld::test]
+fn hook_tar_short_i_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = ordinary_work_project(dir);
+    assert_eq!(
+        run_bash_hook("tar -I zstd -cf out.tar.zst src", &p.root),
+        "ask",
+    );
+}
+
+#[skuld::test]
+fn hook_tar_plain_create_still_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
+    let p = ordinary_work_project(dir);
+    assert_eq!(run_bash_hook("tar cf out.tar src", &p.root), "allow");
+}

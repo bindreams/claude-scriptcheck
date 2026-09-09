@@ -23,6 +23,7 @@ impl CommandParser for TarParser {
         let mut archive: Option<&str> = None;
         let mut change_dir: Option<&str> = None;
         let mut dereference = false;
+        let mut runs_a_program = false;
         let mut file_args: Vec<&str> = Vec::new();
         let mut i = 0;
 
@@ -32,6 +33,7 @@ impl CommandParser for TarParser {
                 // Legacy syntax: tar xf archive.tar ...
                 let mut need_archive = false;
                 let mut need_dir = false;
+                let mut need_program = false;
                 let chars: Vec<char> = first.chars().collect();
                 for ch in &chars {
                     match ch {
@@ -44,19 +46,30 @@ impl CommandParser for TarParser {
                         'f' => need_archive = true,
                         'C' => need_dir = true,
                         'h' => dereference = true,
+                        'I' | 'F' => {
+                            runs_a_program = true;
+                            need_program = true;
+                        }
                         // Other single-char flags (v, z, j, J, p, k, etc.) — skip
                         _ => {}
                     }
                 }
                 i = 1;
 
-                // Consume the value args expected by 'f' and 'C' in the bundle
+                // Consume the value args expected by 'f', 'C' and the program
+                // letters. The order here is fixed rather than the order the
+                // letters appear, which is a pre-existing approximation: an
+                // invocation naming a program requires a Bash rule regardless
+                // of which path lands in which slot.
                 if need_archive && i < args.len() {
                     archive = Some(args[i]);
                     i += 1;
                 }
                 if need_dir && i < args.len() {
                     change_dir = Some(args[i]);
+                    i += 1;
+                }
+                if need_program && i < args.len() {
                     i += 1;
                 }
             }
@@ -77,6 +90,20 @@ impl CommandParser for TarParser {
 
             // Long flags
             if let Some(rest) = arg.strip_prefix("--") {
+                let (name, inline_value) = match rest.split_once('=') {
+                    Some((n, _)) => (n, true),
+                    None => (rest, false),
+                };
+                if is_program_option(name) {
+                    runs_a_program = true;
+                    if !inline_value {
+                        // Consume the program name so it is not mistaken for a
+                        // positional.
+                        i += 1;
+                    }
+                    i += 1;
+                    continue;
+                }
                 if let Some(val) = rest.strip_prefix("file=") {
                     archive = Some(val);
                 } else if let Some(val) = rest.strip_prefix("directory=") {
@@ -149,6 +176,15 @@ impl CommandParser for TarParser {
                             }
                             break;
                         }
+                        'I' | 'F' => {
+                            runs_a_program = true;
+                            // Consume the program name, bundled (`-Icmd`) or
+                            // separate (`-I cmd`), so it is not read as a path.
+                            if j + 1 >= chars.len() {
+                                i += 1;
+                            }
+                            break;
+                        }
                         // Other short flags (v, z, j, J, p, k, etc.) — skip
                         _ => {}
                     }
@@ -202,8 +238,30 @@ impl CommandParser for TarParser {
             reads,
             writes,
             inline_script_start: None,
-            file_only: None,
+            file_only: if runs_a_program { Some(false) } else { None },
             ..Default::default()
         })
     }
+}
+
+/// Long options whose value is a command `tar` executes: the compression filter,
+/// the per-member `--to-command` pipe, the remote-shell hooks, the volume-change
+/// scripts and `--checkpoint-action=exec=…`. No `Read`/`Write` rule can gate
+/// them, so the invocation needs the `Bash(...)` rule that gates execution.
+///
+/// The short spellings `-I` and `-F` are handled alongside `-f` and `-C` in the
+/// flag loops. `-I` is GNU's `--use-compress-program`; bsdtar reads it as a list
+/// of member names instead. Treated as exec-capable on every platform, because
+/// over-approximating costs a prompt while under-approximating leaves the hole.
+fn is_program_option(name: &str) -> bool {
+    matches!(
+        name,
+        "use-compress-program"
+            | "to-command"
+            | "rmt-command"
+            | "rsh-command"
+            | "info-script"
+            | "new-volume-script"
+            | "checkpoint-action"
+    )
 }
