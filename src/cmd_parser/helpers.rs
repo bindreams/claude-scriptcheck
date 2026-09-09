@@ -140,3 +140,66 @@ pub(super) fn strip_legacy_numeric(args: &[&str], allow_plus: bool) -> Vec<Strin
     }
     result
 }
+
+/// Remove the long options naming a program the command will execute, reporting
+/// whether any were present.
+///
+/// GNU `getopt_long` resolves an exact match first and otherwise accepts any
+/// *unambiguous abbreviation*, so matching exact spellings alone leaves
+/// `--use-compress-prog`, `--use-comp` and even `--use` wide open — verified
+/// against GNU tar 1.35, where every one of those executes the program. An
+/// argument counts when its long-option name is a **prefix** of an exec-bearing
+/// option. That also swallows abbreviations which are ambiguous for the real
+/// tool, but those make it error out and do nothing, so the over-approximation
+/// costs at most a prompt.
+///
+/// `non_exec` holds options that are complete spellings in their own right *and*
+/// strict prefixes of an exec-bearing one: `tar --checkpoint` against
+/// `--checkpoint-action`, `install --strip` against `--strip-program`. An exact
+/// match to one of those wins, exactly as `getopt_long` resolves it. Both were
+/// derived from the tools' own `--help`, and they are the only two collisions
+/// across the commands scriptcheck parses — a new entry belongs here only when
+/// the same dump shows one.
+///
+/// The options are removed rather than merely flagged so that what remains still
+/// parses: the invocation keeps its file accesses, and the deny rules covering
+/// them keep firing.
+///
+/// Option parsing stops at `--`, as it does in the tools.
+pub(super) fn strip_program_options<'a>(
+    args: &[&'a str],
+    exec: &[&str],
+    non_exec: &[&str],
+) -> (Vec<&'a str>, bool) {
+    let mut kept: Vec<&str> = Vec::with_capacity(args.len());
+    let mut found = false;
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--" {
+            kept.extend_from_slice(&args[i..]);
+            break;
+        }
+        let Some(body) = arg.strip_prefix("--") else {
+            kept.push(arg);
+            i += 1;
+            continue;
+        };
+        let (name, has_inline_value) = match body.split_once('=') {
+            Some((name, _)) => (name, true),
+            None => (body, false),
+        };
+        let is_exec = !name.is_empty()
+            && !non_exec.contains(&name)
+            && exec.iter().any(|option| option.starts_with(name));
+        if !is_exec {
+            kept.push(arg);
+            i += 1;
+            continue;
+        }
+        found = true;
+        // Drop the option, and the separate token holding its value if any.
+        i += if has_inline_value { 1 } else { 2 };
+    }
+    (kept, found)
+}

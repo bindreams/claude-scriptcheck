@@ -2,7 +2,7 @@ use thaum::ast::*;
 use thaum::visit::Visit;
 
 use crate::cmd_parser::{self, CmdParseResult};
-use crate::file_access::{self, AccessKind, FileAccess};
+use crate::file_access::{self, AccessKind, AccessScope, FileAccess};
 use crate::filter::{Arg0Pattern, BashFilter, BashFilterItem, Filter, PathFilter};
 use crate::permission::ParsedPermissions;
 use crate::permission_mode::PermissionMode;
@@ -298,14 +298,12 @@ impl PermissionChecker<'_> {
                     let accesses = cfa
                         .reads
                         .into_iter()
-                        .map(|p| FileAccess {
-                            path: p,
-                            kind: AccessKind::Read,
-                        })
-                        .chain(cfa.writes.into_iter().map(|p| FileAccess {
-                            path: p,
-                            kind: AccessKind::Write,
-                        }))
+                        .map(|scope| FileAccess::scoped(scope, AccessKind::Read))
+                        .chain(
+                            cfa.writes
+                                .into_iter()
+                                .map(|scope| FileAccess::scoped(scope, AccessKind::Write)),
+                        )
                         .collect::<Vec<_>>();
                     (accesses, false, script_start, file_only, eff)
                 }
@@ -434,58 +432,57 @@ impl PermissionChecker<'_> {
             return;
         }
 
-        // Canonicalize the query path before matching against rules
-        let path = crate::canonicalize::best_effort_canonicalize(&access.path);
+        // Canonicalize the query path(s) before matching against rules
+        let scope = access.scope.canonicalized();
+        let shown = scope.display();
 
         // Check deny first (Edit fallback for Write) — always runs, even when
-        // suppressing, because file Deny is authoritative.
+        // suppressing, because file Deny is authoritative. Deny and ask scan
+        // over-approximately: a rule fires if it *could* reach any path the
+        // access touches.
         let deny_matched: Option<String> = match access.kind {
-            AccessKind::Read => find_match(&self.perms.read.deny, &path),
-            AccessKind::Write => find_match(&self.perms.write.deny, &path)
-                .or_else(|| find_match(&self.perms.edit.deny, &path)),
+            AccessKind::Read => find_could_match(&self.perms.read.deny, &scope),
+            AccessKind::Write => find_could_match(&self.perms.write.deny, &scope)
+                .or_else(|| find_could_match(&self.perms.edit.deny, &scope)),
         };
         if let Some(rule_str) = deny_matched {
             self.matched_deny.push(rule_str);
             self.deny(format!(
                 "File access '{}' ({:?}) matched deny rule",
-                path, access.kind
+                shown, access.kind
             ));
             return;
         }
 
         // Check ask rules — force ask even if allowed (Edit fallback for Write)
         let ask_matched = match access.kind {
-            AccessKind::Read => find_match(&self.perms.read.ask, &path).is_some(),
+            AccessKind::Read => find_could_match(&self.perms.read.ask, &scope).is_some(),
             AccessKind::Write => {
-                find_match(&self.perms.write.ask, &path).is_some()
-                    || find_match(&self.perms.edit.ask, &path).is_some()
+                find_could_match(&self.perms.write.ask, &scope).is_some()
+                    || find_could_match(&self.perms.edit.ask, &scope).is_some()
             }
         };
         if ask_matched {
             if !suppress_unmatched {
-                let rule_needed = match access.kind {
-                    AccessKind::Read => format!("Read({path})"),
-                    AccessKind::Write => format!("Write({path})"),
-                };
-                self.unmatched.push(rule_needed);
+                self.unmatched.push(rule_suggestion(access.kind, &scope));
             }
             return;
         }
 
-        // Check allow (Edit fallback for Write)
+        // Check allow (Edit fallback for Write). The allow scan is
+        // under-approximating: a rule counts only when it provably covers
+        // every path the access touches. Anything unproven falls through to
+        // the push below, which is what turns an unsatisfiable access — an
+        // unresolved path, a symlink-following walk — into an ask.
         let allow_matched: Option<String> = match access.kind {
-            AccessKind::Read => find_match(&self.perms.read.allow, &path),
-            AccessKind::Write => find_match(&self.perms.write.allow, &path)
-                .or_else(|| find_match(&self.perms.edit.allow, &path)),
+            AccessKind::Read => find_covers(&self.perms.read.allow, &scope),
+            AccessKind::Write => find_covers(&self.perms.write.allow, &scope)
+                .or_else(|| find_covers(&self.perms.edit.allow, &scope)),
         };
         if let Some(rule_str) = allow_matched {
             self.matched_allow.push(rule_str);
         } else if !suppress_unmatched {
-            let rule_needed = match access.kind {
-                AccessKind::Read => format!("Read({path})"),
-                AccessKind::Write => format!("Write({path})"),
-            };
-            self.unmatched.push(rule_needed);
+            self.unmatched.push(rule_suggestion(access.kind, &scope));
         }
     }
 
@@ -570,14 +567,47 @@ impl PermissionChecker<'_> {
     }
 }
 
-/// Scan a bucket of path filters for one that covers `path`; return its rule
-/// string form if found. Generic over `PathFilter` so the same helper serves
-/// Read/Write/Edit buckets.
-fn find_match<F: PathFilter>(bucket: &[F], path: &str) -> Option<String> {
+/// Scan a bucket of path filters for one that *could* reach any path in
+/// `scope`; return its rule string form if found. The deny/ask direction.
+fn find_could_match<F: PathFilter>(bucket: &[F], scope: &AccessScope) -> Option<String> {
     bucket
         .iter()
-        .find(|f| f.matches(path))
+        .find(|f| f.could_match(scope))
         .map(|f| f.to_rule_string())
+}
+
+/// Scan a bucket of path filters for one that provably covers every path in
+/// `scope`; return its rule string form if found. The allow direction.
+fn find_covers<F: PathFilter>(bucket: &[F], scope: &AccessScope) -> Option<String> {
+    bucket
+        .iter()
+        .find(|f| f.covers(scope))
+        .map(|f| f.to_rule_string())
+}
+
+/// The rule a user would add to satisfy an unmatched access. For a subtree the
+/// suggestion is `Read(D/**)`, which also covers the subtree root.
+///
+/// A symlink-following walk has no such rule: it can reach outside the tree it
+/// names, so `covers` rejects every path pattern. Naming a `Read`/`Write` rule
+/// there would send the user round a loop — they add it, rerun, and are asked
+/// again — so that case names `Bash(...)`, the only rule that does resolve it.
+/// It must not offer `display()`'s `<dir>/**+symlinks` either: that is a label,
+/// not a glob any rule can use.
+fn rule_suggestion(kind: AccessKind, scope: &AccessScope) -> String {
+    let kind_name = match kind {
+        AccessKind::Read => "Read",
+        AccessKind::Write => "Write",
+    };
+    if let AccessScope::UnboundedSubtree(dir) = scope {
+        let dir = dir.trim_end_matches('/');
+        return format!(
+            "Bash(...) -- this {} of {dir} follows symlinks out of the tree, so no \
+             {kind_name} rule can cover it; allow the command itself instead",
+            kind_name.to_lowercase(),
+        );
+    }
+    format!("{kind_name}({})", scope.display())
 }
 
 // ─── Redirect file access extraction ─────────────────────────────────────────
@@ -597,10 +627,10 @@ fn extract_redirect_access(redirect: &Redirect, cwd: &str) -> Option<FileAccess>
 
     let word = word?;
     let path = word.try_to_static_string()?;
-    Some(FileAccess {
-        path: file_access::resolve_path(&path, cwd),
+    Some(FileAccess::exact(
+        file_access::resolve_path(&path, cwd),
         kind,
-    })
+    ))
 }
 
 fn extract_redirect_accesses(redirects: &[Redirect], cwd: &str) -> Vec<FileAccess> {

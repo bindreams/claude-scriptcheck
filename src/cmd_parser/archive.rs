@@ -1,13 +1,71 @@
 use clap::ArgAction;
 
 use super::helpers::*;
-use super::{resolve, CommandFileAccesses, CommandParser};
+use super::{resolve, resolve_scoped, CommandFileAccesses, CommandParser, Recursion};
 
 // ─── zip / unzip ─────────────────────────────────────────────────────────────
+
+/// Long options naming a program `zip` runs to test the finished archive
+/// instead of `unzip -tqq`. Matched by prefix — see `strip_program_options`.
+const ZIP_PROGRAM_OPTIONS: &[&str] = &["unzip-command"];
+
+/// `zip` short options that take a value. In a bundle the value is the rest of
+/// the token, so scanning must stop at one of these rather than keep reading
+/// letters: the `TT` in `-nTT` is a suffix list, not `-TT`.
+const ZIP_VALUE_SHORTS: &[char] = &['x', 'i', 'b', 't', 'n', 'O', 'z'];
+
+/// Lift `-TT <cmd>` and its long spelling out of `args`, reporting whether one
+/// was present.
+///
+/// `-TT` has to be handled before clap: it is one flag to `zip` but two `-T`s to
+/// clap, which would then take the command name as the archive positional. It
+/// also bundles — `zip -rTT cmd -T out.zip src` executes `cmd`, verified against
+/// Zip 3.0 — so the scan decomposes short bundles rather than matching the
+/// `-TT` token whole.
+fn strip_unzip_command<'a>(args: &[&'a str]) -> (Vec<&'a str>, bool) {
+    let (mut kept, mut found) = strip_program_options(args, ZIP_PROGRAM_OPTIONS, &[]);
+
+    let mut out: Vec<&str> = Vec::with_capacity(kept.len());
+    let mut drop_next = false;
+    for arg in kept.drain(..) {
+        if drop_next {
+            drop_next = false; // the command `-TT` named
+            continue;
+        }
+        if bundles_double_t(arg) {
+            found = true;
+            drop_next = true;
+        }
+        out.push(arg);
+    }
+    (out, found)
+}
+
+/// Does this short-option bundle contain `TT`?
+fn bundles_double_t(arg: &str) -> bool {
+    let Some(bundle) = arg.strip_prefix('-') else {
+        return false;
+    };
+    if bundle.starts_with('-') {
+        return false; // a long option
+    }
+    let mut previous_was_t = false;
+    for ch in bundle.chars() {
+        if previous_was_t && ch == 'T' {
+            return true;
+        }
+        if ZIP_VALUE_SHORTS.contains(&ch) {
+            return false; // the rest of the token is this option's value
+        }
+        previous_was_t = ch == 'T';
+    }
+    false
+}
 
 pub(super) struct ZipParser;
 impl CommandParser for ZipParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
+        let (args, runs_a_program) = strip_unzip_command(args);
         let matches = base_cmd("zip")
             .arg(flag('r', "recurse-paths"))
             .arg(flag('j', "junk-paths"))
@@ -39,7 +97,7 @@ impl CommandParser for ZipParser {
             .arg(val('n', "suffixes"))
             .arg(bool_s('@'))
             .arg(files_arg())
-            .try_get_matches_from(args)
+            .try_get_matches_from(&args)
             .map_err(|e| e.to_string())?;
 
         let positionals: Vec<&String> = matches
@@ -50,11 +108,18 @@ impl CommandParser for ZipParser {
         let mut reads = Vec::new();
         let mut writes = Vec::new();
 
+        // -r walks directory operands.
+        let recursion = if matches.get_count("recurse-paths") > 0 {
+            Recursion::Yes
+        } else {
+            Recursion::No
+        };
+
         // First positional is the archive (write), rest are files to add (read)
         if let Some((archive, sources)) = positionals.split_first() {
             writes.push(resolve(archive, cwd));
             for src in sources {
-                reads.push(resolve(src, cwd));
+                reads.push(resolve_scoped(src, cwd, recursion));
             }
         }
 
@@ -62,7 +127,7 @@ impl CommandParser for ZipParser {
             reads,
             writes,
             inline_script_start: None,
-            file_only: None,
+            file_only: if runs_a_program { Some(false) } else { None },
             ..Default::default()
         })
     }
@@ -104,10 +169,13 @@ impl CommandParser for UnzipParser {
             reads.push(resolve(archive, cwd));
         }
 
-        // -d DIR → write destination
-        if let Some(dir) = matches.get_one::<String>("directory") {
-            writes.push(resolve(dir, cwd));
-        }
+        // Extraction unpacks a whole tree into -d DIR, or into the working
+        // directory when -d is absent.
+        let dest = matches
+            .get_one::<String>("directory")
+            .map(|s| s.as_str())
+            .unwrap_or(cwd);
+        writes.push(resolve_scoped(dest, cwd, Recursion::Yes));
 
         Ok(CommandFileAccesses {
             reads,
@@ -195,6 +263,11 @@ impl CommandParser for PatchParser {
 pub(super) struct SplitParser;
 impl CommandParser for SplitParser {
     fn parse(&self, args: &[&str], cwd: &str) -> Result<CommandFileAccesses, String> {
+        // `--filter=CMD` pipes every output chunk through a shell command
+        // instead of writing a file. Stripped before clap so an abbreviation
+        // still resolves and the input file access survives.
+        let (args, runs_a_program) = strip_program_options(args, &["filter"], &[]);
+        let args: &[&str] = &args;
         let matches = base_cmd("split")
             .arg(val('b', "bytes"))
             .arg(val('C', "line-bytes"))
@@ -226,7 +299,9 @@ impl CommandParser for SplitParser {
             reads,
             writes: Vec::new(),
             inline_script_start: None,
-            file_only: None,
+            // GNU-only — BSD split has no long options — but treated as
+            // exec-capable everywhere, on the same reasoning as `tar -I`.
+            file_only: if runs_a_program { Some(false) } else { None },
             ..Default::default()
         })
     }
