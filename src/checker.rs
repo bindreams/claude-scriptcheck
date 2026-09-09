@@ -589,21 +589,25 @@ fn find_covers<F: PathFilter>(bucket: &[F], scope: &AccessScope) -> Option<Strin
 /// suggestion is `Read(D/**)`, which also covers the subtree root.
 ///
 /// A symlink-following walk has no such rule: it can reach outside the tree it
-/// names, so `covers` rejects every path pattern. Saying `Read(D/**)` there
-/// would send the user round a loop — they add the rule, rerun, and are asked
-/// again — so that case names the rule shape that does resolve it instead.
+/// names, so `covers` rejects every path pattern. Naming a `Read`/`Write` rule
+/// there would send the user round a loop — they add it, rerun, and are asked
+/// again — so that case names `Bash(...)`, the only rule that does resolve it.
+/// It must not offer `display()`'s `<dir>/**+symlinks` either: that is a label,
+/// not a glob any rule can use.
 fn rule_suggestion(kind: AccessKind, scope: &AccessScope) -> String {
-    let shown = scope.display();
+    let kind_name = match kind {
+        AccessKind::Read => "Read",
+        AccessKind::Write => "Write",
+    };
     if let AccessScope::UnboundedSubtree(dir) = scope {
+        let dir = dir.trim_end_matches('/');
         return format!(
-            "Read({dir}/**) -- follows symlinks out of the tree, so no Read/Write rule \
-             can cover it; allow the command with a Bash(...) rule instead",
+            "Bash(...) -- this {} of {dir} follows symlinks out of the tree, so no \
+             {kind_name} rule can cover it; allow the command itself instead",
+            kind_name.to_lowercase(),
         );
     }
-    match kind {
-        AccessKind::Read => format!("Read({shown})"),
-        AccessKind::Write => format!("Write({shown})"),
-    }
+    format!("{kind_name}({})", scope.display())
 }
 
 // ─── Redirect file access extraction ─────────────────────────────────────────

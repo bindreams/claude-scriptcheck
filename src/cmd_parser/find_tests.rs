@@ -301,3 +301,60 @@ fn find_delete_and_fprint_record_both() {
         [sub(&["/cwd/."]), exact(&["/tmp/leak"])].concat(),
     );
 }
+
+// -files0-from ========================================================================================================
+
+#[skuld::test]
+fn find_files0_from_requires_bash_rule() {
+    // The starting points come from a file, so no path the parser can see
+    // describes what the walk touches — and `-delete` would then delete
+    // unchecked paths.
+    let result = FindParser
+        .parse(&["-files0-from", "list", "-delete"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}
+
+#[skuld::test]
+fn find_files0_from_reads_the_list_file() {
+    let result = FindParser
+        .parse(&["-files0-from", "list", "-type", "f"], "/cwd")
+        .unwrap();
+    assert!(
+        result
+            .reads
+            .contains(&AccessScope::Exact("/cwd/list".to_string())),
+        "{:?}",
+        result.reads,
+    );
+}
+
+#[skuld::test]
+fn find_files0_from_is_not_a_search_path() {
+    // The flag and its operand must not be mistaken for starting points.
+    let result = FindParser
+        .parse(&["-files0-from", "list", "-type", "f"], "/cwd")
+        .unwrap();
+    assert!(
+        !result
+            .reads
+            .contains(&AccessScope::Subtree("/cwd/-files0-from".to_string())),
+        "{:?}",
+        result.reads,
+    );
+    assert!(
+        !result
+            .reads
+            .contains(&AccessScope::Subtree("/cwd/list".to_string())),
+        "{:?}",
+        result.reads,
+    );
+}
+
+#[skuld::test]
+fn find_files0_from_stdin_requires_bash_rule() {
+    let result = FindParser
+        .parse(&["-files0-from", "-", "-type", "f"], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}

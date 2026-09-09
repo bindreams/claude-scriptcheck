@@ -390,13 +390,13 @@ fn tar_create_without_change_dir_still_uses_cwd() {
 }
 
 #[skuld::test]
-fn tar_extract_records_every_change_dir_as_a_write() {
-    // Members following each `-C` extract into that directory, so all of them
-    // are write destinations. An absolute `-C` replaces the previous one.
+fn tar_extract_without_members_uses_the_last_change_dir() {
+    // Verified against GNU tar 1.35: with no member operands everything lands
+    // in the directory in effect at the end — /d1 stays empty.
     let result = TarParser
         .parse(&["-xf", "a.tar", "-C", "/d1", "-C", "/d2"], "/cwd")
         .unwrap();
-    assert_eq!(result.writes, sub(&["/d1", "/d2"]));
+    assert_eq!(result.writes, sub(&["/d2"]));
 }
 
 #[skuld::test]
@@ -404,5 +404,24 @@ fn tar_extract_relative_change_dir_composes() {
     let result = TarParser
         .parse(&["-xf", "a.tar", "-C", "/d1", "-C", "sub"], "/cwd")
         .unwrap();
-    assert_eq!(result.writes, sub(&["/d1", "/d1/sub"]));
+    assert_eq!(result.writes, sub(&["/d1/sub"]));
+}
+
+#[skuld::test]
+fn tar_extract_members_before_a_change_dir_land_in_the_cwd() {
+    // Verified: `tar -xf a.tar m1 -C sub m2` writes m1 under the working
+    // directory and m2 under sub. Recording only `sub` left the cwd write
+    // unchecked.
+    let result = TarParser
+        .parse(&["-xf", "a.tar", "m1", "-C", "sub", "m2"], "/cwd")
+        .unwrap();
+    assert_eq!(result.writes, sub(&["/cwd", "/cwd/sub"]));
+}
+
+#[skuld::test]
+fn tar_extract_members_share_one_destination() {
+    let result = TarParser
+        .parse(&["-xf", "a.tar", "m1", "m2"], "/cwd")
+        .unwrap();
+    assert_eq!(result.writes, sub(&["/cwd"]));
 }

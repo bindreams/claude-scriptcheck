@@ -69,9 +69,21 @@ impl CommandParser for FindParser {
         };
         writes.extend(written_files(rest, cwd));
 
-        // A walk that runs a program is not file-only, however tame the paths
-        // it touches look.
-        let file_only = if runs_a_program(rest) {
+        // `-files0-from FILE` takes the starting points from FILE (or stdin for
+        // `-`), so nothing in the argument list describes what the walk
+        // touches. The list itself is a read; the walk needs a `Bash(...)` rule,
+        // because a `-delete` driven by it would otherwise reach unchecked
+        // paths.
+        let list_file = files0_from(rest);
+        if let Some(path) = list_file {
+            if path != "-" {
+                reads.push(resolve(path, cwd));
+            }
+        }
+
+        // A walk that runs a program, or whose starting points are not visible,
+        // is not file-only however tame the paths it names look.
+        let file_only = if runs_a_program(rest) || list_file.is_some() {
             Some(false)
         } else {
             None
@@ -112,6 +124,15 @@ fn written_files(expression: &[&str], cwd: &str) -> Vec<AccessScope> {
         }
     }
     writes
+}
+
+/// The operand of `-files0-from`, if present. GNU find reads NUL-separated
+/// starting points from that file, so the walk's roots are not in the argument
+/// list at all.
+fn files0_from<'a>(expression: &[&'a str]) -> Option<&'a str> {
+    let index = expression.iter().position(|arg| *arg == "-files0-from")?;
+    // A trailing `-files0-from` with no operand still hides the roots.
+    Some(expression.get(index + 1).copied().unwrap_or("-"))
 }
 
 /// Does this expression run an arbitrary program? `-exec`/`-execdir` run one per
@@ -177,6 +198,7 @@ fn is_find_expression_token(arg: &str) -> bool {
         | "-noleaf"
         | "-daystart"
         | "-follow"
+        | "-files0-from"
         | "-warn"
         | "-nowarn"
         | "-regextype"

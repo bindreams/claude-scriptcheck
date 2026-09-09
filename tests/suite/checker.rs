@@ -2232,3 +2232,43 @@ fn unbounded_subtree_suggestion_does_not_name_an_unusable_rule() {
         "suggestion should point at a rule that can actually work, got: {suggestion}",
     );
 }
+
+// ── Missing-rule suggestions ────────────────────────────────────────────────
+
+#[skuld::test]
+fn unbounded_write_suggestion_names_write_not_read() {
+    // A symlink-following recursive *write* must not be described with a Read
+    // rule; the suggestion has to match the access it came from.
+    let perms = make_perms(&[], &[]);
+    let accesses = [FileAccess::scoped(
+        AccessScope::UnboundedSubtree("/a/b".to_string()),
+        AccessKind::Write,
+    )];
+    let result = check_file_accesses(&accesses, &perms, "/cwd");
+    let suggestion = result.missing_rules.join(" ");
+    assert!(
+        !suggestion.contains("Read("),
+        "write access suggested a Read rule: {suggestion}",
+    );
+    assert!(
+        suggestion.contains("Bash("),
+        "suggestion should name the rule shape that resolves it: {suggestion}",
+    );
+}
+
+#[skuld::test]
+fn unbounded_suggestion_has_no_unusable_pattern() {
+    // `display()` renders an unbounded subtree as `<dir>/**+symlinks`, which is
+    // not a glob any rule can use. It must not be handed to the user as one.
+    let perms = make_perms(&[], &[]);
+    let accesses = [FileAccess::scoped(
+        AccessScope::UnboundedSubtree("/a/b".to_string()),
+        AccessKind::Read,
+    )];
+    let result = check_file_accesses(&accesses, &perms, "/cwd");
+    let suggestion = result.missing_rules.join(" ");
+    assert!(
+        !suggestion.contains("+symlinks"),
+        "suggestion contains a pattern no rule can use: {suggestion}",
+    );
+}

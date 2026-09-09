@@ -332,3 +332,66 @@ fn grep_has_no_preprocessor_flag() {
     let result = GrepParser.parse(&["-rn", "TOKEN", "."], "/cwd").unwrap();
     assert_eq!(result.file_only, None);
 }
+
+// Repeated flags ======================================================================================================
+
+#[skuld::test]
+fn rg_repeated_pre_checks_every_occurrence() {
+    // ripgrep takes the last `--pre`, so an empty one first does not disable
+    // the real one (verified against rg 15.2.0). Any non-empty occurrence has
+    // to count.
+    for args in [
+        vec!["--pre", "", "--pre", "/tmp/evil.sh", "TOKEN", "."],
+        vec!["--pre", "/tmp/evil.sh", "--pre", "", "TOKEN", "."],
+    ] {
+        let result = RgParser.parse(&args, "/cwd").unwrap();
+        assert_eq!(result.file_only, Some(false), "{args:?}");
+    }
+}
+
+#[skuld::test]
+fn rg_repeated_hostname_bin_checks_every_occurrence() {
+    let result = RgParser
+        .parse(
+            &[
+                "--hostname-bin",
+                "",
+                "--hostname-bin",
+                "/tmp/evil.sh",
+                "TOKEN",
+                ".",
+            ],
+            "/cwd",
+        )
+        .unwrap();
+    assert_eq!(result.file_only, Some(false));
+}
+
+#[skuld::test]
+fn rg_all_empty_pre_stays_file_only() {
+    let result = RgParser
+        .parse(&["--pre", "", "--pre", "", "TOKEN", "."], "/cwd")
+        .unwrap();
+    assert_eq!(result.file_only, None);
+}
+
+#[skuld::test]
+fn grep_repeated_directories_flag_checks_every_occurrence() {
+    // GNU grep takes the last `-d`, so `-d skip -d recurse` recurses (verified).
+    // Any `recurse` occurrence is treated as recursive.
+    for args in [
+        vec!["-d", "skip", "-d", "recurse", "TOKEN", "src"],
+        vec!["-d", "recurse", "-d", "skip", "TOKEN", "src"],
+    ] {
+        let result = GrepParser.parse(&args, "/cwd").unwrap();
+        assert_eq!(result.reads, sub(&["/cwd/src"]), "{args:?}");
+    }
+}
+
+#[skuld::test]
+fn grep_repeated_non_recursive_directories_stays_exact() {
+    let result = GrepParser
+        .parse(&["-d", "skip", "-d", "read", "TOKEN", "src"], "/cwd")
+        .unwrap();
+    assert_eq!(result.reads, reads(&["/cwd/src"]));
+}

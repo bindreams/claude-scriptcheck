@@ -28,7 +28,6 @@ impl CommandParser for TarParser {
         // 1.35), so the directory is carried along and each operand is paired
         // with the one in effect where it appeared.
         let mut current_dir = cwd.to_string();
-        let mut change_dirs: Vec<String> = Vec::new();
         let mut file_args: Vec<(&str, String)> = Vec::new();
         let mut i = 0;
 
@@ -79,7 +78,6 @@ impl CommandParser for TarParser {
                 }
                 if need_dir && i < args.len() {
                     current_dir = resolve_str(args[i], &current_dir);
-                    change_dirs.push(current_dir.clone());
                     i += 1;
                 }
                 if need_program && i < args.len() {
@@ -128,7 +126,6 @@ impl CommandParser for TarParser {
                     Some("directory") => {
                         if let Some(dir) = take_value(&mut i) {
                             current_dir = resolve_str(dir, &current_dir);
-                            change_dirs.push(current_dir.clone());
                         }
                     }
                     // Unresolvable: an unknown option, or an abbreviation the
@@ -174,7 +171,6 @@ impl CommandParser for TarParser {
                             };
                             if let Some(dir) = dir {
                                 current_dir = resolve_str(&dir, &current_dir);
-                                change_dirs.push(current_dir.clone());
                             }
                             break;
                         }
@@ -216,16 +212,20 @@ impl CommandParser for TarParser {
             }
         }
 
-        // Extraction unpacks a whole tree into -C DIR, or into the working
-        // directory when -C is absent. Members following each `-C` land in that
-        // directory, so every one of them is a destination.
+        // Extraction unpacks a whole tree into the directory in effect for each
+        // member operand — `tar -xf a.tar m1 -C sub m2` puts m1 under the
+        // working directory and m2 under `sub` (verified against GNU tar 1.35).
+        // With no member operands every member lands in the directory in effect
+        // at the end.
         if mode == TarMode::Extract {
-            if change_dirs.is_empty() {
-                writes.push(resolve_scoped(cwd, cwd, Recursion::Yes));
+            let mut destinations: Vec<&str> = if file_args.is_empty() {
+                vec![current_dir.as_str()]
             } else {
-                for dest in &change_dirs {
-                    writes.push(resolve_scoped(dest, cwd, Recursion::Yes));
-                }
+                file_args.iter().map(|(_, dir)| dir.as_str()).collect()
+            };
+            destinations.dedup();
+            for dest in destinations {
+                writes.push(resolve_scoped(dest, cwd, Recursion::Yes));
             }
         }
 
