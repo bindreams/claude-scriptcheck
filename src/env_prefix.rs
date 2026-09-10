@@ -64,13 +64,24 @@ const INERT: &[&str] = &[
     "RUST_LOG",
     // Environment self-description.
     "CI",
-    "TZ",
 ];
 
 /// The one prefix-matched namespace. POSIX reserves `LC_*` for locale
-/// categories, so the namespace is closed: every member selects a locale, and
-/// none of them names a path. `LOCPATH` and `NLSPATH`, which do name paths,
-/// are deliberately outside it.
+/// categories, and `LOCPATH` / `NLSPATH` — which do name paths — are outside
+/// it by construction.
+///
+/// **Named residual, accepted deliberately.** This is not quite "closed": a
+/// locale *name* containing a slash is implementation-defined under POSIX, and
+/// glibc resolves locale data through files, so `LANG` and `LC_*` do influence
+/// which files a process opens. They are kept inert anyway because the surface
+/// they reach is locale-data parsing rather than execution, and because they
+/// are the highest-value entries here by a wide margin — they remove 17 of the
+/// 28 worst-case prompts measured over 53,724 real invocations, against 37
+/// occurrences of `LC_ALL` and 7 of `LANG` in that corpus. `TZ` was removed
+/// from the inert list for the mirror-image reason: `TZ=:/path` names a file
+/// under POSIX, so it fails criterion (b), and it occurred zero times in the
+/// corpus — so keeping it bought nothing and cost consistency with the stated
+/// criterion.
 const INERT_PREFIX: &str = "LC_";
 
 /// True when an assignment to `name` provably cannot change what a command
@@ -110,7 +121,6 @@ mod tests {
                 "RUST_LOG",
                 "PYTHONUNBUFFERED",
                 "CI",
-                "TZ",
             ],
             true,
         );
@@ -134,6 +144,14 @@ mod tests {
             ],
             false,
         );
+    }
+
+    #[test]
+    fn tz_is_not_inert_because_it_can_name_a_file() {
+        // `TZ=:/etc/localtime` names a file the process reads, so it fails
+        // criterion (b). Zero occurrences in the measured corpus, so excluding
+        // it costs nothing.
+        assert!(!is_inert("TZ"));
     }
 
     #[test]

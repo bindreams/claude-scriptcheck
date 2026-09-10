@@ -2281,12 +2281,6 @@ fn unbounded_suggestion_has_no_unusable_pattern() {
 // Like every other secondary demand, a matching `Bash(...)` allow rule
 // suppresses it.
 
-/// The environment note appended to a missing-rule suggestion when the
-/// assignment prefix is the reason a `Bash(...)` rule is demanded.
-fn env_note(rule: &str, names: &str) -> String {
-    format!("{rule} -- environment assignment(s) {names} can change what this command runs")
-}
-
 #[skuld::test]
 fn git_external_diff_prefix_asks_with_no_rules() {
     // `git diff` is correctly classified read-only; GIT_EXTERNAL_DIFF makes it
@@ -2294,8 +2288,7 @@ fn git_external_diff_prefix_asks_with_no_rules() {
     let d = check("GIT_EXTERNAL_DIFF=./evil.sh git diff", &[], &[]);
     assert_eq!(d.decision, Decision::Ask);
     assert!(
-        d.missing_rules
-            .contains(&env_note("Bash(git diff)", "GIT_EXTERNAL_DIFF")),
+        d.missing_rules.iter().any(|r| r == "Bash(git diff)"),
         "missing_rules: {:?}",
         d.missing_rules,
     );
@@ -2544,4 +2537,79 @@ fn positions_the_checker_already_reached_are_unchanged() {
         let d = check(cmd, &["Bash(cat *)", "Bash(echo *)"], &["Bash(rm *)"]);
         assert!(matches!(d.decision, Decision::Deny(_)), "{cmd}: {d:?}");
     }
+}
+
+// ── The funnel's second storey (#58) ────────────────────────────────────────
+//
+// `check_fragment_command_subs` had a `_ => {}` arm and descended into two of
+// nine fragment shapes, so a substitution one level deeper than `$(...)`
+// escaped a funnel that was reaching the word correctly. The match is now
+// exhaustive. Two carriers genuinely hold parsed substitutions and are closed
+// here; the `${x:-...}` and `$(( ))` families are unreached for a different
+// reason — thaum stores their interior as a `Literal` — and are #69.
+
+#[skuld::test]
+fn deny_fires_inside_a_locale_quoted_substitution() {
+    let d = check("X=$\"$(rm -rf /tmp/zzz)\"", &[], &["Bash(rm *)"]);
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn deny_fires_inside_a_brace_expansion_alternative() {
+    let d = check("X={a,$(rm -rf /tmp/zzz)}", &[], &["Bash(rm *)"]);
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn deny_fires_inside_a_brace_expansion_in_an_argument() {
+    let d = check(
+        "cat {a,$(rm -rf /tmp/zzz)}",
+        &["Bash(cat *)"],
+        &["Bash(rm *)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn parameter_default_family_is_documented_as_unreached() {
+    // Pins the *known* state rather than the desired one. thaum parses the
+    // argument of `${Y:-...}` as a single Literal, so no descent can reach the
+    // substitution — see #69. If thaum starts parsing it, this test flips to
+    // Deny and the `Parameter` arm already added will carry it; update the
+    // test then, and do not "fix" it by widening the Literal handling, which
+    // costs 208 false positives per 48,814 commands (measured).
+    let d = check("X=${Y:-$(rm -rf /tmp/zzz)}", &[], &["Bash(rm *)"]);
+    assert_eq!(
+        d.decision,
+        Decision::Allow,
+        "unreached-position pin: if this now denies, thaum parses the argument \
+         and the test should assert Deny — see #69",
+    );
+}
+
+#[skuld::test]
+fn env_prefix_note_does_not_masquerade_as_a_pastable_rule() {
+    // The suggestion must be pastable on its own; the explanation is a
+    // separate entry that no one can mistake for a rule.
+    let d = check("GIT_EXTERNAL_DIFF=./evil.sh git diff", &[], &[]);
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(
+        d.missing_rules.iter().any(|r| r == "Bash(git diff)"),
+        "expected a bare pastable rule, got {:?}",
+        d.missing_rules,
+    );
+    assert!(
+        d.missing_rules
+            .iter()
+            .any(|r| r.starts_with("note: environment assignment(s) GIT_EXTERNAL_DIFF")),
+        "expected a separate note entry, got {:?}",
+        d.missing_rules,
+    );
+    // And pasting the pastable half must actually resolve it.
+    let d = check(
+        "GIT_EXTERNAL_DIFF=./evil.sh git diff",
+        &["Bash(git diff)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Allow, "{d:?}");
 }

@@ -465,15 +465,20 @@ impl PermissionChecker<'_> {
                     items.push(BashFilterItem::MatchZeroOrMore);
                 }
                 let filter = BashFilter::from_items(items);
-                let rule = filter.to_rule_string();
-                self.unmatched.push(if env_forced_the_rule {
-                    format!(
-                        "{rule} -- environment assignment(s) {} can change what this command runs",
+                // The rule string stays pastable on its own. The explanation
+                // goes in a separate entry prefixed `note:`, which sorts after
+                // every `Bash(`/`Read(`/`Write(` entry in `finalize`. Appending
+                // it to the rule made the whole line look pastable, and pasting
+                // it produced the identical ask with no warning — unlike
+                // `Bash(eval ...) -- cannot statically analyze eval`, where the
+                // rule half is not a usable rule either.
+                self.unmatched.push(filter.to_rule_string());
+                if env_forced_the_rule {
+                    self.unmatched.push(format!(
+                        "note: environment assignment(s) {} can change what this command runs",
                         unmodelled_env.join(", "),
-                    )
-                } else {
-                    rule
-                });
+                    ));
+                }
             }
         }
     }
@@ -603,6 +608,18 @@ impl PermissionChecker<'_> {
         (asked, allowed)
     }
 
+    /// The funnel's second storey: descend a fragment into any nested
+    /// substitution it carries.
+    ///
+    /// **This match is deliberately exhaustive — do not add a `_ => {}` arm.**
+    /// It had one, and it silently dropped every fragment shape but two, so a
+    /// substitution one level deeper than `$(...)` escaped a funnel that was
+    /// otherwise reaching it correctly. Listing every variant makes a new
+    /// `Fragment` in thaum a compile error here instead of a new hole.
+    ///
+    /// Some variants are leaves in thaum's grammar and some are leaves only
+    /// because thaum does not parse their interior; the difference matters and
+    /// is noted per arm.
     fn check_fragment_command_subs(&mut self, fragment: &Fragment) {
         if self.denied.is_some() {
             return;
@@ -613,12 +630,46 @@ impl PermissionChecker<'_> {
                     self.visit_statement(stmt);
                 }
             }
-            Fragment::DoubleQuoted(inner) => {
+            // Carriers of further fragments — recurse.
+            Fragment::DoubleQuoted(inner) | Fragment::BashLocaleQuoted(inner) => {
                 for f in inner {
                     self.check_fragment_command_subs(f);
                 }
             }
-            _ => {}
+            Fragment::BashBraceExpansion(BraceExpansionKind::List(alternatives)) => {
+                for alternative in alternatives {
+                    for f in alternative {
+                        self.check_fragment_command_subs(f);
+                    }
+                }
+            }
+            // `${x:-word}` and friends. thaum currently stores the argument's
+            // interior as a single `Literal` rather than parsing it, so today
+            // this arm finds nothing for `${Y:-$(rm -rf x)}` — that family is
+            // unreached and tracked in #69. The arm is here so the descent is
+            // correct the moment thaum parses the argument, rather than needing
+            // to be rediscovered then.
+            Fragment::Parameter(ParameterExpansion::Complex {
+                argument: Some(word),
+                ..
+            }) => {
+                for f in &word.parts {
+                    self.check_fragment_command_subs(f);
+                }
+            }
+            // True leaves: no nested fragments in the grammar.
+            Fragment::Literal(_)
+            | Fragment::SingleQuoted(_)
+            | Fragment::BashAnsiCQuoted(_)
+            | Fragment::Glob(_)
+            | Fragment::TildePrefix(_)
+            | Fragment::Parameter(ParameterExpansion::Simple(_))
+            | Fragment::Parameter(ParameterExpansion::Complex { argument: None, .. })
+            | Fragment::BashBraceExpansion(BraceExpansionKind::Sequence { .. }) => {}
+            // Leaves only because thaum keeps their interior as a string:
+            // `$(( $(...) ))` and `@( $(...) )` are unreachable from here at
+            // any call depth. Tracked in #69 with the `${x:-...}` family.
+            Fragment::ArithmeticExpansion(_) | Fragment::BashExtGlob { .. } => {}
         }
     }
 }
