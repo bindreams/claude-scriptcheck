@@ -2426,7 +2426,11 @@ fn bash_allow_rule_suppresses_the_prefix_demand() {
     let d = check("SKULD_LABELS=x cargo nextest run", &["Bash(cargo *)"], &[]);
     assert_eq!(d.decision, Decision::Allow, "{d:?}");
 
-    let d = check("GIT_EXTERNAL_DIFF=./evil.sh git diff", &["Bash(git *)"], &[]);
+    let d = check(
+        "GIT_EXTERNAL_DIFF=./evil.sh git diff",
+        &["Bash(git *)"],
+        &[],
+    );
     assert_eq!(d.decision, Decision::Allow, "{d:?}");
 }
 

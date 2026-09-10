@@ -3222,7 +3222,10 @@ fn hook_allows_inert_locale_prefix() {
 fn monitor_tool_gets_the_same_treatment_under_a_prefix() {
     // Monitor is a transparent wrapper around Bash, so the prefix must be read
     // identically rather than slipping through the other tool name.
-    let output = run_binary(&hook_json("Monitor", "GIT_EXTERNAL_DIFF=./evil.sh git diff"));
+    let output = run_binary(&hook_json(
+        "Monitor",
+        "GIT_EXTERNAL_DIFF=./evil.sh git diff",
+    ));
     assert_ne!(parse_decision(&output), "allow");
 }
 
