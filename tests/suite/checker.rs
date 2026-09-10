@@ -2272,3 +2272,173 @@ fn unbounded_suggestion_has_no_unusable_pattern() {
         "suggestion contains a pattern no rule can use: {suggestion}",
     );
 }
+
+// ── Environment assignment prefixes (#58) ───────────────────────────────────
+//
+// A command's effects come from its argv *and* its environment. An assignment
+// to a variable that is not provably inert makes the invocation not file-only,
+// so a `Bash(...)` rule is required — the same guardrail `find -exec` gets.
+// Like every other secondary demand, a matching `Bash(...)` allow rule
+// suppresses it.
+
+/// The environment note appended to a missing-rule suggestion when the
+/// assignment prefix is the reason a `Bash(...)` rule is demanded.
+fn env_note(rule: &str, names: &str) -> String {
+    format!("{rule} -- environment assignment(s) {names} can change what this command runs")
+}
+
+#[skuld::test]
+fn git_external_diff_prefix_asks_with_no_rules() {
+    // `git diff` is correctly classified read-only; GIT_EXTERNAL_DIFF makes it
+    // run an arbitrary program. Verified against real git: the script runs.
+    let d = check("GIT_EXTERNAL_DIFF=./evil.sh git diff", &[], &[]);
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(
+        d.missing_rules
+            .contains(&env_note("Bash(git diff)", "GIT_EXTERNAL_DIFF")),
+        "missing_rules: {:?}",
+        d.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn git_pager_prefix_asks_with_no_rules() {
+    let d = check("GIT_PAGER=./evil.sh git log", &[], &[]);
+    assert_eq!(d.decision, Decision::Ask);
+}
+
+#[skuld::test]
+fn pager_prefix_asks_with_no_rules() {
+    let d = check("PAGER=./evil.sh git log", &[], &[]);
+    assert_eq!(d.decision, Decision::Ask);
+}
+
+#[skuld::test]
+fn ld_preload_prefix_asks_for_a_bash_rule() {
+    // LD_PRELOAD subverts any dynamically linked command, so no per-command
+    // reasoning could have caught this one. `ls` is file-only, and satisfying
+    // its Read demand must not be enough.
+    let d = check(
+        "LD_PRELOAD=./evil.so ls",
+        &[&format!("Read({}/**)", c("/tmp"))],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(
+        d.missing_rules.iter().any(|r| r.starts_with("Bash(ls)")),
+        "missing_rules: {:?}",
+        d.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn tar_options_prefix_asks_for_every_spelling() {
+    // GNU tar 1.35 executes all of these (verified in a container). #44
+    // already guards the same option on the command line, prefix-matched for
+    // exactly these abbreviations; through the environment it was unguarded.
+    // The Read/Write rules satisfy the file demands, so the prefix is the only
+    // thing left that can fire.
+    for prefix in [
+        "TAR_OPTIONS=--use-compress-program=./evil.sh",
+        "TAR_OPTIONS=--use=./evil.sh",
+        "TAR_OPTIONS=-I./evil.sh",
+    ] {
+        let d = check(
+            &format!("{prefix} tar -cf a.tar f.txt"),
+            &[
+                &format!("Read({}/**)", c("/tmp")),
+                &format!("Write({}/**)", c("/tmp")),
+            ],
+            &[],
+        );
+        assert_eq!(d.decision, Decision::Ask, "{prefix}");
+        assert!(
+            d.missing_rules.iter().any(|r| r.starts_with("Bash(")),
+            "{prefix} missing_rules: {:?}",
+            d.missing_rules,
+        );
+    }
+}
+
+#[skuld::test]
+fn ripgrep_config_path_prefix_asks() {
+    // The config file's contents are read as arguments, so `--pre` arrives
+    // from a file rather than the command line. Verified against real rg.
+    let d = check(
+        "RIPGREP_CONFIG_PATH=./evil.conf rg foo src",
+        &[&format!("Read({}/**)", c("/tmp"))],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(
+        d.missing_rules.iter().any(|r| r.starts_with("Bash(")),
+        "missing_rules: {:?}",
+        d.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn deny_still_fires_under_a_prefix() {
+    let d = check(
+        "GIT_EXTERNAL_DIFF=./evil.sh git diff",
+        &[],
+        &["Bash(git *)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+// Control direction. Each of these must keep the verdict it has today; a fix
+// that prompts on ordinary `VAR=x cmd` usage would drive users to blanket
+// `Bash(...)` rules and leave them worse off than the hole did.
+
+#[skuld::test]
+fn inert_locale_prefix_does_not_demand_a_bash_rule() {
+    for cmd in ["LC_ALL=C sort f", "LANG=C sort f", "LC_COLLATE=C sort f"] {
+        let d = check(cmd, &[&format!("Read({}/**)", c("/tmp"))], &[]);
+        assert_eq!(d.decision, Decision::Allow, "{cmd}: {d:?}");
+    }
+}
+
+#[skuld::test]
+fn prefix_adds_nothing_when_a_bash_rule_was_needed_anyway() {
+    // These already needed `Bash(...)`, so the prefix changes nothing — not
+    // the verdict and not the suggested rule. This is why the fix is free for
+    // the bulk of real usage.
+    for (bare, prefixed) in [
+        ("cargo test", "RUST_LOG=debug cargo test"),
+        ("make", "FOO=1 make"),
+    ] {
+        let plain = check(bare, &[], &[]);
+        let with_prefix = check(prefixed, &[], &[]);
+        assert_eq!(with_prefix.decision, Decision::Ask, "{prefixed}");
+        assert_eq!(
+            with_prefix.missing_rules, plain.missing_rules,
+            "{prefixed} changed the suggested rule",
+        );
+    }
+}
+
+#[skuld::test]
+fn bash_allow_rule_suppresses_the_prefix_demand() {
+    // Consistent with every other secondary demand. This is the D2 decision:
+    // scriptcheck prevents accidents, not malice, and nobody types
+    // `GIT_EXTERNAL_DIFF=./evil.sh` by accident.
+    let d = check("SKULD_LABELS=x cargo nextest run", &["Bash(cargo *)"], &[]);
+    assert_eq!(d.decision, Decision::Allow, "{d:?}");
+
+    let d = check("GIT_EXTERNAL_DIFF=./evil.sh git diff", &["Bash(git *)"], &[]);
+    assert_eq!(d.decision, Decision::Allow, "{d:?}");
+}
+
+#[skuld::test]
+fn assignment_only_command_needs_no_bash_rule() {
+    // `FOO=bar` alone sets a shell variable; it runs no program and reaches no
+    // child's environment.
+    assert_eq!(check("FOO=bar", &[], &[]).decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn ask_bash_rule_still_forces_the_full_flow_under_a_prefix() {
+    let d = check_with_ask("LC_ALL=C ls", &["Bash(ls *)"], &[], &["Bash(ls *)"]);
+    assert_eq!(d.decision, Decision::Ask, "{d:?}");
+}

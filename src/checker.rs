@@ -2,6 +2,7 @@ use thaum::ast::*;
 use thaum::visit::Visit;
 
 use crate::cmd_parser::{self, CmdParseResult};
+use crate::env_prefix;
 use crate::file_access::{self, AccessKind, AccessScope, FileAccess};
 use crate::filter::{Arg0Pattern, BashFilter, BashFilterItem, Filter, PathFilter};
 use crate::permission::ParsedPermissions;
@@ -368,9 +369,23 @@ impl PermissionChecker<'_> {
         //   3. the parser didn't fail (we trust the extracted accesses).
         // Similarly, when Python AST analysis succeeded, the Bash() rule is suppressed.
         if !bash_allowed && !parse_failed {
+            // The command's environment is a second input channel, and argv
+            // does not describe it. An assignment to a variable that is not
+            // provably inert can make an otherwise file-only invocation run an
+            // arbitrary program — `GIT_EXTERNAL_DIFF=./evil.sh git diff` — so
+            // it is not file-only, exactly as `find -exec` is not. The list is
+            // of inert names rather than dangerous ones because no enumeration
+            // of dangerous names terminates; see `env_prefix`.
+            let unmodelled_env: Vec<&str> = cmd
+                .assignments
+                .iter()
+                .map(|a| a.name.as_str())
+                .filter(|name| !env_prefix::is_inert(name))
+                .collect();
+
             let has_file_accesses = !redirect_accesses.is_empty() || !cmd_accesses.is_empty();
             let has_dynamic_args = arg_literals[1..].iter().any(|a| a.is_none());
-            let can_skip = match file_only_override {
+            let can_skip_ignoring_env = match file_only_override {
                 // Parser explicitly declared this invocation's effects.
                 // Trust it even with zero file accesses (e.g. read-only git
                 // subcommands), but still require static args.
@@ -386,6 +401,12 @@ impl PermissionChecker<'_> {
                         && !bash_asked
                 }
             } || (python_analyzed && !bash_asked);
+
+            // Only when the prefix is what tipped the decision does the
+            // suggestion say so. `SKULD_LABELS=… cargo test` needed its
+            // `Bash(cargo *)` rule anyway and keeps the plain message.
+            let env_forced_the_rule = can_skip_ignoring_env && !unmodelled_env.is_empty();
+            let can_skip = can_skip_ignoring_env && unmodelled_env.is_empty();
 
             if !can_skip {
                 // Build a name-form suggestion filter: `Arg0::Name(stripped
@@ -410,7 +431,15 @@ impl PermissionChecker<'_> {
                     items.push(BashFilterItem::MatchZeroOrMore);
                 }
                 let filter = BashFilter::from_items(items);
-                self.unmatched.push(filter.to_rule_string());
+                let rule = filter.to_rule_string();
+                self.unmatched.push(if env_forced_the_rule {
+                    format!(
+                        "{rule} -- environment assignment(s) {} can change what this command runs",
+                        unmodelled_env.join(", "),
+                    )
+                } else {
+                    rule
+                });
             }
         }
     }

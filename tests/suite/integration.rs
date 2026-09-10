@@ -3184,3 +3184,98 @@ fn hook_tar_extract_change_dir_still_denies(#[fixture(temp_dir)] dir: &std::path
         "deny",
     );
 }
+
+// ── Environment assignment prefixes through the real hook path (#58) ────────
+//
+// `run_binary` points the child at a nonexistent home, so these run with
+// completely empty permissions — the frame the issue reports. The expectations
+// come from the issue and from the vectors verified against real git, rg and
+// GNU tar, not from running the new code.
+
+#[skuld::test]
+fn hook_does_not_allow_execution_bearing_env_prefixes() {
+    // The three commands from the issue. Each was confirmed to execute the
+    // named program against real git.
+    for command in [
+        "GIT_EXTERNAL_DIFF=./evil.sh git diff",
+        "GIT_PAGER=./evil.sh git log",
+        "PAGER=./evil.sh git log",
+    ] {
+        let output = run_binary(&hook_json("Bash", command));
+        assert_eq!(output.status.code(), Some(0), "{command}");
+        assert_ne!(parse_decision(&output), "allow", "{command}");
+    }
+}
+
+#[skuld::test]
+fn hook_allows_inert_locale_prefix() {
+    // The sharpest control available: same commands, same auto-allow path the
+    // exploit abuses, differing only in which variable is assigned. Both are
+    // allowed today with no rules and must stay that way.
+    for command in ["LC_ALL=C git status", "LANG=C git diff"] {
+        let output = run_binary(&hook_json("Bash", command));
+        assert_eq!(parse_decision(&output), "allow", "{command}");
+    }
+}
+
+#[skuld::test]
+fn monitor_tool_gets_the_same_treatment_under_a_prefix() {
+    // Monitor is a transparent wrapper around Bash, so the prefix must be read
+    // identically rather than slipping through the other tool name.
+    let output = run_binary(&hook_json("Monitor", "GIT_EXTERNAL_DIFF=./evil.sh git diff"));
+    assert_ne!(parse_decision(&output), "allow");
+}
+
+#[skuld::test]
+fn dont_ask_mode_denies_an_env_prefix() {
+    let output = run_binary(&hook_json_with_mode(
+        "Bash",
+        serde_json::json!({ "command": "GIT_EXTERNAL_DIFF=./evil.sh git diff" }),
+        "/tmp",
+        Some("dontAsk"),
+    ));
+    assert_eq!(parse_decision(&output), "deny");
+    let reason = parse_reason(&output);
+    assert!(
+        reason.contains("GIT_EXTERNAL_DIFF"),
+        "deny reason should name the variable: {reason}",
+    );
+}
+
+#[skuld::test]
+fn bypass_mode_still_allows_an_env_prefix_and_logs_the_missing_rule() {
+    // Mode handling stays at the two pipeline edges: the end-stage transform
+    // turns Ask into Allow, and `missing_rules` survives it so the log still
+    // records what was unmatched. This pins that #58 did not move mode
+    // handling into the middle layer.
+    let log_path = std::env::temp_dir().join(format!(
+        "claude-scriptcheck-env-prefix-bypass-{}.yaml",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&log_path);
+    let log_path_str = log_path.to_string_lossy().to_string();
+
+    let output = run_binary_for_agent_with_env(
+        "claude",
+        &hook_json_with_mode(
+            "Bash",
+            serde_json::json!({ "command": "GIT_EXTERNAL_DIFF=./evil.sh git diff" }),
+            "/tmp",
+            Some("bypassPermissions"),
+        ),
+        &[("CLAUDE_SCRIPTCHECK_LOG_PATH", &log_path_str)],
+    );
+    assert_eq!(parse_decision(&output), "allow");
+
+    // The command text also contains the variable name, so assert on the
+    // `missing_rules` key as well — otherwise this passes for the wrong reason.
+    let log = std::fs::read_to_string(&log_path).unwrap();
+    assert!(log.contains("verdict: allow"), "unexpected log:\n{log}");
+    assert!(log.contains("missing_rules:"), "unexpected log:\n{log}");
+    assert!(
+        log.contains("environment assignment(s) GIT_EXTERNAL_DIFF"),
+        "log should record the unmatched rule:\n{log}",
+    );
+
+    let _ = std::fs::remove_file(&log_path);
+}
