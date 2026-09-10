@@ -151,8 +151,11 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
         if self.denied.is_some() {
             return;
         }
-        if let Some(access) = extract_redirect_access(redirect, self.cwd) {
+        for access in accesses_for_redirect(redirect, self.cwd) {
             self.check_file_access(&access, false);
+            if self.denied.is_some() {
+                return;
+            }
         }
     }
 
@@ -247,12 +250,10 @@ impl PermissionChecker<'_> {
                 if !bash_allowed {
                     self.unmatched.push("Bash(<dynamic command>)".to_string());
                 }
-                for redirect in &cmd.redirects {
-                    if let Some(access) = extract_redirect_access(redirect, self.cwd) {
-                        self.check_file_access(&access, bash_allowed);
-                        if self.denied.is_some() {
-                            return;
-                        }
+                for access in extract_redirect_accesses(&cmd.redirects, self.cwd) {
+                    self.check_file_access(&access, bash_allowed);
+                    if self.denied.is_some() {
+                        return;
                     }
                 }
                 return;
@@ -612,31 +613,93 @@ fn rule_suggestion(kind: AccessKind, scope: &AccessScope) -> String {
 
 // ─── Redirect file access extraction ─────────────────────────────────────────
 
-fn extract_redirect_access(redirect: &Redirect, cwd: &str) -> Option<FileAccess> {
-    let (word, kind) = match &redirect.kind {
-        RedirectKind::Input(w) => (Some(w), AccessKind::Read),
-        RedirectKind::Output(w) | RedirectKind::Clobber(w) => (Some(w), AccessKind::Write),
-        RedirectKind::Append(w) => (Some(w), AccessKind::Write),
-        RedirectKind::ReadWrite(w) => (Some(w), AccessKind::Write),
-        RedirectKind::BashOutputAll(w) | RedirectKind::BashAppendAll(w) => {
-            (Some(w), AccessKind::Write)
+/// The file accesses one redirect performs.
+///
+/// Empty means the redirect opens no file, and every such arm says why rather
+/// than defaulting. A blanket "fd duplication" arm is what let `>&FILE` reach a
+/// file unchecked, and folding `<>` in with the write-only forms is what kept
+/// `Read` deny rules from firing on it.
+///
+/// A redirect can name a file in more than one way, hence the `Vec`: `<>` opens
+/// one path for both reading and writing.
+fn accesses_for_redirect(redirect: &Redirect, cwd: &str) -> Vec<FileAccess> {
+    use AccessKind::{Read, Write};
+
+    let (word, kinds): (&Word, &[AccessKind]) = match &redirect.kind {
+        RedirectKind::Input(w) => (w, &[Read]),
+        RedirectKind::Output(w) | RedirectKind::Clobber(w) | RedirectKind::Append(w) => {
+            (w, &[Write])
         }
-        RedirectKind::HereDoc { .. } | RedirectKind::BashHereString(_) => return None,
-        RedirectKind::DupInput(_) | RedirectKind::DupOutput(_) => return None,
+        RedirectKind::BashOutputAll(w) | RedirectKind::BashAppendAll(w) => (w, &[Write]),
+        // `<>file` opens the file for reading *and* writing (Bash §3.6.10), so
+        // a `Read` deny rule has to fire on it as well as a `Write` one.
+        RedirectKind::ReadWrite(w) => (w, &[Read, Write]),
+        // The body is inline text — no file is named.
+        RedirectKind::HereDoc { .. } | RedirectKind::BashHereString(_) => return Vec::new(),
+        // `<&word` takes only the descriptor forms `names_a_descriptor` lists
+        // (Bash §3.6.8-9). Any other word is a redirection error, not a file
+        // open: the file special case below is stated for output only.
+        RedirectKind::DupInput(_) => return Vec::new(),
+        RedirectKind::DupOutput(w) => {
+            // Bash §3.6.8: "if n is omitted, and word does not expand to one or
+            // more digits or '-', the standard output and standard error are
+            // redirected" — that is a file write. With n present, or a word
+            // that names a descriptor, nothing is opened.
+            if redirect.fd.is_some() || names_a_descriptor(w) {
+                return Vec::new();
+            }
+            (w, &[Write])
+        }
     };
 
-    let word = word?;
-    let path = word.try_to_static_string()?;
-    Some(FileAccess::exact(
-        file_access::resolve_path(&path, cwd),
-        kind,
-    ))
+    // A target that does not resolve statically is dropped, exactly as before.
+    // Recording it instead is #45's job, and deliberately not this change's.
+    let Some(path) = word.try_to_static_string() else {
+        return Vec::new();
+    };
+    let resolved = file_access::resolve_path(&path, cwd);
+    kinds
+        .iter()
+        .map(|kind| FileAccess::exact(resolved.clone(), *kind))
+        .collect()
+}
+
+/// Does this `>&word` / `<&word` target name a descriptor instead of a file?
+///
+/// Three forms do, and none of them is a filename:
+///
+/// - `digits` — duplicate that descriptor (Bash §3.6.8), `>&2`
+/// - `-` — close the descriptor (§3.6.8), `>&-`
+/// - `digits-` — *move* the descriptor: duplicate, then close the source
+///   (§3.6.9), `>&2-`
+///
+/// The move form is the one worth spelling out, because it only became
+/// load-bearing when `>&FILE` started being treated as a write. Reading its
+/// trailing `-` as part of a filename turns `>&2-` into a write to a file
+/// called `2-`, which a `Deny(Write(...))` over the directory then blocks — a
+/// false deny on a valid command, and no rule the user adds can lift it.
+///
+/// A leading `-` is *not* this: `>&-2` opens a file called `-2`, because the
+/// word is neither digits nor `-`.
+///
+/// A word that does not resolve statically could be any of these or a filename.
+/// Of those readings only the file one needs checking, so it is not treated as
+/// a descriptor.
+fn names_a_descriptor(word: &Word) -> bool {
+    let Some(s) = word.try_to_static_string() else {
+        return false;
+    };
+    if s == "-" {
+        return true;
+    }
+    let digits = s.strip_suffix('-').unwrap_or(&s);
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 fn extract_redirect_accesses(redirects: &[Redirect], cwd: &str) -> Vec<FileAccess> {
     redirects
         .iter()
-        .filter_map(|r| extract_redirect_access(r, cwd))
+        .flat_map(|r| accesses_for_redirect(r, cwd))
         .collect()
 }
 

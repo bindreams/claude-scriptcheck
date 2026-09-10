@@ -2272,3 +2272,193 @@ fn unbounded_suggestion_has_no_unusable_pattern() {
         "suggestion contains a pattern no rule can use: {suggestion}",
     );
 }
+
+// ── Redirect classification ─────────────────────────────────────────────────
+//
+// A redirect names a file, duplicates a descriptor, or carries inline text.
+// Getting that wrong in either direction is expensive: a file read as a
+// descriptor slips past every rule, and a descriptor read as a file produces a
+// deny no rule the user adds can lift.
+
+// `<>` opens for reading and writing (Bash §3.6.10) -------------------------------------------------------------------
+
+#[skuld::test]
+fn read_write_redirect_emits_a_read() {
+    let result = check("cat <> /tmp/x", &[], &[]);
+    assert_eq!(result.decision, Decision::Ask);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Read({})", canonical("/tmp/x"))),
+        "expected a Read demand, got {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn read_write_redirect_emits_a_write() {
+    let result = check("cat <> /tmp/x", &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({})", canonical("/tmp/x"))),
+        "expected a Write demand, got {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn read_write_redirect_fires_a_read_deny() {
+    // The bypass: `<` denied but `<>` did not, one character apart.
+    assert!(matches!(
+        check("cat <> /tmp/x", &["Bash(cat *)"], &["Read(/tmp/**)"]).decision,
+        Decision::Deny(_),
+    ));
+}
+
+#[skuld::test]
+fn read_write_redirect_fires_a_write_deny() {
+    assert!(matches!(
+        check("cat <> /tmp/x", &["Bash(cat *)"], &["Write(/tmp/**)"]).decision,
+        Decision::Deny(_),
+    ));
+}
+
+// `>&word` names a file unless the word names a descriptor (Bash §3.6.8-9) --------------------------------------------
+
+#[skuld::test]
+fn dup_output_to_a_file_is_a_write() {
+    let result = check("cat /tmp/x >&/tmp/out", &["Read(/tmp/x)"], &[]);
+    assert_eq!(result.decision, Decision::Ask);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({})", canonical("/tmp/out"))),
+        "expected a Write demand, got {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn dup_output_to_a_file_fires_a_write_deny() {
+    // The bypass: `>` denied but `>&` did not.
+    assert!(matches!(
+        check(
+            "cat /tmp/x >&/tmp/out",
+            &["Bash(cat *)"],
+            &["Write(/tmp/**)"]
+        )
+        .decision,
+        Decision::Deny(_),
+    ));
+}
+
+#[skuld::test]
+fn leading_dash_word_is_a_file_not_a_descriptor() {
+    // `-2` is neither digits nor `-`, so bash opens a file called `-2`.
+    let result = check("cat /tmp/x >&-2", &["Read(/tmp/x)"], &[]);
+    assert_eq!(result.decision, Decision::Ask);
+    assert!(
+        result.missing_rules.iter().any(|r| r.contains("-2")),
+        "expected a Write demand for the file `-2`, got {:?}",
+        result.missing_rules,
+    );
+}
+
+// Descriptor forms name no file ---------------------------------------------------------------------------------------
+
+#[skuld::test]
+fn descriptor_duplication_and_closing_name_no_file() {
+    // Allow rather than ask is the discriminator: a recorded access would be
+    // unmatched and surface.
+    for cmd in ["cat /tmp/x >&2", "cat /tmp/x >&-", "cat /tmp/x <&3"] {
+        assert_eq!(
+            check(cmd, &["Read(/tmp/x)"], &[]).decision,
+            Decision::Allow,
+            "{cmd}",
+        );
+    }
+}
+
+#[skuld::test]
+fn explicit_fd_duplication_names_no_file() {
+    assert_eq!(
+        check("cat /tmp/x 2>&1", &["Read(/tmp/x)"], &[]).decision,
+        Decision::Allow,
+    );
+}
+
+#[skuld::test]
+fn descriptor_move_names_no_file() {
+    // §3.6.9's move form: duplicate, then close the source. The trailing `-` is
+    // not part of a filename.
+    for cmd in ["cat /tmp/x >&2-", "cat /tmp/x >&1-", "cat /tmp/x <&0-"] {
+        assert_eq!(
+            check(cmd, &["Read(/tmp/x)"], &[]).decision,
+            Decision::Allow,
+            "{cmd}",
+        );
+    }
+}
+
+#[skuld::test]
+fn descriptor_move_does_not_trigger_a_write_deny() {
+    // Reading `2-` as a filename would deny a valid command, and a deny is
+    // authoritative in every mode — no rule the user adds can lift it.
+    assert_eq!(
+        check("cat /tmp/x >&2-", &["Read(/tmp/x)"], &["Write(/tmp/**)"]).decision,
+        Decision::Allow,
+    );
+}
+
+#[skuld::test]
+fn dup_input_from_a_non_numeric_word_names_no_file() {
+    // `<&word` takes only descriptor forms; any other word is a redirection
+    // error, not a file open. The `>&` file special case is output-only.
+    assert_eq!(
+        check("cat /tmp/x <&/tmp/other", &["Read(/tmp/x)"], &[]).decision,
+        Decision::Allow,
+    );
+}
+
+// Inline-text redirects name no file ----------------------------------------------------------------------------------
+
+#[skuld::test]
+fn here_string_and_here_doc_name_no_file() {
+    assert_eq!(
+        check("cat /tmp/x <<< hi", &["Read(/tmp/x)"], &[]).decision,
+        Decision::Allow,
+    );
+}
+
+// Unchanged arms ------------------------------------------------------------------------------------------------------
+
+#[skuld::test]
+fn ordinary_redirect_arms_are_unchanged() {
+    for (cmd, kind, path) in [
+        ("cat /tmp/x < /tmp/in", "Read", "/tmp/in"),
+        ("cat /tmp/x > /tmp/out", "Write", "/tmp/out"),
+        ("cat /tmp/x >> /tmp/out", "Write", "/tmp/out"),
+        ("cat /tmp/x >| /tmp/out", "Write", "/tmp/out"),
+        ("cat /tmp/x &> /tmp/out", "Write", "/tmp/out"),
+        ("cat /tmp/x &>> /tmp/out", "Write", "/tmp/out"),
+    ] {
+        let expected = format!("{kind}({})", canonical(path));
+        let result = check(cmd, &["Read(/tmp/x)"], &[]);
+        assert!(
+            result.missing_rules.contains(&expected),
+            "{cmd}: expected {expected}, got {:?}",
+            result.missing_rules,
+        );
+    }
+}
+
+#[skuld::test]
+fn unresolvable_redirect_target_is_still_dropped() {
+    // Recording it is #45's job, deliberately not this change's. Pinned so the
+    // split stays honest: if this starts asking, B leaked in.
+    assert_eq!(
+        check("cat /tmp/x > $FOO", &["Read(/tmp/x)"], &[]).decision,
+        Decision::Allow,
+    );
+}
