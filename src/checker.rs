@@ -710,6 +710,16 @@ fn names_a_descriptor(word: &Word) -> bool {
 /// `vault/creds`, but thaum's argument list holds only `stolen.txt`, so without
 /// this the read never reaches the rules and a `Deny(Read(vault/**))` cannot
 /// fire on it.
+///
+/// # This is a workaround, and it has somewhere to go
+///
+/// The divergence is a lexer bug, tracked as thaum#14
+/// (<https://github.com/bindreams/thaum/issues/14>). Reconstructing bash's
+/// argument list here means scriptcheck reimplements a lexing rule on top of a
+/// parse that got it wrong — worth it while a live read bypass is open, but not
+/// where the fix belongs. When thaum#14 lands the operand arrives as an ordinary
+/// `Argument`, and this function and its call in `command_arg_literals` should
+/// be deleted rather than adapted.
 fn closed_descriptor_operand(redirect: &Redirect) -> Option<(usize, String)> {
     let word = match &redirect.kind {
         RedirectKind::DupInput(w) | RedirectKind::DupOutput(w) => w,
@@ -728,7 +738,12 @@ fn closed_descriptor_operand(redirect: &Redirect) -> Option<(usize, String)> {
 /// The arguments bash passes to the command, in source order.
 ///
 /// Ordering matters because position is what gives an operand its meaning:
-/// `cp a b` reads `a` and writes `b`. A `>&-word` operand is spliced in at the
+/// `cp a b` reads `a` and writes `b`, so appending a recovered operand instead
+/// of splicing it would invert a read and a write. The splice exists only to
+/// work around thaum#14; see `closed_descriptor_operand`. Once that lands, this
+/// collapses back to mapping `cmd.arguments`.
+///
+/// A `>&-word` operand is spliced in at the
 /// point the word appears, which is where bash would have put it.
 fn command_arg_literals(cmd: &Command) -> Vec<Option<String>> {
     let mut items: Vec<(usize, Option<String>)> = cmd
