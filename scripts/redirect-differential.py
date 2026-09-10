@@ -215,7 +215,7 @@ def main():
     subprocess.run(["cargo", "build", "--quiet", "--example", "file_demands"],
                    cwd=ROOT, check=True)
     dump = subprocess.run(
-        [os.path.join(ROOT, "target/debug/examples/redirect_dump"), casedir, tmp],
+        [os.path.join(ROOT, "target/debug/examples/file_demands"), casedir, tmp],
         capture_output=True, text=True, check=True,
     )
     demands = {}
