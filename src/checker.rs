@@ -645,7 +645,9 @@ fn accesses_for_redirect(redirect: &Redirect, cwd: &str) -> Vec<FileAccess> {
             // "ambiguous redirect" error that opens nothing, verified for
             // `0>&f`, `2>&f`, `3>&f` and `10>&f`.
             let redirects_stdout = matches!(redirect.fd, None | Some(1));
-            if !redirects_stdout || names_a_descriptor(w) {
+            // A bare leading dash closes the descriptor and hands the rest of
+            // the token to `closed_descriptor_operand`, so no file is named.
+            if !redirects_stdout || edge_is_unquoted_dash(w, Edge::First) || names_a_descriptor(w) {
                 return Vec::new();
             }
             (w, &[Write])
@@ -698,27 +700,76 @@ fn names_a_descriptor(word: &Word) -> bool {
     if s == "-" || s.bytes().all(|b| b.is_ascii_digit()) {
         return true;
     }
-    // Every other dash form is a descriptor spec only when written unquoted.
-    // Quoting turns it into an ordinary filename, and the two directions are
-    // one character apart:
-    //
-    //   >&-2   close, then `2` as an argument      >&"-2"  writes a file `-2`
-    //   >&2-   move fd 2                           >&"2-"  writes a file `2-`
-    //   >&x-   "ambiguous redirect", opens nothing >&"x-"  writes a file `x-`
-    //
-    // A trailing dash makes bash read the whole word as a descriptor spec
-    // whatever precedes it, so `>&x-` and `>&2x-` are errors rather than files.
-    let dashed = s.starts_with('-') || s.ends_with('-');
-    dashed && !word_is_quoted(word)
+    // An unquoted trailing dash makes bash read the whole word as a descriptor
+    // spec whatever precedes it — `>&2-` moves fd 2, `>&x-` is an "ambiguous
+    // redirect" — and neither opens a file. Quote that one character and it is
+    // an ordinary filename again: `>&"2"-` moves, but `>&2"-"` writes `2-`.
+    edge_is_unquoted_dash(word, Edge::Last)
 }
 
-/// Was any part of this word written quoted?
+/// Which end of a redirect word to inspect.
+#[derive(Clone, Copy)]
+enum Edge {
+    First,
+    Last,
+}
+
+/// Is the character at `edge` of this word a `-` that was written unquoted?
 ///
-/// Only matters for the dash forms above. A word that does not resolve
-/// statically never reaches here — `names_a_descriptor` returns early — so the
-/// remaining fragment kinds are the literal and quoted ones.
-fn word_is_quoted(word: &Word) -> bool {
-    !word.parts.iter().all(|f| matches!(f, Fragment::Literal(_)))
+/// Quoting is a property of individual characters, not of the word. Both dash
+/// rules turn on one character, so testing whether the word contains any
+/// quoting answers a different question — and answers it wrongly for a word
+/// like `>&-"vault/creds"`, where the dash is bare and only the operand is
+/// quoted.
+///
+/// Returns `false` for any word that is not fully static: a fragment whose
+/// value is unknown could contribute the edge character itself.
+fn edge_is_unquoted_dash(word: &Word, edge: Edge) -> bool {
+    let mut parts = Vec::new();
+    for fragment in &word.parts {
+        match fragment_text(fragment) {
+            Some(part) => parts.push(part),
+            None => return false,
+        }
+    }
+    // An empty fragment contributes no character, so it cannot be the edge:
+    // in `>&""-` the dash is the first character as well as the last.
+    parts.retain(|(_, text)| !text.is_empty());
+    let part = match edge {
+        Edge::First => parts.first(),
+        Edge::Last => parts.last(),
+    };
+    part.is_some_and(|(quoted, text)| {
+        !quoted
+            && match edge {
+                Edge::First => text.starts_with('-'),
+                Edge::Last => text.ends_with('-'),
+            }
+    })
+}
+
+/// A fragment's static text, and whether it was written quoted.
+///
+/// `None` for the fragment kinds that make a word non-static.
+fn fragment_text(fragment: &Fragment) -> Option<(bool, String)> {
+    match fragment {
+        Fragment::Literal(s) => Some((false, s.clone())),
+        Fragment::SingleQuoted(s) | Fragment::BashAnsiCQuoted(s) => Some((true, s.clone())),
+        Fragment::DoubleQuoted(parts) | Fragment::BashLocaleQuoted(parts) => {
+            let mut text = String::new();
+            for part in parts {
+                text.push_str(&fragment_text(part)?.1);
+            }
+            Some((true, text))
+        }
+        Fragment::Parameter(_)
+        | Fragment::CommandSubstitution(_)
+        | Fragment::ArithmeticExpansion(_)
+        | Fragment::Glob(_)
+        | Fragment::TildePrefix(_)
+        | Fragment::BashExtGlob { .. }
+        | Fragment::BashBraceExpansion(_) => None,
+    }
 }
 
 /// The argument hiding inside a `>&-word` / `<&-word` redirect, and where it
@@ -747,9 +798,11 @@ fn closed_descriptor_operand(redirect: &Redirect) -> Option<(usize, String)> {
         RedirectKind::DupInput(w) | RedirectKind::DupOutput(w) => w,
         _ => return None,
     };
-    // Quoting makes the whole word a filename, so there is no operand to
-    // recover: `>&"-2"` writes a file called `-2`.
-    if word_is_quoted(word) {
+    // Only a bare leading dash terminates the token. Quoting that one character
+    // makes the whole word a filename instead — `>&"-2"` writes `-2` — while
+    // quoting anywhere *after* it changes nothing: `>&-"vault/creds"` still
+    // passes `vault/creds` as an argument.
+    if !edge_is_unquoted_dash(word, Edge::First) {
         return None;
     }
     let text = word.try_to_static_string()?;

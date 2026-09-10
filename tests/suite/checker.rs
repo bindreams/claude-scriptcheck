@@ -2715,3 +2715,93 @@ fn quoted_leading_dash_recovers_no_operand() {
         result.missing_rules,
     );
 }
+
+// Quoting granularity: the two edges, not the whole word --------------------------------------------------------------
+//
+// Derived from bash's tokenisation rather than from a table of spellings.
+//
+// An unquoted `-` as the *first* character terminates the redirect target:
+// bash reads `>&-` as "close" and lexes the rest of the token as a fresh word.
+// Quoting anywhere after that dash is irrelevant to that decision. Quoting the
+// dash itself is not — it makes the whole token an ordinary filename.
+//
+// Independently, an unquoted `-` as the *last* character makes the word a
+// descriptor spec; a quoted trailing dash makes it a filename.
+
+#[skuld::test]
+fn quoted_operand_after_a_close_is_still_an_argument() {
+    // Verified: `log >&-"vault/creds" s.txt` reports argc=2 [vault/creds s.txt].
+    // Testing quoting on the whole word rather than on the leading dash let
+    // this walk straight through the operand-recovery path.
+    for cmd in [
+        "cp >&-\"/tmp/vault/creds\" /tmp/stolen.txt",
+        "cp >&-'/tmp/vault/creds' /tmp/stolen.txt",
+        "cp >&-/tmp/vault\"/\"creds /tmp/stolen.txt",
+        "cp >&-/tmp/\"vault\"/creds /tmp/stolen.txt",
+    ] {
+        assert!(
+            matches!(
+                check(cmd, &["Bash(cp *)"], &["Read(/tmp/vault/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "denied path hidden behind a quoted operand: {cmd}",
+        );
+    }
+}
+
+#[skuld::test]
+fn quoting_the_leading_dash_makes_it_a_filename() {
+    // `>&"-"foo` writes `-foo`; the dash no longer terminates the token.
+    let result = check("cat /tmp/x >&\"-\"foo", &["Read(/tmp/x)"], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({})", canonical("/tmp/-foo"))),
+        "expected a Write demand for `-foo`, got {:?}",
+        result.missing_rules,
+    );
+    assert!(
+        !result
+            .missing_rules
+            .iter()
+            .any(|r| r.contains(&canonical("/tmp/foo"))),
+        "recovered an operand from a quoted dash: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn trailing_dash_quoting_is_per_character_too() {
+    // `>&"2"-` moves fd 2 and opens nothing; `>&2"-"` writes a file `2-`.
+    assert_eq!(
+        check(
+            "cat /tmp/x >&\"2\"-",
+            &["Read(/tmp/x)"],
+            &["Write(/tmp/**)"]
+        )
+        .decision,
+        Decision::Allow,
+    );
+    let result = check("cat /tmp/x >&2\"-\"", &["Read(/tmp/x)"], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({})", canonical("/tmp/2-"))),
+        "expected a Write demand for `2-`, got {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn the_dash_rule_is_specific_to_dup_output() {
+    // Verified: `&>-foo` writes a file called `-foo`. `&>` has no close form,
+    // so the leading dash is an ordinary filename character there.
+    let result = check("cat /tmp/x &>-foo", &["Read(/tmp/x)"], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({})", canonical("/tmp/-foo"))),
+        "expected a Write demand for `-foo`, got {:?}",
+        result.missing_rules,
+    );
+}
