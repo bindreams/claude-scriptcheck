@@ -2272,3 +2272,415 @@ fn unbounded_suggestion_has_no_unusable_pattern() {
         "suggestion contains a pattern no rule can use: {suggestion}",
     );
 }
+
+// ── Environment assignment prefixes (#58) ───────────────────────────────────
+//
+// A command's effects come from its argv *and* its environment. An assignment
+// to a variable that is not provably inert makes the invocation not file-only,
+// so a `Bash(...)` rule is required — the same guardrail `find -exec` gets.
+// Like every other secondary demand, a matching `Bash(...)` allow rule
+// suppresses it.
+
+#[skuld::test]
+fn git_external_diff_prefix_asks_with_no_rules() {
+    // `git diff` is correctly classified read-only; GIT_EXTERNAL_DIFF makes it
+    // run an arbitrary program. Verified against real git: the script runs.
+    let d = check("GIT_EXTERNAL_DIFF=./evil.sh git diff", &[], &[]);
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(
+        d.missing_rules.iter().any(|r| r == "Bash(git diff)"),
+        "missing_rules: {:?}",
+        d.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn git_pager_prefix_asks_with_no_rules() {
+    let d = check("GIT_PAGER=./evil.sh git log", &[], &[]);
+    assert_eq!(d.decision, Decision::Ask);
+}
+
+#[skuld::test]
+fn pager_prefix_asks_with_no_rules() {
+    let d = check("PAGER=./evil.sh git log", &[], &[]);
+    assert_eq!(d.decision, Decision::Ask);
+}
+
+#[skuld::test]
+fn ld_preload_prefix_asks_for_a_bash_rule() {
+    // LD_PRELOAD subverts any dynamically linked command, so no per-command
+    // reasoning could have caught this one. `ls` is file-only, and satisfying
+    // its Read demand must not be enough.
+    let d = check(
+        "LD_PRELOAD=./evil.so ls",
+        &[&format!("Read({}/**)", c("/tmp"))],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(
+        d.missing_rules.iter().any(|r| r.starts_with("Bash(ls)")),
+        "missing_rules: {:?}",
+        d.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn tar_options_prefix_asks_for_every_spelling() {
+    // GNU tar 1.35 executes all of these (verified in a container). #44
+    // already guards the same option on the command line, prefix-matched for
+    // exactly these abbreviations; through the environment it was unguarded.
+    // The Read/Write rules satisfy the file demands, so the prefix is the only
+    // thing left that can fire.
+    for prefix in [
+        "TAR_OPTIONS=--use-compress-program=./evil.sh",
+        "TAR_OPTIONS=--use=./evil.sh",
+        "TAR_OPTIONS=-I./evil.sh",
+    ] {
+        let d = check(
+            &format!("{prefix} tar -cf a.tar f.txt"),
+            &[
+                &format!("Read({}/**)", c("/tmp")),
+                &format!("Write({}/**)", c("/tmp")),
+            ],
+            &[],
+        );
+        assert_eq!(d.decision, Decision::Ask, "{prefix}");
+        assert!(
+            d.missing_rules.iter().any(|r| r.starts_with("Bash(")),
+            "{prefix} missing_rules: {:?}",
+            d.missing_rules,
+        );
+    }
+}
+
+#[skuld::test]
+fn ripgrep_config_path_prefix_asks() {
+    // The config file's contents are read as arguments, so `--pre` arrives
+    // from a file rather than the command line. Verified against real rg.
+    let d = check(
+        "RIPGREP_CONFIG_PATH=./evil.conf rg foo src",
+        &[&format!("Read({}/**)", c("/tmp"))],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(
+        d.missing_rules.iter().any(|r| r.starts_with("Bash(")),
+        "missing_rules: {:?}",
+        d.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn deny_still_fires_under_a_prefix() {
+    let d = check(
+        "GIT_EXTERNAL_DIFF=./evil.sh git diff",
+        &[],
+        &["Bash(git *)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+// Control direction. Each of these must keep the verdict it has today; a fix
+// that prompts on ordinary `VAR=x cmd` usage would drive users to blanket
+// `Bash(...)` rules and leave them worse off than the hole did.
+
+#[skuld::test]
+fn inert_locale_prefix_does_not_demand_a_bash_rule() {
+    for cmd in ["LC_ALL=C sort f", "LANG=C sort f", "LC_COLLATE=C sort f"] {
+        let d = check(cmd, &[&format!("Read({}/**)", c("/tmp"))], &[]);
+        assert_eq!(d.decision, Decision::Allow, "{cmd}: {d:?}");
+    }
+}
+
+#[skuld::test]
+fn prefix_adds_nothing_when_a_bash_rule_was_needed_anyway() {
+    // These already needed `Bash(...)`, so the prefix changes nothing — not
+    // the verdict and not the suggested rule. This is why the fix is free for
+    // the bulk of real usage.
+    // Both variables must be NON-inert, or the pair passes without ever
+    // reaching the branch under test: an inert name leaves `unmodelled_env`
+    // empty, so nothing is suppressed and nothing is asserted. `RUST_LOG` was
+    // here and made half this test vacuous.
+    for (bare, prefixed) in [
+        ("cargo test", "SKULD_LABELS=x cargo test"),
+        ("make", "FOO=1 make"),
+    ] {
+        let plain = check(bare, &[], &[]);
+        let with_prefix = check(prefixed, &[], &[]);
+        assert_eq!(with_prefix.decision, Decision::Ask, "{prefixed}");
+        assert_eq!(
+            with_prefix.missing_rules, plain.missing_rules,
+            "{prefixed} changed the suggested rule",
+        );
+    }
+}
+
+#[skuld::test]
+fn bash_allow_rule_suppresses_the_prefix_demand() {
+    // Consistent with every other secondary demand. This is the D2 decision:
+    // scriptcheck prevents accidents, not malice, and nobody types
+    // `GIT_EXTERNAL_DIFF=./evil.sh` by accident.
+    let d = check("SKULD_LABELS=x cargo nextest run", &["Bash(cargo *)"], &[]);
+    assert_eq!(d.decision, Decision::Allow, "{d:?}");
+
+    let d = check(
+        "GIT_EXTERNAL_DIFF=./evil.sh git diff",
+        &["Bash(git *)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Allow, "{d:?}");
+}
+
+#[skuld::test]
+fn assignment_only_command_needs_no_bash_rule() {
+    // `FOO=bar` alone sets a shell variable; it runs no program and reaches no
+    // child's environment.
+    assert_eq!(check("FOO=bar", &[], &[]).decision, Decision::Allow);
+}
+
+#[skuld::test]
+fn ask_bash_rule_still_forces_the_full_flow_under_a_prefix() {
+    let d = check_with_ask("LC_ALL=C ls", &["Bash(ls *)"], &[], &["Bash(ls *)"]);
+    assert_eq!(d.decision, Decision::Ask, "{d:?}");
+}
+
+// ── The word funnel (#58) ───────────────────────────────────────────────────
+//
+// `Deny(...)` is meant to hold in every mode and to resist every allow rule.
+// It did not hold in six syntactic positions, because `Visit::visit_word` is a
+// no-op leaf that `PermissionChecker` never overrode: only words the checker
+// hand-walked were checked, and every word thaum's own `walk_*` delivered was
+// dropped. Overriding `visit_word` closes them together rather than one call
+// site per position.
+//
+// Redirect words (`> $(...)`, `<<< $(...)`, `> >(...)`) are the same defect in
+// a position the checker intercepts before thaum can deliver it; they are
+// issue #65 and are deliberately untouched here.
+
+#[skuld::test]
+fn deny_fires_inside_an_assignment_value() {
+    // The accident this protects against: `X=$(rm -rf "$DIR")` with DIR empty.
+    // A `Deny(Bash(rm *))` rule is set precisely to catch that.
+    let d = check("X=$(rm -rf /tmp/zzz)", &[], &["Bash(rm *)"]);
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn deny_fires_inside_an_assignment_prefix_value() {
+    let d = check(
+        "X=$(rm -rf /tmp/zzz) cat /tmp/f",
+        &[&format!("Read({}/**)", c("/tmp")), "Bash(cat *)"],
+        &["Bash(rm *)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn deny_fires_inside_an_array_assignment_value() {
+    let d = check("X=($(rm -rf /tmp/zzz))", &[], &["Bash(rm *)"]);
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn deny_fires_inside_a_for_loop_word_list() {
+    let d = check(
+        "for f in $(rm -rf /tmp/zzz); do echo x; done",
+        &["Bash(echo *)"],
+        &["Bash(rm *)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn deny_fires_inside_a_case_scrutinee() {
+    let d = check(
+        "case $(rm -rf /tmp/zzz) in a) echo x;; esac",
+        &["Bash(echo *)"],
+        &["Bash(rm *)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn deny_fires_inside_a_case_arm_pattern() {
+    let d = check(
+        "case a in $(rm -rf /tmp/zzz)) echo x;; esac",
+        &["Bash(echo *)"],
+        &["Bash(rm *)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn assignment_value_substitution_is_checked_without_rules() {
+    let d = check("X=$(curl -s http://example.com/x.sh)", &[], &[]);
+    assert_eq!(d.decision, Decision::Ask, "{d:?}");
+}
+
+#[skuld::test]
+fn double_quoted_assignment_value_substitution_is_checked() {
+    let d = check("X=\"$(rm -rf /tmp/zzz)\"", &[], &["Bash(rm *)"]);
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn allowed_substitution_in_an_assignment_still_allows() {
+    // `VAR=$(...)` capture is ordinary; closing the funnel must not break it.
+    let d = check("X=$(git status)", &["Bash(git status)"], &[]);
+    assert_eq!(d.decision, Decision::Allow, "{d:?}");
+}
+
+#[skuld::test]
+fn positions_the_checker_already_reached_are_unchanged() {
+    for cmd in [
+        "cat $(rm -rf /tmp/zzz)",
+        "cat <(rm -rf /tmp/zzz)",
+        "( rm -rf /tmp/zzz )",
+        "if rm -rf /tmp/zzz; then echo x; fi",
+    ] {
+        let d = check(cmd, &["Bash(cat *)", "Bash(echo *)"], &["Bash(rm *)"]);
+        assert!(matches!(d.decision, Decision::Deny(_)), "{cmd}: {d:?}");
+    }
+}
+
+// ── The funnel's second storey (#58) ────────────────────────────────────────
+//
+// `check_fragment_command_subs` had a `_ => {}` arm and descended into two of
+// nine fragment shapes, so a substitution one level deeper than `$(...)`
+// escaped a funnel that was reaching the word correctly. The match is now
+// exhaustive. Two carriers genuinely hold parsed substitutions and are closed
+// here; the `${x:-...}` and `$(( ))` families are unreached for a different
+// reason — thaum stores their interior as a `Literal` — and are #69.
+
+#[skuld::test]
+fn deny_fires_inside_a_locale_quoted_substitution() {
+    let d = check("X=$\"$(rm -rf /tmp/zzz)\"", &[], &["Bash(rm *)"]);
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn deny_fires_inside_a_brace_expansion_alternative() {
+    let d = check("X={a,$(rm -rf /tmp/zzz)}", &[], &["Bash(rm *)"]);
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn deny_fires_inside_a_brace_expansion_in_an_argument() {
+    let d = check(
+        "cat {a,$(rm -rf /tmp/zzz)}",
+        &["Bash(cat *)"],
+        &["Bash(rm *)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn parameter_default_family_is_documented_as_unreached() {
+    // Pins the *known* state, not the desired one. The pinned thaum revision
+    // (bf6b0ae) stores `${Y:-...}`'s interior as a single Literal, so there is
+    // nothing for any descent to reach; upstream (19bf51f) parses it. The
+    // `Parameter` arm is already in place and is proven correct by
+    // `checker::fragment_descent_tests`, which builds the node by hand — so
+    // this flips to Deny on a thaum bump with no code change. See #69.
+    let d = check("X=${Y:-$(rm -rf /tmp/zzz)}", &[], &["Bash(rm *)"]);
+    assert_eq!(
+        d.decision,
+        Decision::Allow,
+        "unreached-position pin: if this now denies, thaum has been bumped and \
+         the assertion should become Deny — see #69",
+    );
+}
+
+#[skuld::test]
+fn env_prefix_note_is_not_in_the_rule_list() {
+    // `missing_rules` is pasteable rules only. Under dontAsk the deny reason
+    // joins that list and tells the reader to paste it into permissions.allow,
+    // so an explanation in there instructs them to paste an explanation.
+    let d = check("GIT_EXTERNAL_DIFF=./evil.sh git diff", &[], &[]);
+    assert_eq!(d.missing_rules, vec!["Bash(git diff)".to_string()]);
+    assert_eq!(
+        d.notes,
+        vec![
+            "environment assignment(s) GIT_EXTERNAL_DIFF can change what this command runs"
+                .to_string()
+        ],
+    );
+    assert!(
+        !d.missing_rules.iter().any(|r| r.starts_with("note:")),
+        "notes must not appear in missing_rules: {:?}",
+        d.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn native_deny_carries_no_missing_rules() {
+    // `main.rs` documents native denies as carrying an empty list and the log
+    // writer relies on it. The walk keeps visiting statements after a deny, so
+    // rules collected for an unrelated earlier command used to survive into it.
+    let d = check(
+        "some_unknown_cmd_xyz; rm -rf /tmp/zzz",
+        &[],
+        &["Bash(rm *)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+    assert!(
+        d.missing_rules.is_empty(),
+        "native deny leaked missing_rules: {:?}",
+        d.missing_rules,
+    );
+    assert!(
+        d.notes.is_empty(),
+        "native deny leaked notes: {:?}",
+        d.notes
+    );
+}
+
+#[skuld::test]
+fn git_config_env_forces_a_bash_rule_even_for_an_inert_variable() {
+    // git reads the config value out of the named variable, so `--config-env`
+    // turns *any* variable into a config source — including one on the inert
+    // list. Verified against real git: the script executes.
+    for cmd in [
+        "LC_ALL=./evil.sh git --config-env=diff.external=LC_ALL diff",
+        "LANG=./evil.sh git --config-env=core.pager=LANG log",
+        "EVIL=./evil.sh git --config-env=diff.external=EVIL diff",
+        "LC_ALL=./evil.sh git --config-env diff.external=LC_ALL diff",
+    ] {
+        let d = check(cmd, &[], &[]);
+        assert_eq!(d.decision, Decision::Ask, "{cmd}: {d:?}");
+    }
+    // And it is still suppressed by an explicit Bash allow, like `-c`.
+    let d = check(
+        "LC_ALL=./evil.sh git --config-env=diff.external=LC_ALL diff",
+        &["Bash(git *)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Allow, "{d:?}");
+}
+
+#[skuld::test]
+fn env_prefix_note_does_not_masquerade_as_a_pastable_rule() {
+    // The suggestion must be pastable on its own; the explanation is a
+    // separate entry that no one can mistake for a rule.
+    let d = check("GIT_EXTERNAL_DIFF=./evil.sh git diff", &[], &[]);
+    assert_eq!(d.decision, Decision::Ask);
+    assert!(
+        d.missing_rules.iter().any(|r| r == "Bash(git diff)"),
+        "expected a bare pastable rule, got {:?}",
+        d.missing_rules,
+    );
+    assert!(
+        d.notes
+            .iter()
+            .any(|n| n.starts_with("environment assignment(s) GIT_EXTERNAL_DIFF")),
+        "expected a note, got {:?}",
+        d.notes,
+    );
+    // And pasting the pastable half must actually resolve it.
+    let d = check(
+        "GIT_EXTERNAL_DIFF=./evil.sh git diff",
+        &["Bash(git diff)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Allow, "{d:?}");
+}

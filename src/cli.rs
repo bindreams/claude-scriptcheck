@@ -156,6 +156,7 @@ pub fn check(command: &str, cwd: &str, permission_mode: Option<PermissionMode>) 
             matched_deny: vec![],
             missing_rules: vec!["Bash(<parse error>)".into()],
             custom_reason: Some("Shell command could not be parsed".into()),
+            notes: vec![],
         },
     };
     let result = checker::apply_permission_mode(result, permission_mode);
@@ -180,6 +181,11 @@ pub fn check(command: &str, cwd: &str, permission_mode: Option<PermissionMode>) 
             println!("ASK: {header}:");
             for rule in &result.missing_rules {
                 println!("  - {rule}");
+            }
+            // Advisory lines, after the list and visibly not part of it — see
+            // `CheckResult::notes`.
+            for note in &result.notes {
+                println!("note: {note}");
             }
         }
     }
