@@ -14,7 +14,6 @@ against a new spelling — an earlier version crossed the right dimensions using
 only `"` and `'`, passed every case, and said nothing about the escaped family
 bash treats asymmetrically.
 
-    cargo build --example file_demands
     scripts/redirect-differential.py
 
 Exits non-zero if any access was missed.
@@ -116,6 +115,7 @@ COMMANDS = [
     ("grep", roles_grep, "grep in.txt {redir} zzz"),
     ("", roles_none, "{redir}"),
     ("assign", roles_none, "FOO=x {redir}"),
+    ("eval", roles_none, "eval x {redir}"),
 ]
 
 def cases():
@@ -209,6 +209,11 @@ def main():
     casedir = os.path.join(OUT, "cwd")
     os.makedirs(casedir, exist_ok=True)
     real_casedir = os.path.realpath(casedir)
+    # Build the helper here rather than trusting whatever is in target/: a
+    # stale binary reports the bugs it had when it was built, against a tree
+    # that no longer has them.
+    subprocess.run(["cargo", "build", "--quiet", "--example", "file_demands"],
+                   cwd=ROOT, check=True)
     dump = subprocess.run(
         [os.path.join(ROOT, "target/debug/examples/redirect_dump"), casedir, tmp],
         capture_output=True, text=True, check=True,

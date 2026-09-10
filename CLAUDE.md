@@ -175,7 +175,7 @@ stdin JSON → parse permission_mode (PermissionMode::from_hook_str) →
 
     - Deciding from the parsed word instead fails in both directions, and both were live: a whole-word test for "does an escape appear anywhere" fabricated a write for `>&-my\ file.txt` (a `Deny` no rule can lift, on a command that opens nothing), while requiring every fragment to be a literal dropped the real write in `>&\-2"suffix"` (a bypass) because of a quoted tail that has nothing to do with the edge.
 
-  - **A redirect with no command word still runs.** `> log` truncates the file and `FOO=x > log` does the same after the assignment, so the accesses are checked even though there is no command name — and checked unsuppressed, since no `Bash(...)` rule can name a command that has no name.
+  - **Redirects are derived once, at the top of `check_command`, and checked on every path out of it.** The shell performs a command's redirections whatever shape the command has, so a shape-specific short-circuit must not skip them: `> log` and `FOO=x > log` truncate the file with no command name to hang a rule on (checked unsuppressed, since no `Bash(...)` rule can name a command that has no name), and `eval x > log` truncates it before the code being evaluated ever runs. Deriving the accesses lower down is what let each new early return carry its redirects past the file rules — the reachability defect behind #53, distinct from the per-form classification above.
 
   - An operand recovered from a redirect can be the **command name**: `>&-danger` has no arguments of its own, so bash closes stdout and runs `danger`. The no-arguments early return therefore runs after the splice, not before it.
 

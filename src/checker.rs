@@ -233,17 +233,19 @@ impl PermissionChecker<'_> {
         // the command name: `>&-danger` has no arguments of its own, and bash
         // closes stdout and runs `danger`.
         let arg_literals: Vec<Option<String>> = redirect::command_arg_literals(cmd, self.source);
+
+        // The shell performs a command's redirections whatever shape the
+        // command has, so these are derived once, up here, and checked on every
+        // path out of this function — including the ones that return before any
+        // argument is looked at. Deriving them further down is what let each
+        // new short-circuit carry its redirects past the file rules (#53).
+        let redirect_accesses = redirect::accesses(&cmd.redirects, self.source, self.cwd);
+
         // No command name — an assignment-only command (`FOO=x > log`) or a
-        // null one (`> log`). bash still performs the redirects, so the file
-        // accesses are checked; `bash_allowed` is false because no `Bash(...)`
+        // null one (`> log`). `bash_allowed` is false because no `Bash(...)`
         // rule can name a command that has no name.
         if arg_literals.is_empty() {
-            for access in redirect::accesses(&cmd.redirects, self.source, self.cwd) {
-                self.check_file_access(&access, false);
-                if self.denied.is_some() {
-                    return;
-                }
-            }
+            self.check_redirect_accesses(&redirect_accesses, false);
             return;
         }
 
@@ -274,12 +276,7 @@ impl PermissionChecker<'_> {
                 if !bash_allowed {
                     self.unmatched.push("Bash(<dynamic command>)".to_string());
                 }
-                for access in redirect::accesses(&cmd.redirects, self.source, self.cwd) {
-                    self.check_file_access(&access, bash_allowed);
-                    if self.denied.is_some() {
-                        return;
-                    }
-                }
+                self.check_redirect_accesses(&redirect_accesses, bash_allowed);
                 return;
             }
         };
@@ -300,16 +297,16 @@ impl PermissionChecker<'_> {
         }
 
         // eval — always ask (unless a Bash allow rule explicitly covers it).
+        // Its redirects are still checked: `eval x > vault/pwned` writes the
+        // file whether or not the code being evaluated can be analyzed.
         if cmd_name == "eval" {
             if !bash_allowed {
                 self.unmatched
                     .push("Bash(eval ...) -- cannot statically analyze eval".to_string());
             }
+            self.check_redirect_accesses(&redirect_accesses, bash_allowed);
             return;
         }
-
-        // Extract file accesses from redirects
-        let redirect_accesses = redirect::accesses(&cmd.redirects, self.source, self.cwd);
 
         // Extract file accesses from well-known command semantics (clap-based parsers)
         let cmd_parse_result =
@@ -436,6 +433,16 @@ impl PermissionChecker<'_> {
                 }
                 let filter = BashFilter::from_items(items);
                 self.unmatched.push(filter.to_rule_string());
+            }
+        }
+    }
+
+    /// Check a command's redirect-derived accesses, stopping at the first deny.
+    fn check_redirect_accesses(&mut self, accesses: &[FileAccess], bash_allowed: bool) {
+        for access in accesses {
+            self.check_file_access(access, bash_allowed);
+            if self.denied.is_some() {
+                return;
             }
         }
     }

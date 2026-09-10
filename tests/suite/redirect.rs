@@ -892,3 +892,47 @@ fn a_command_less_redirect_cannot_be_suppressed_by_a_bash_rule() {
 fn an_assignment_without_a_redirect_needs_nothing() {
     assert_eq!(check("FOO=bar", &[], &[]).decision, Decision::Allow);
 }
+
+#[skuld::test]
+fn eval_still_performs_its_redirects() {
+    // `eval` cannot be analyzed, so it asks — but its redirect is not part of
+    // the code being evaluated. bash truncates the file before eval runs.
+    let result = check("eval x > /tmp/vault/creds", &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({})", canonical("/tmp/vault/creds"))),
+        "expected a Write demand, got {:?}",
+        result.missing_rules,
+    );
+    // And the deny fires even where a `Bash(eval *)` allow rule has already
+    // waved the eval itself through — file denies are never suppressed.
+    for allow in [&[] as &[&str], &["Bash(eval *)"]] {
+        assert!(
+            matches!(
+                check(
+                    "eval x > /tmp/vault/creds",
+                    allow,
+                    &["Write(/tmp/vault/**)"]
+                )
+                .decision,
+                Decision::Deny(_),
+            ),
+            "eval carried its redirect past the file rules ({allow:?})",
+        );
+    }
+}
+
+#[skuld::test]
+fn a_bash_allow_rule_suppresses_a_redirect_demand_but_not_a_deny() {
+    // The documented suppression contract, checked on the paths that return
+    // early: a matching Bash allow rule silences the missing-rule demand, and a
+    // Deny still fires.
+    let result = check("eval x > /tmp/out", &["Bash(eval *)"], &[]);
+    assert_eq!(
+        result.decision,
+        Decision::Allow,
+        "{:?}",
+        result.missing_rules
+    );
+}
