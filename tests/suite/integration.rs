@@ -159,6 +159,26 @@ fn apply_test_isolation(cmd: &mut Command) -> IsolatedLog {
     }
 }
 
+/// Write the hook payload to a child's stdin, tolerating a closed pipe.
+///
+/// The binary exits before reading stdin whenever it rejects the invocation
+/// early — a missing `--agent`, malformed JSON — and its stdin closes with it.
+/// Whether the write lands is then a race against process exit, which `EPIPE`
+/// loses. The payload is small enough to fit the pipe buffer nearly always,
+/// which is why this surfaced as an intermittent failure rather than a
+/// consistent one. Nothing here depends on the child having read the payload:
+/// every caller asserts on the exit status and captured output.
+fn write_stdin(child: &mut std::process::Child, bytes: &[u8]) {
+    let mut stdin = child.stdin.take().expect("stdin was not piped");
+    if let Err(e) = stdin.write_all(bytes) {
+        assert_eq!(
+            e.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "unexpected error writing to child stdin: {e}",
+        );
+    }
+}
+
 fn run_binary(stdin_bytes: &[u8]) -> std::process::Output {
     run_binary_for_agent("claude", stdin_bytes)
 }
@@ -175,7 +195,7 @@ fn run_binary_for_agent(agent: &str, stdin_bytes: &[u8]) -> std::process::Output
         .spawn()
         .expect("Failed to start binary");
 
-    child.stdin.take().unwrap().write_all(stdin_bytes).unwrap();
+    write_stdin(&mut child, stdin_bytes);
 
     child.wait_with_output().unwrap()
 }
@@ -199,7 +219,7 @@ fn run_binary_for_agent_with_env(
         .spawn()
         .expect("Failed to start binary");
 
-    child.stdin.take().unwrap().write_all(stdin_bytes).unwrap();
+    write_stdin(&mut child, stdin_bytes);
 
     child.wait_with_output().unwrap()
 }
@@ -500,11 +520,7 @@ fn hook_mode_requires_explicit_agent() {
         .stderr(Stdio::piped())
         .spawn()
         .and_then(|mut child| {
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(&hook_json("Bash", "ls"))?;
+            write_stdin(&mut child, &hook_json("Bash", "ls"));
             child.wait_with_output()
         })
         .expect("Failed to run binary");
@@ -968,7 +984,7 @@ fn run_binary_with_env(stdin_bytes: &[u8], env: &[(&str, &str)]) -> std::process
         .spawn()
         .expect("Failed to start binary");
 
-    child.stdin.take().unwrap().write_all(stdin_bytes).unwrap();
+    write_stdin(&mut child, stdin_bytes);
     child.wait_with_output().unwrap()
 }
 
@@ -1430,7 +1446,7 @@ fn auto_preserves_missing_rules_after_transform(#[fixture(temp_dir)] dir: &std::
         .stderr(Stdio::piped())
         .spawn()
         .and_then(|mut child| {
-            child.stdin.take().unwrap().write_all(&input)?;
+            write_stdin(&mut child, &input);
             child.wait_with_output()
         })
         .expect("binary run");
@@ -1760,7 +1776,7 @@ fn dont_ask_preserves_missing_rules_in_log(#[fixture(temp_dir)] dir: &std::path:
         .stderr(Stdio::piped())
         .spawn()
         .and_then(|mut child| {
-            child.stdin.take().unwrap().write_all(&input)?;
+            write_stdin(&mut child, &input);
             child.wait_with_output()
         })
         .expect("binary run");
