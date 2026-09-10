@@ -3267,3 +3267,42 @@ fn hook_descriptor_move_does_not_trigger_a_write_deny(#[fixture(temp_dir)] dir: 
         "allow",
     );
 }
+
+#[skuld::test]
+fn hook_fd_one_dup_output_to_file_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // `1>&f` and its zero-padded spellings redirect to a file just as `>&f`
+    // does; only a descriptor other than 1 is an ambiguous-redirect error.
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(
+        dir,
+        &format!(r#"{{"allow":["Bash(cat *)"],"deny":["Write(//{abs}/vault/**)"]}}"#),
+    );
+    for fd in ["1", "01", "001"] {
+        assert_eq!(
+            run_bash_hook(
+                &format!("cat {}/vault/creds {fd}>& {}/vault/x", p.root, p.root),
+                &p.root,
+            ),
+            "deny",
+            "{fd}>&",
+        );
+    }
+}
+
+#[skuld::test]
+fn hook_close_form_operand_cannot_hide_a_denied_path(#[fixture(temp_dir)] dir: &std::path::Path) {
+    // `cp >&-vault/creds stolen.txt` copies the deny-listed file: bash reports
+    // `argc=2 [vault/creds stolen.txt]`, so the operand is a real argument.
+    let abs = vault_paths(dir).root;
+    let p = write_vault_project(
+        dir,
+        &format!(r#"{{"allow":["Bash(cp *)"],"deny":["Read(//{abs}/vault/**)"]}}"#),
+    );
+    assert_eq!(
+        run_bash_hook(
+            &format!("cp >&-{}/vault/creds {}/stolen.txt", p.root, p.root),
+            &p.root,
+        ),
+        "deny",
+    );
+}

@@ -216,12 +216,9 @@ impl PermissionChecker<'_> {
             return;
         }
 
-        // Extract argument literals
-        let arg_literals: Vec<Option<String>> = cmd
-            .arguments
-            .iter()
-            .map(|a| a.try_to_static_string())
-            .collect();
+        // Argument literals, including any operand bash would have taken out of
+        // a `>&-word` redirect. See `command_arg_literals`.
+        let arg_literals: Vec<Option<String>> = command_arg_literals(cmd);
 
         // Get command name. Two forms are kept:
         //   - `raw_arg0`: the command as written (e.g. `./tools/rg.cmd`). Used
@@ -636,16 +633,19 @@ fn accesses_for_redirect(redirect: &Redirect, cwd: &str) -> Vec<FileAccess> {
         RedirectKind::ReadWrite(w) => (w, &[Read, Write]),
         // The body is inline text — no file is named.
         RedirectKind::HereDoc { .. } | RedirectKind::BashHereString(_) => return Vec::new(),
-        // `<&word` takes only the descriptor forms `names_a_descriptor` lists
-        // (Bash §3.6.8-9). Any other word is a redirection error, not a file
-        // open: the file special case below is stated for output only.
+        // `<&word` takes only descriptor forms. Any other word is a redirection
+        // error, not a file open: the file special case below is output-only.
+        // Verified: `log hi <&foo` fails with "ambiguous redirect".
         RedirectKind::DupInput(_) => return Vec::new(),
         RedirectKind::DupOutput(w) => {
-            // Bash §3.6.8: "if n is omitted, and word does not expand to one or
-            // more digits or '-', the standard output and standard error are
-            // redirected" — that is a file write. With n present, or a word
-            // that names a descriptor, nothing is opened.
-            if redirect.fd.is_some() || names_a_descriptor(w) {
+            // Bash §3.6.8 says "if n is omitted", but bash also redirects when
+            // n is 1 — `1>&f`, and zero-padded spellings like `001>&f`, all
+            // create `f`. thaum parses the descriptor as a number, so the
+            // padding collapses on its own. Every other descriptor is an
+            // "ambiguous redirect" error that opens nothing, verified for
+            // `0>&f`, `2>&f`, `3>&f` and `10>&f`.
+            let redirects_stdout = matches!(redirect.fd, None | Some(1));
+            if !redirects_stdout || names_a_descriptor(w) {
                 return Vec::new();
             }
             (w, &[Write])
@@ -689,11 +689,61 @@ fn names_a_descriptor(word: &Word) -> bool {
     let Some(s) = word.try_to_static_string() else {
         return false;
     };
-    if s == "-" {
+    // A word starting with `-` closes the descriptor; anything after the dash
+    // is a separate argument, not part of a filename. `closed_descriptor_operand`
+    // is what puts that argument back.
+    if s.starts_with('-') {
         return true;
     }
     let digits = s.strip_suffix('-').unwrap_or(&s);
     !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The argument hiding inside a `>&-word` / `<&-word` redirect, and where it
+/// starts in the source.
+///
+/// thaum lexes the whole of `-word` as one redirect target. bash does not: it
+/// reads `>&-` as "close the descriptor" and then `word` as a plain argument.
+/// Verified — `log hi >&-2` reports `argc=2 [hi 2]` and creates no file.
+///
+/// The difference hides an operand. `cp >&-vault/creds stolen.txt` copies
+/// `vault/creds`, but thaum's argument list holds only `stolen.txt`, so without
+/// this the read never reaches the rules and a `Deny(Read(vault/**))` cannot
+/// fire on it.
+fn closed_descriptor_operand(redirect: &Redirect) -> Option<(usize, String)> {
+    let word = match &redirect.kind {
+        RedirectKind::DupInput(w) | RedirectKind::DupOutput(w) => w,
+        _ => return None,
+    };
+    let text = word.try_to_static_string()?;
+    let operand = text.strip_prefix('-')?;
+    if operand.is_empty() {
+        // A bare `>&-` closes the descriptor and names nothing.
+        return None;
+    }
+    // The `-` is one byte, so the operand starts one byte into the word.
+    Some((word.span.start.0 + 1, operand.to_string()))
+}
+
+/// The arguments bash passes to the command, in source order.
+///
+/// Ordering matters because position is what gives an operand its meaning:
+/// `cp a b` reads `a` and writes `b`. A `>&-word` operand is spliced in at the
+/// point the word appears, which is where bash would have put it.
+fn command_arg_literals(cmd: &Command) -> Vec<Option<String>> {
+    let mut items: Vec<(usize, Option<String>)> = cmd
+        .arguments
+        .iter()
+        .map(|a| (a.span().start.0, a.try_to_static_string()))
+        .collect();
+    items.extend(
+        cmd.redirects
+            .iter()
+            .filter_map(closed_descriptor_operand)
+            .map(|(pos, text)| (pos, Some(text))),
+    );
+    items.sort_by_key(|(pos, _)| *pos);
+    items.into_iter().map(|(_, literal)| literal).collect()
 }
 
 fn extract_redirect_accesses(redirects: &[Redirect], cwd: &str) -> Vec<FileAccess> {

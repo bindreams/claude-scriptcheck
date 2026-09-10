@@ -2354,14 +2354,168 @@ fn dup_output_to_a_file_fires_a_write_deny() {
 }
 
 #[skuld::test]
-fn leading_dash_word_is_a_file_not_a_descriptor() {
-    // `-2` is neither digits nor `-`, so bash opens a file called `-2`.
+fn close_form_names_no_file() {
+    // Verified against bash 5: `log hi >&-2` creates nothing. The `-` closes
+    // the descriptor, so there is no file called `-2` to demand a rule for.
+    for cmd in [
+        "cat /tmp/x >&-2",
+        "cat /tmp/x >&-foo",
+        "cat /tmp/x 1>&-2",
+        "cat /tmp/x <&-2",
+    ] {
+        let result = check(cmd, &["Read(/tmp/x)"], &[]);
+        assert!(
+            !result
+                .missing_rules
+                .iter()
+                .any(|r| r.contains("-2") || r.contains("-foo")),
+            "{cmd}: named a dash-prefixed file: {:?}",
+            result.missing_rules,
+        );
+    }
+}
+
+#[skuld::test]
+fn close_form_operand_becomes_an_argument() {
+    // Verified: `log hi >&-2` reports `argc=2 [hi 2]`. thaum keeps the whole of
+    // `-2` as the redirect target, so the operand has to be put back — here it
+    // makes `cat` read `./2`.
     let result = check("cat /tmp/x >&-2", &["Read(/tmp/x)"], &[]);
     assert_eq!(result.decision, Decision::Ask);
     assert!(
-        result.missing_rules.iter().any(|r| r.contains("-2")),
-        "expected a Write demand for the file `-2`, got {:?}",
+        result
+            .missing_rules
+            .contains(&format!("Read({})", canonical("/tmp/2"))),
+        "operand not recovered as an argument: {:?}",
         result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn close_form_operand_cannot_hide_a_denied_path() {
+    // The exfiltration shape. Verified against bash: `log >&-vault/creds
+    // stolen.txt` reports `argc=2 [vault/creds stolen.txt]`, so the copy really
+    // does read the deny-listed file. `Bash(cp *)` is allowed deliberately —
+    // suppression must not reach a file deny.
+    let result = check(
+        "cp >&-/tmp/vault/creds /tmp/stolen.txt",
+        &["Bash(cp *)"],
+        &["Read(/tmp/vault/**)"],
+    );
+    assert!(
+        matches!(result.decision, Decision::Deny(_)),
+        "denied path hidden behind >&-: {result:?}",
+    );
+}
+
+#[skuld::test]
+fn recovered_operand_keeps_its_source_position() {
+    // Position decides an operand's meaning: `cp a b` reads a and writes b. The
+    // operand is spliced in where the word appears, so it lands as the source.
+    let result = check(
+        "cp >&-/tmp/src.txt /tmp/dst.txt",
+        &["Bash(cp *)"],
+        &["Write(/tmp/src.txt)"],
+    );
+    assert_eq!(
+        result.decision,
+        Decision::Allow,
+        "recovered operand treated as the destination: {result:?}",
+    );
+    assert!(matches!(
+        check(
+            "cp >&-/tmp/src.txt /tmp/dst.txt",
+            &["Bash(cp *)"],
+            &["Write(/tmp/dst.txt)"],
+        )
+        .decision,
+        Decision::Deny(_),
+    ));
+}
+
+#[skuld::test]
+fn fd_one_dup_output_to_a_file_is_a_write() {
+    // Bash §3.6.8 says "if n is omitted", but bash also redirects for n == 1,
+    // including zero-padded spellings. Verified: `log hi 001>&out` creates
+    // `out`. Treating any leading descriptor as a duplication walked the whole
+    // `1>&` family straight through this guardrail.
+    for cmd in [
+        "cat /tmp/x 1>&/tmp/out",
+        "cat /tmp/x 01>&/tmp/out",
+        "cat /tmp/x 001>&/tmp/out",
+    ] {
+        let result = check(cmd, &["Read(/tmp/x)"], &[]);
+        assert!(
+            result
+                .missing_rules
+                .contains(&format!("Write({})", canonical("/tmp/out"))),
+            "{cmd}: expected a Write demand, got {:?}",
+            result.missing_rules,
+        );
+    }
+}
+
+#[skuld::test]
+fn fd_one_dup_output_fires_a_write_deny() {
+    for cmd in [
+        "cat /tmp/x 1>&/tmp/out",
+        "cat /tmp/x 01>&/tmp/out",
+        "cat /tmp/x 001>&/tmp/out",
+    ] {
+        assert!(
+            matches!(
+                check(cmd, &["Bash(cat *)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "{cmd}",
+        );
+    }
+}
+
+#[skuld::test]
+fn dup_output_with_another_fd_names_no_file() {
+    // Verified: `log hi 2>&out` fails with "ambiguous redirect" and creates
+    // nothing. Only fd 1 gets the file treatment.
+    for cmd in [
+        "cat /tmp/x 2>&/tmp/out",
+        "cat /tmp/x 3>&/tmp/out",
+        "cat /tmp/x 0>&/tmp/out",
+        "cat /tmp/x 10>&/tmp/out",
+    ] {
+        assert_eq!(
+            check(cmd, &["Read(/tmp/x)"], &["Write(/tmp/**)"]).decision,
+            Decision::Allow,
+            "{cmd}",
+        );
+    }
+}
+
+#[skuld::test]
+fn words_that_only_look_like_descriptors_are_files() {
+    // Verified: each of these creates a file of that name.
+    for (cmd, name) in [
+        ("cat /tmp/x >&/tmp/2-3", "/tmp/2-3"),
+        ("cat /tmp/x >&/tmp/+2", "/tmp/+2"),
+        ("cat /tmp/x >&/tmp/2x", "/tmp/2x"),
+    ] {
+        let result = check(cmd, &["Read(/tmp/x)"], &[]);
+        assert!(
+            result
+                .missing_rules
+                .contains(&format!("Write({})", canonical(name))),
+            "{cmd}: expected a Write demand, got {:?}",
+            result.missing_rules,
+        );
+    }
+}
+
+#[skuld::test]
+fn out_of_range_descriptor_move_names_no_file() {
+    // `>&12-` fails at runtime with "Bad file descriptor" — still a descriptor
+    // operation, still opens nothing.
+    assert_eq!(
+        check("cat /tmp/x >&12-", &["Read(/tmp/x)"], &["Write(/tmp/**)"]).decision,
+        Decision::Allow,
     );
 }
 
