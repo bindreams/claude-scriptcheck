@@ -2616,3 +2616,102 @@ fn unresolvable_redirect_target_is_still_dropped() {
         Decision::Allow,
     );
 }
+
+// Trailing-dash and empty words (F2b) ---------------------------------------------------------------------------------
+
+#[skuld::test]
+fn unquoted_trailing_dash_names_no_file() {
+    // A trailing dash makes bash read the whole word as a descriptor spec,
+    // whatever precedes it. Verified: `>&x-` and `>&2x-` both fail with
+    // "ambiguous redirect" and create nothing, so demanding a Write for a file
+    // called `x-` would be a deny on a command that opens nothing.
+    for cmd in [
+        "cat /tmp/x >&x-",
+        "cat /tmp/x >&2x-",
+        "cat /tmp/x 1>&x-",
+        "cat /tmp/x >&12-",
+    ] {
+        assert_eq!(
+            check(cmd, &["Read(/tmp/x)"], &["Write(/tmp/**)"]).decision,
+            Decision::Allow,
+            "{cmd}",
+        );
+    }
+}
+
+#[skuld::test]
+fn empty_redirect_word_names_no_file() {
+    // Verified: `>&""` fails with "Bad file descriptor" and creates nothing.
+    assert_eq!(
+        check("cat /tmp/x >&\"\"", &["Read(/tmp/x)"], &["Write(/tmp/**)"]).decision,
+        Decision::Allow,
+    );
+}
+
+#[skuld::test]
+fn quoting_turns_a_dash_form_into_a_filename() {
+    // The sharp edge: these are one character from the descriptor spellings and
+    // mean the opposite. Verified — each creates a file of that literal name.
+    for (cmd, name) in [
+        ("cat /tmp/x >&\"/tmp/-2\"", "/tmp/-2"),
+        ("cat /tmp/x >&'/tmp/-2'", "/tmp/-2"),
+        ("cat /tmp/x >&\"/tmp/2-\"", "/tmp/2-"),
+        ("cat /tmp/x >&\"/tmp/x-\"", "/tmp/x-"),
+    ] {
+        let result = check(cmd, &["Read(/tmp/x)"], &[]);
+        assert!(
+            result
+                .missing_rules
+                .contains(&format!("Write({})", canonical(name))),
+            "{cmd}: expected a Write demand, got {:?}",
+            result.missing_rules,
+        );
+    }
+}
+
+#[skuld::test]
+fn quoted_dash_form_fires_a_write_deny() {
+    // Missing these would be a bypass, not a spurious ask: bash really writes.
+    for cmd in [
+        "cat /tmp/x >&\"/tmp/-2\"",
+        "cat /tmp/x >&\"/tmp/2-\"",
+        "cat /tmp/x >&\"/tmp/x-\"",
+    ] {
+        assert!(
+            matches!(
+                check(cmd, &["Bash(cat *)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "{cmd}",
+        );
+    }
+}
+
+#[skuld::test]
+fn quoting_does_not_change_duplication_or_closing() {
+    // Verified: `>&"2"` duplicates and `>&"-"` closes, exactly as bare.
+    for cmd in [
+        "cat /tmp/x >&\"2\"",
+        "cat /tmp/x >&'2'",
+        "cat /tmp/x >&\"-\"",
+    ] {
+        assert_eq!(
+            check(cmd, &["Read(/tmp/x)"], &["Write(/tmp/**)"]).decision,
+            Decision::Allow,
+            "{cmd}",
+        );
+    }
+}
+
+#[skuld::test]
+fn quoted_leading_dash_recovers_no_operand() {
+    // `>&"-2"` is a filename, so there is no argument to splice back in.
+    let result = check("cat /tmp/x >&\"/tmp/-2\"", &["Read(/tmp/x)"], &[]);
+    assert!(
+        !result
+            .missing_rules
+            .contains(&format!("Read({})", canonical("/tmp/2"))),
+        "recovered an operand from a quoted word: {:?}",
+        result.missing_rules,
+    );
+}

@@ -689,14 +689,36 @@ fn names_a_descriptor(word: &Word) -> bool {
     let Some(s) = word.try_to_static_string() else {
         return false;
     };
-    // A word starting with `-` closes the descriptor; anything after the dash
-    // is a separate argument, not part of a filename. `closed_descriptor_operand`
-    // is what puts that argument back.
-    if s.starts_with('-') {
+    // `>&""` is a "Bad file descriptor" error. It opens nothing.
+    if s.is_empty() {
         return true;
     }
-    let digits = s.strip_suffix('-').unwrap_or(&s);
-    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+    // Closing and duplicating survive quoting: `>&"-"` closes and `>&"2"`
+    // duplicates, exactly as their bare spellings do.
+    if s == "-" || s.bytes().all(|b| b.is_ascii_digit()) {
+        return true;
+    }
+    // Every other dash form is a descriptor spec only when written unquoted.
+    // Quoting turns it into an ordinary filename, and the two directions are
+    // one character apart:
+    //
+    //   >&-2   close, then `2` as an argument      >&"-2"  writes a file `-2`
+    //   >&2-   move fd 2                           >&"2-"  writes a file `2-`
+    //   >&x-   "ambiguous redirect", opens nothing >&"x-"  writes a file `x-`
+    //
+    // A trailing dash makes bash read the whole word as a descriptor spec
+    // whatever precedes it, so `>&x-` and `>&2x-` are errors rather than files.
+    let dashed = s.starts_with('-') || s.ends_with('-');
+    dashed && !word_is_quoted(word)
+}
+
+/// Was any part of this word written quoted?
+///
+/// Only matters for the dash forms above. A word that does not resolve
+/// statically never reaches here — `names_a_descriptor` returns early — so the
+/// remaining fragment kinds are the literal and quoted ones.
+fn word_is_quoted(word: &Word) -> bool {
+    !word.parts.iter().all(|f| matches!(f, Fragment::Literal(_)))
 }
 
 /// The argument hiding inside a `>&-word` / `<&-word` redirect, and where it
@@ -725,6 +747,11 @@ fn closed_descriptor_operand(redirect: &Redirect) -> Option<(usize, String)> {
         RedirectKind::DupInput(w) | RedirectKind::DupOutput(w) => w,
         _ => return None,
     };
+    // Quoting makes the whole word a filename, so there is no operand to
+    // recover: `>&"-2"` writes a file called `-2`.
+    if word_is_quoted(word) {
+        return None;
+    }
     let text = word.try_to_static_string()?;
     let operand = text.strip_prefix('-')?;
     if operand.is_empty() {
