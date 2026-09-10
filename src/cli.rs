@@ -149,7 +149,7 @@ pub fn check(command: &str, cwd: &str, permission_mode: Option<PermissionMode>) 
     // `custom_reason` and run it through `apply_permission_mode`, so the CLI
     // dry run's verdict matches the hook for unparseable input.
     let result = match thaum::parse_with(command, thaum::Dialect::Bash) {
-        Ok(program) => checker::check_program(&program, &parsed_perms, &resolved_cwd),
+        Ok(program) => checker::check_program(&program, command, &parsed_perms, &resolved_cwd),
         Err(_) => checker::CheckResult {
             decision: checker::Decision::Ask,
             matched_allow: vec![],

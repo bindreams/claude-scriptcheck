@@ -19,7 +19,7 @@ fn check_command(command: &str, cwd: &str) -> CheckResult {
     let loaded = settings::load_settings_from_contents(None, &[TEST_SETTINGS_JSON]);
     let parsed_perms = permission::parse_rules(&loaded.permissions, cwd, cwd);
     let program = thaum::parse_with(command, thaum::Dialect::Bash).unwrap();
-    checker::check_program(&program, &parsed_perms, cwd)
+    checker::check_program(&program, command, &parsed_perms, cwd)
 }
 
 // ── Logic tests (via library API) ───────────────────────────────────────────
@@ -2150,15 +2150,15 @@ fn cli_check_rejects_invalid_mode() {
 /// The prefix has to go for two reasons: prepended to Claude's `//`
 /// absolute-path escape it would form `///?/…`, and embedded in a shell command
 /// it is not a path any command could open.
-struct VaultProject {
-    root: String,
+pub(crate) struct VaultProject {
+    pub(crate) root: String,
     /// A directory outside the workspace, for the tests that need a path the
     /// project's rules do not cover. It lives inside the test's own fixture, so
     /// no test depends on or writes to shared machine state such as `/tmp`.
-    outside: String,
+    pub(crate) outside: String,
 }
 
-fn vault_paths(dir: &std::path::Path) -> VaultProject {
+pub(crate) fn vault_paths(dir: &std::path::Path) -> VaultProject {
     let canonical = std::fs::canonicalize(dir).unwrap();
     let slashed = canonical.to_string_lossy().replace('\\', "/");
     let base = slashed.strip_prefix("//?/").unwrap_or(&slashed);
@@ -2171,7 +2171,7 @@ fn vault_paths(dir: &std::path::Path) -> VaultProject {
 }
 
 /// Populate the project with `vault/creds` and a settings file.
-fn write_vault_project(dir: &std::path::Path, permissions: &str) -> VaultProject {
+pub(crate) fn write_vault_project(dir: &std::path::Path, permissions: &str) -> VaultProject {
     let paths = vault_paths(dir);
     let canonical = std::path::PathBuf::from(&paths.root);
     std::fs::create_dir_all(&paths.outside).unwrap();
@@ -2186,7 +2186,7 @@ fn write_vault_project(dir: &std::path::Path, permissions: &str) -> VaultProject
     paths
 }
 
-fn run_bash_hook(command: &str, project_root: &str) -> String {
+pub(crate) fn run_bash_hook(command: &str, project_root: &str) -> String {
     let input = hook_json_with_mode(
         "Bash",
         serde_json::json!({ "command": command }),
@@ -3197,128 +3197,6 @@ fn hook_tar_extract_change_dir_still_denies(#[fixture(temp_dir)] dir: &std::path
     );
     assert_eq!(
         run_bash_hook(&format!("tar -xf out.tar -C {}/vault", p.root), &p.root),
-        "deny",
-    );
-}
-
-// ── Redirect classification ─────────────────────────────────────────────────
-//
-// Two redirect forms reached a file with no rule consulted. Both carry
-// `Bash(cat *)` deliberately: a Bash allow rule suppresses secondary demands,
-// so the deny firing anyway is the property each bypass defeated.
-
-#[skuld::test]
-fn hook_dup_output_to_file_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
-    // `>&FILE` with no leading fd redirects stdout and stderr to that file.
-    let abs = vault_paths(dir).root;
-    let p = write_vault_project(
-        dir,
-        &format!(r#"{{"allow":["Bash(cat *)"],"deny":["Write(//{abs}/vault/**)"]}}"#),
-    );
-    assert_eq!(
-        run_bash_hook(
-            &format!("cat {}/vault/creds >& {}/vault/x", p.root, p.root),
-            &p.root,
-        ),
-        "deny",
-    );
-}
-
-#[skuld::test]
-fn hook_read_write_redirect_denies_on_read_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
-    // `<>` opens for reading as well as writing, so a Read deny must fire.
-    let abs = vault_paths(dir).root;
-    let p = write_vault_project(
-        dir,
-        &format!(r#"{{"allow":["Bash(cat *)"],"deny":["Read(//{abs}/vault/**)"]}}"#),
-    );
-    assert_eq!(
-        run_bash_hook(&format!("cat <> {}/vault/creds", p.root), &p.root),
-        "deny",
-    );
-}
-
-#[skuld::test]
-fn hook_read_write_redirect_denies_on_write_rule(#[fixture(temp_dir)] dir: &std::path::Path) {
-    let abs = vault_paths(dir).root;
-    let p = write_vault_project(
-        dir,
-        &format!(r#"{{"allow":["Bash(cat *)"],"deny":["Write(//{abs}/vault/**)"]}}"#),
-    );
-    assert_eq!(
-        run_bash_hook(&format!("cat <> {}/vault/creds", p.root), &p.root),
-        "deny",
-    );
-}
-
-#[skuld::test]
-fn hook_descriptor_forms_are_not_file_targets(#[fixture(temp_dir)] dir: &std::path::Path) {
-    // No Bash allow rule here: with one, suppression would hide an over-eager
-    // file access and the control would pass vacuously.
-    let abs = vault_paths(dir).root;
-    let p = write_vault_project(
-        dir,
-        &format!(r#"{{"allow":["Read(//{abs}/vault/creds)"]}}"#),
-    );
-    for suffix in ["2>&1", ">&2", ">&-", ">&2-", ">&1-", "<&0-", "<<< hi"] {
-        assert_eq!(
-            run_bash_hook(&format!("cat {}/vault/creds {suffix}", p.root), &p.root),
-            "allow",
-            "{suffix}",
-        );
-    }
-}
-
-#[skuld::test]
-fn hook_descriptor_move_does_not_trigger_a_write_deny(#[fixture(temp_dir)] dir: &std::path::Path) {
-    // A deny no rule can lift is the worst outcome available, so the move form
-    // must not be read as a file called `2-`.
-    let abs = vault_paths(dir).root;
-    let p = write_vault_project(
-        dir,
-        &format!(r#"{{"allow":["Read(//{abs}/vault/creds)"],"deny":["Write(//{abs}/**)"]}}"#),
-    );
-    assert_eq!(
-        run_bash_hook(&format!("cat {}/vault/creds >&2-", p.root), &p.root),
-        "allow",
-    );
-}
-
-#[skuld::test]
-fn hook_fd_one_dup_output_to_file_denies(#[fixture(temp_dir)] dir: &std::path::Path) {
-    // `1>&f` and its zero-padded spellings redirect to a file just as `>&f`
-    // does; only a descriptor other than 1 is an ambiguous-redirect error.
-    let abs = vault_paths(dir).root;
-    let p = write_vault_project(
-        dir,
-        &format!(r#"{{"allow":["Bash(cat *)"],"deny":["Write(//{abs}/vault/**)"]}}"#),
-    );
-    for fd in ["1", "01", "001"] {
-        assert_eq!(
-            run_bash_hook(
-                &format!("cat {}/vault/creds {fd}>& {}/vault/x", p.root, p.root),
-                &p.root,
-            ),
-            "deny",
-            "{fd}>&",
-        );
-    }
-}
-
-#[skuld::test]
-fn hook_close_form_operand_cannot_hide_a_denied_path(#[fixture(temp_dir)] dir: &std::path::Path) {
-    // `cp >&-vault/creds stolen.txt` copies the deny-listed file: bash reports
-    // `argc=2 [vault/creds stolen.txt]`, so the operand is a real argument.
-    let abs = vault_paths(dir).root;
-    let p = write_vault_project(
-        dir,
-        &format!(r#"{{"allow":["Bash(cp *)"],"deny":["Read(//{abs}/vault/**)"]}}"#),
-    );
-    assert_eq!(
-        run_bash_hook(
-            &format!("cp >&-{}/vault/creds {}/stolen.txt", p.root, p.root),
-            &p.root,
-        ),
         "deny",
     );
 }

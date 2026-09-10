@@ -104,7 +104,9 @@ fn check(agent: Agent, command: &str, cwd: &str, permission_mode: Option<Permiss
                 load_permissions_for_agent(agent, &resolved_cwd, &project_root, permission_mode);
 
             let result = match thaum::parse_with(command, thaum::Dialect::Bash) {
-                Ok(program) => checker::check_program(&program, &parsed_perms, &resolved_cwd),
+                Ok(program) => {
+                    checker::check_program(&program, command, &parsed_perms, &resolved_cwd)
+                }
                 Err(_) => checker::CheckResult {
                     decision: checker::Decision::Ask,
                     matched_allow: vec![],
@@ -460,7 +462,7 @@ fn handle_bash(
     // Ask result with custom_reason so the original error message is preserved
     // through the apply_permission_mode transform.
     let result = match thaum::parse_with(&command, thaum::Dialect::Bash) {
-        Ok(program) => checker::check_program(&program, parsed_perms, cwd),
+        Ok(program) => checker::check_program(&program, &command, parsed_perms, cwd),
         Err(_) => CheckResult {
             decision: Decision::Ask,
             matched_allow: vec![],

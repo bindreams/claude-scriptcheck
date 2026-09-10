@@ -7,6 +7,7 @@ use crate::filter::{Arg0Pattern, BashFilter, BashFilterItem, Filter, PathFilter}
 use crate::permission::ParsedPermissions;
 use crate::permission_mode::PermissionMode;
 use crate::python_ast::{self, PythonAnalysis};
+use crate::redirect;
 
 /// Final decision for a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,10 +79,16 @@ pub fn apply_permission_mode(mut result: CheckResult, mode: Option<PermissionMod
 }
 
 /// Top-level entry point: check a parsed program against permission rules.
-pub fn check_program(program: &Program, perms: &ParsedPermissions, cwd: &str) -> CheckResult {
+pub fn check_program(
+    program: &Program,
+    source: &str,
+    perms: &ParsedPermissions,
+    cwd: &str,
+) -> CheckResult {
     let mut checker = PermissionChecker {
         perms,
         cwd,
+        source,
         unmatched: Vec::new(),
         denied: None,
         matched_allow: Vec::new(),
@@ -101,6 +108,8 @@ pub fn check_file_accesses(
     let mut checker = PermissionChecker {
         perms,
         cwd,
+        // No program, so no redirect can need its source.
+        source: "",
         unmatched: Vec::new(),
         denied: None,
         matched_allow: Vec::new(),
@@ -118,6 +127,12 @@ pub fn check_file_accesses(
 struct PermissionChecker<'a> {
     perms: &'a ParsedPermissions,
     cwd: &'a str,
+    /// The text `program` was parsed from, empty when there is no program.
+    ///
+    /// Redirect classification turns on how a character was *written* — `-`,
+    /// `\-` and `"-"` all parse to the same literal — so the source has to
+    /// travel with the AST. See `crate::redirect`.
+    source: &'a str,
     unmatched: Vec<String>,
     denied: Option<String>,
     matched_allow: Vec<String>,
@@ -145,13 +160,13 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
     fn visit_redirect(&mut self, redirect: &'ast Redirect) {
         // Handles redirects for compound / function-def contexts (e.g.
         // `{ ...; } > /log`). Simple-command redirects are handled inside
-        // `check_command` via `extract_redirect_accesses`. Compound redirects
+        // `check_command` via `redirect::accesses`. Compound redirects
         // are not bound to a single command, so no Bash allow rule can
         // suppress them.
         if self.denied.is_some() {
             return;
         }
-        for access in accesses_for_redirect(redirect, self.cwd) {
+        for access in redirect::accesses_for_redirect(redirect, self.source, self.cwd) {
             self.check_file_access(&access, false);
             if self.denied.is_some() {
                 return;
@@ -212,14 +227,23 @@ impl PermissionChecker<'_> {
 
     fn check_command(&mut self, cmd: &Command) {
         // Argument literals, including any operand bash would have taken out of
-        // a `>&-word` redirect. See `command_arg_literals`.
+        // a `>&-word` redirect. See `redirect::command_arg_literals`.
         //
         // This runs before the no-arguments check because the operand can *be*
         // the command name: `>&-danger` has no arguments of its own, and bash
         // closes stdout and runs `danger`.
-        let arg_literals: Vec<Option<String>> = command_arg_literals(cmd);
-        // Assignment-only command: no command name, nothing to check.
+        let arg_literals: Vec<Option<String>> = redirect::command_arg_literals(cmd, self.source);
+        // No command name — an assignment-only command (`FOO=x > log`) or a
+        // null one (`> log`). bash still performs the redirects, so the file
+        // accesses are checked; `bash_allowed` is false because no `Bash(...)`
+        // rule can name a command that has no name.
         if arg_literals.is_empty() {
+            for access in redirect::accesses(&cmd.redirects, self.source, self.cwd) {
+                self.check_file_access(&access, false);
+                if self.denied.is_some() {
+                    return;
+                }
+            }
             return;
         }
 
@@ -250,7 +274,7 @@ impl PermissionChecker<'_> {
                 if !bash_allowed {
                     self.unmatched.push("Bash(<dynamic command>)".to_string());
                 }
-                for access in extract_redirect_accesses(&cmd.redirects, self.cwd) {
+                for access in redirect::accesses(&cmd.redirects, self.source, self.cwd) {
                     self.check_file_access(&access, bash_allowed);
                     if self.denied.is_some() {
                         return;
@@ -285,7 +309,7 @@ impl PermissionChecker<'_> {
         }
 
         // Extract file accesses from redirects
-        let redirect_accesses = extract_redirect_accesses(&cmd.redirects, self.cwd);
+        let redirect_accesses = redirect::accesses(&cmd.redirects, self.source, self.cwd);
 
         // Extract file accesses from well-known command semantics (clap-based parsers)
         let cmd_parse_result =
@@ -609,280 +633,6 @@ fn rule_suggestion(kind: AccessKind, scope: &AccessScope) -> String {
         );
     }
     format!("{kind_name}({})", scope.display())
-}
-
-// ─── Redirect file access extraction ─────────────────────────────────────────
-
-/// The file accesses one redirect performs.
-///
-/// Empty means the redirect opens no file, and every such arm says why rather
-/// than defaulting. A blanket "fd duplication" arm is what let `>&FILE` reach a
-/// file unchecked, and folding `<>` in with the write-only forms is what kept
-/// `Read` deny rules from firing on it.
-///
-/// A redirect can name a file in more than one way, hence the `Vec`: `<>` opens
-/// one path for both reading and writing.
-fn accesses_for_redirect(redirect: &Redirect, cwd: &str) -> Vec<FileAccess> {
-    use AccessKind::{Read, Write};
-
-    let (word, kinds): (&Word, &[AccessKind]) = match &redirect.kind {
-        RedirectKind::Input(w) => (w, &[Read]),
-        RedirectKind::Output(w) | RedirectKind::Clobber(w) | RedirectKind::Append(w) => {
-            (w, &[Write])
-        }
-        RedirectKind::BashOutputAll(w) | RedirectKind::BashAppendAll(w) => (w, &[Write]),
-        // `<>file` opens the file for reading *and* writing (Bash §3.6.10), so
-        // a `Read` deny rule has to fire on it as well as a `Write` one.
-        RedirectKind::ReadWrite(w) => (w, &[Read, Write]),
-        // The body is inline text — no file is named.
-        RedirectKind::HereDoc { .. } | RedirectKind::BashHereString(_) => return Vec::new(),
-        // `<&word` takes only descriptor forms. Any other word is a redirection
-        // error, not a file open: the file special case below is output-only.
-        // Verified: `log hi <&foo` fails with "ambiguous redirect".
-        RedirectKind::DupInput(_) => return Vec::new(),
-        RedirectKind::DupOutput(w) => {
-            // Bash §3.6.8 says "if n is omitted", but bash also redirects when
-            // n is 1 — `1>&f`, and zero-padded spellings like `001>&f`, all
-            // create `f`. thaum parses the descriptor as a number, so the
-            // padding collapses on its own. Every other descriptor is an
-            // "ambiguous redirect" error that opens nothing, verified for
-            // `0>&f`, `2>&f`, `3>&f` and `10>&f`.
-            let redirects_stdout = matches!(redirect.fd, None | Some(1));
-            if !redirects_stdout || names_a_descriptor(w) {
-                return Vec::new();
-            }
-            // A bare leading dash closes the descriptor and hands the rest of
-            // the token to `closed_descriptor_operand`, so no file is named —
-            // unless an escape means the dash only looks bare, in which case
-            // both readings are emitted rather than one being guessed.
-            if edge_is_unquoted_dash(w, Edge::First) && !escape_hides_the_edge(w) {
-                return Vec::new();
-            }
-            (w, &[Write])
-        }
-    };
-
-    // A target that does not resolve statically is dropped, exactly as before.
-    // Recording it instead is #45's job, and deliberately not this change's.
-    let Some(path) = word.try_to_static_string() else {
-        return Vec::new();
-    };
-    let resolved = file_access::resolve_path(&path, cwd);
-    kinds
-        .iter()
-        .map(|kind| FileAccess::exact(resolved.clone(), *kind))
-        .collect()
-}
-
-/// Does this `>&word` / `<&word` target name a descriptor instead of a file?
-///
-/// Three forms do, and none of them is a filename:
-///
-/// - `digits` — duplicate that descriptor (Bash §3.6.8), `>&2`
-/// - `-` — close the descriptor (§3.6.8), `>&-`
-/// - `digits-` — *move* the descriptor: duplicate, then close the source
-///   (§3.6.9), `>&2-`
-///
-/// The move form is the one worth spelling out, because it only became
-/// load-bearing when `>&FILE` started being treated as a write. Reading its
-/// trailing `-` as part of a filename turns `>&2-` into a write to a file
-/// called `2-`, which a `Deny(Write(...))` over the directory then blocks — a
-/// false deny on a valid command, and no rule the user adds can lift it.
-///
-/// A leading `-` is *not* this: `>&-2` opens a file called `-2`, because the
-/// word is neither digits nor `-`.
-///
-/// A word that does not resolve statically could be any of these or a filename.
-/// Of those readings only the file one needs checking, so it is not treated as
-/// a descriptor.
-fn names_a_descriptor(word: &Word) -> bool {
-    let Some(s) = word.try_to_static_string() else {
-        return false;
-    };
-    // `>&""` is a "Bad file descriptor" error. It opens nothing.
-    if s.is_empty() {
-        return true;
-    }
-    // Closing and duplicating survive quoting: `>&"-"` closes and `>&"2"`
-    // duplicates, exactly as their bare spellings do.
-    if s == "-" || s.bytes().all(|b| b.is_ascii_digit()) {
-        return true;
-    }
-    // An unquoted trailing dash makes bash read the whole word as a descriptor
-    // spec whatever precedes it — `>&2-` moves fd 2, `>&x-` is an "ambiguous
-    // redirect" — and neither opens a file. Quote that one character and it is
-    // an ordinary filename again: `>&"2"-` moves, but `>&2"-"` writes `2-`.
-    edge_is_unquoted_dash(word, Edge::Last)
-}
-
-/// Which end of a redirect word to inspect.
-#[derive(Clone, Copy)]
-enum Edge {
-    First,
-    Last,
-}
-
-/// Is the character at `edge` of this word a `-` that was written unquoted?
-///
-/// Quoting is a property of individual characters, not of the word. Both dash
-/// rules turn on one character, so testing whether the word contains any
-/// quoting answers a different question — and answers it wrongly for a word
-/// like `>&-"vault/creds"`, where the dash is bare and only the operand is
-/// quoted.
-///
-/// Returns `false` for any word that is not fully static: a fragment whose
-/// value is unknown could contribute the edge character itself.
-fn edge_is_unquoted_dash(word: &Word, edge: Edge) -> bool {
-    let mut parts = Vec::new();
-    for fragment in &word.parts {
-        match fragment_text(fragment) {
-            Some(part) => parts.push(part),
-            None => return false,
-        }
-    }
-    // An empty fragment contributes no character, so it cannot be the edge:
-    // in `>&""-` the dash is the first character as well as the last.
-    parts.retain(|(_, text)| !text.is_empty());
-    let part = match edge {
-        Edge::First => parts.first(),
-        Edge::Last => parts.last(),
-    };
-    part.is_some_and(|(quoted, text)| {
-        !quoted
-            && match edge {
-                Edge::First => text.starts_with('-'),
-                Edge::Last => text.ends_with('-'),
-            }
-    })
-}
-
-/// Does this word's source hold characters its value does not?
-///
-/// thaum resolves `\-` to the same `Literal("-")` a bare dash produces, so an
-/// escape survives only as a span longer than the value. That says an escape
-/// happened, not where — and the two positions need opposite answers:
-///
-///   `>&\-2`            writes a file called `-2`, passes no argument
-///   `>&-vault\/creds`  closes, and passes `vault/creds` as an argument
-///
-/// Both arrive as an all-literal word whose value starts with `-`, so the
-/// position cannot be recovered. Recovering it would mean re-deriving bash's
-/// escaping from span arithmetic on top of a parse that already lost it.
-/// Instead the caller emits the file access *and* keeps the operand recovery,
-/// over-approximating both readings: each costs one spurious demand, while
-/// suppressing either would miss a real access. Tracked with thaum#14.
-///
-/// Sound only for a word of unquoted literals — quote delimiters occupy source
-/// bytes too — which is exactly the case where the leading-dash rule applies.
-fn escape_hides_the_edge(word: &Word) -> bool {
-    let mut value_len = 0;
-    for fragment in &word.parts {
-        match fragment {
-            Fragment::Literal(s) => value_len += s.len(),
-            _ => return false,
-        }
-    }
-    word.span.end.0 - word.span.start.0 > value_len
-}
-
-/// A fragment's static text, and whether it was written quoted.
-///
-/// `None` for the fragment kinds that make a word non-static.
-fn fragment_text(fragment: &Fragment) -> Option<(bool, String)> {
-    match fragment {
-        Fragment::Literal(s) => Some((false, s.clone())),
-        Fragment::SingleQuoted(s) | Fragment::BashAnsiCQuoted(s) => Some((true, s.clone())),
-        Fragment::DoubleQuoted(parts) | Fragment::BashLocaleQuoted(parts) => {
-            let mut text = String::new();
-            for part in parts {
-                text.push_str(&fragment_text(part)?.1);
-            }
-            Some((true, text))
-        }
-        Fragment::Parameter(_)
-        | Fragment::CommandSubstitution(_)
-        | Fragment::ArithmeticExpansion(_)
-        | Fragment::Glob(_)
-        | Fragment::TildePrefix(_)
-        | Fragment::BashExtGlob { .. }
-        | Fragment::BashBraceExpansion(_) => None,
-    }
-}
-
-/// The argument hiding inside a `>&-word` / `<&-word` redirect, and where it
-/// starts in the source.
-///
-/// thaum lexes the whole of `-word` as one redirect target. bash does not: it
-/// reads `>&-` as "close the descriptor" and then `word` as a plain argument.
-/// Verified — `log hi >&-2` reports `argc=2 [hi 2]` and creates no file.
-///
-/// The difference hides an operand. `cp >&-vault/creds stolen.txt` copies
-/// `vault/creds`, but thaum's argument list holds only `stolen.txt`, so without
-/// this the read never reaches the rules and a `Deny(Read(vault/**))` cannot
-/// fire on it.
-///
-/// # This is a workaround, and it has somewhere to go
-///
-/// The divergence is a lexer bug, tracked as thaum#14
-/// (<https://github.com/bindreams/thaum/issues/14>). Reconstructing bash's
-/// argument list here means scriptcheck reimplements a lexing rule on top of a
-/// parse that got it wrong — worth it while a live read bypass is open, but not
-/// where the fix belongs. When thaum#14 lands the operand arrives as an ordinary
-/// `Argument`, and this function and its call in `command_arg_literals` should
-/// be deleted rather than adapted.
-fn closed_descriptor_operand(redirect: &Redirect) -> Option<(usize, String)> {
-    let word = match &redirect.kind {
-        RedirectKind::DupInput(w) | RedirectKind::DupOutput(w) => w,
-        _ => return None,
-    };
-    // Only a bare leading dash terminates the token. Quoting that one character
-    // makes the whole word a filename instead — `>&"-2"` writes `-2` — while
-    // quoting anywhere *after* it changes nothing: `>&-"vault/creds"` still
-    // passes `vault/creds` as an argument.
-    if !edge_is_unquoted_dash(word, Edge::First) {
-        return None;
-    }
-    let text = word.try_to_static_string()?;
-    let operand = text.strip_prefix('-')?;
-    if operand.is_empty() {
-        // A bare `>&-` closes the descriptor and names nothing.
-        return None;
-    }
-    // The `-` is one byte, so the operand starts one byte into the word.
-    Some((word.span.start.0 + 1, operand.to_string()))
-}
-
-/// The arguments bash passes to the command, in source order.
-///
-/// Ordering matters because position is what gives an operand its meaning:
-/// `cp a b` reads `a` and writes `b`, so appending a recovered operand instead
-/// of splicing it would invert a read and a write. The splice exists only to
-/// work around thaum#14; see `closed_descriptor_operand`. Once that lands, this
-/// collapses back to mapping `cmd.arguments`.
-///
-/// A `>&-word` operand is spliced in at the
-/// point the word appears, which is where bash would have put it.
-fn command_arg_literals(cmd: &Command) -> Vec<Option<String>> {
-    let mut items: Vec<(usize, Option<String>)> = cmd
-        .arguments
-        .iter()
-        .map(|a| (a.span().start.0, a.try_to_static_string()))
-        .collect();
-    items.extend(
-        cmd.redirects
-            .iter()
-            .filter_map(closed_descriptor_operand)
-            .map(|(pos, text)| (pos, Some(text))),
-    );
-    items.sort_by_key(|(pos, _)| *pos);
-    items.into_iter().map(|(_, literal)| literal).collect()
-}
-
-fn extract_redirect_accesses(redirects: &[Redirect], cwd: &str) -> Vec<FileAccess> {
-    redirects
-        .iter()
-        .flat_map(|r| accesses_for_redirect(r, cwd))
-        .collect()
 }
 
 #[cfg(test)]
