@@ -972,11 +972,10 @@ mod fragment_descent_tests {
     }
 
     /// The `Parameter { argument }` arm cannot be reached through the pinned
-    /// thaum revision, which stores `${Y:-$(...)}`'s interior as a `Literal`
-    /// instead of parsing it. Upstream thaum parses it, so the arm becomes live
-    /// on a dependency bump. Building the node by hand proves the descent is
-    /// correct *now*, rather than leaving it unverifiable until then — which is
-    /// how it stayed ambiguous long enough to be argued about twice.
+    /// thaum revision, which builds `${Y:-$(...)}`'s interior as a flat
+    /// `Literal`. Upstream parses it, so the arm goes live when the pin moves.
+    /// Building the node by hand proves the descent is correct now rather than
+    /// leaving it unverifiable until then.
     #[test]
     fn parameter_argument_descent_reaches_a_substitution() {
         let fragment = Fragment::Parameter(ParameterExpansion::Complex {
