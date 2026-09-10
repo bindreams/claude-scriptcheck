@@ -2442,3 +2442,102 @@ fn ask_bash_rule_still_forces_the_full_flow_under_a_prefix() {
     let d = check_with_ask("LC_ALL=C ls", &["Bash(ls *)"], &[], &["Bash(ls *)"]);
     assert_eq!(d.decision, Decision::Ask, "{d:?}");
 }
+
+// ── The word funnel (#58) ───────────────────────────────────────────────────
+//
+// `Deny(...)` is meant to hold in every mode and to resist every allow rule.
+// It did not hold in six syntactic positions, because `Visit::visit_word` is a
+// no-op leaf that `PermissionChecker` never overrode: only words the checker
+// hand-walked were checked, and every word thaum's own `walk_*` delivered was
+// dropped. Overriding `visit_word` closes them together rather than one call
+// site per position.
+//
+// Redirect words (`> $(...)`, `<<< $(...)`, `> >(...)`) are the same defect in
+// a position the checker intercepts before thaum can deliver it; they are
+// issue #65 and are deliberately untouched here.
+
+#[skuld::test]
+fn deny_fires_inside_an_assignment_value() {
+    // The accident this protects against: `X=$(rm -rf "$DIR")` with DIR empty.
+    // A `Deny(Bash(rm *))` rule is set precisely to catch that.
+    let d = check("X=$(rm -rf /tmp/zzz)", &[], &["Bash(rm *)"]);
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn deny_fires_inside_an_assignment_prefix_value() {
+    let d = check(
+        "X=$(rm -rf /tmp/zzz) cat /tmp/f",
+        &[&format!("Read({}/**)", c("/tmp")), "Bash(cat *)"],
+        &["Bash(rm *)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn deny_fires_inside_an_array_assignment_value() {
+    let d = check("X=($(rm -rf /tmp/zzz))", &[], &["Bash(rm *)"]);
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn deny_fires_inside_a_for_loop_word_list() {
+    let d = check(
+        "for f in $(rm -rf /tmp/zzz); do echo x; done",
+        &["Bash(echo *)"],
+        &["Bash(rm *)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn deny_fires_inside_a_case_scrutinee() {
+    let d = check(
+        "case $(rm -rf /tmp/zzz) in a) echo x;; esac",
+        &["Bash(echo *)"],
+        &["Bash(rm *)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn deny_fires_inside_a_case_arm_pattern() {
+    let d = check(
+        "case a in $(rm -rf /tmp/zzz)) echo x;; esac",
+        &["Bash(echo *)"],
+        &["Bash(rm *)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn assignment_value_substitution_is_checked_without_rules() {
+    let d = check("X=$(curl -s http://example.com/x.sh)", &[], &[]);
+    assert_eq!(d.decision, Decision::Ask, "{d:?}");
+}
+
+#[skuld::test]
+fn double_quoted_assignment_value_substitution_is_checked() {
+    let d = check("X=\"$(rm -rf /tmp/zzz)\"", &[], &["Bash(rm *)"]);
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+}
+
+#[skuld::test]
+fn allowed_substitution_in_an_assignment_still_allows() {
+    // `VAR=$(...)` capture is ordinary; closing the funnel must not break it.
+    let d = check("X=$(git status)", &["Bash(git status)"], &[]);
+    assert_eq!(d.decision, Decision::Allow, "{d:?}");
+}
+
+#[skuld::test]
+fn positions_the_checker_already_reached_are_unchanged() {
+    for cmd in [
+        "cat $(rm -rf /tmp/zzz)",
+        "cat <(rm -rf /tmp/zzz)",
+        "( rm -rf /tmp/zzz )",
+        "if rm -rf /tmp/zzz; then echo x; fi",
+    ] {
+        let d = check(cmd, &["Bash(cat *)", "Bash(echo *)"], &["Bash(rm *)"]);
+        assert!(matches!(d.decision, Decision::Deny(_)), "{cmd}: {d:?}");
+    }
+}

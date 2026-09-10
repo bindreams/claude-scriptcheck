@@ -135,9 +135,21 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
         if self.denied.is_some() {
             return;
         }
+        // Assignment values are expanded before the command runs, so they are
+        // walked first. `walk_assignment` routes both `Scalar` and array
+        // values into `visit_word`, which is why nothing here enumerates the
+        // two shapes. This also covers assignment-only commands (`X=$(...)`),
+        // which `check_command` returns from early.
+        for assignment in &cmd.assignments {
+            self.visit_assignment(assignment);
+        }
+        if self.denied.is_some() {
+            return;
+        }
         self.check_command(cmd);
         // Walk arguments for embedded process substitutions / command substitutions.
-        // Don't call walk_command — we already handled redirects inside check_command.
+        // Don't call walk_command — we already handled redirects inside check_command,
+        // and their words are #65.
         for arg in &cmd.arguments {
             self.visit_argument(arg);
         }
@@ -168,8 +180,30 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
                 }
             }
             Argument::Word(w) => {
-                self.check_word_command_subs(w);
+                self.visit_word(w);
             }
+        }
+    }
+
+    /// The word funnel.
+    ///
+    /// thaum documents word-level traversal as opt-in: `Visit::visit_word` is
+    /// a no-op leaf, and every `Word` in the AST reaches it through the
+    /// `walk_*` functions. Overriding it here is what makes a command
+    /// substitution get checked wherever it hides — assignment values, `for`
+    /// and `select` word lists, `case` scrutinees and arm patterns — instead
+    /// of only in the positions this checker happens to hand-walk. Adding a
+    /// position is then routing its word here, not writing a new mechanism.
+    ///
+    /// Redirect words are the exception, and deliberately so: `visit_redirect`
+    /// intercepts them before `walk_redirect` can deliver them, and closing
+    /// that is issue #65.
+    fn visit_word(&mut self, word: &'ast Word) {
+        if self.denied.is_some() {
+            return;
+        }
+        for fragment in &word.parts {
+            self.check_fragment_command_subs(fragment);
         }
     }
 }
@@ -567,13 +601,6 @@ impl PermissionChecker<'_> {
             }
         }
         (asked, allowed)
-    }
-
-    /// Walk word fragments for command substitutions.
-    fn check_word_command_subs(&mut self, word: &Word) {
-        for fragment in &word.parts {
-            self.check_fragment_command_subs(fragment);
-        }
     }
 
     fn check_fragment_command_subs(&mut self, fragment: &Fragment) {
