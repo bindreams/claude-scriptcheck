@@ -211,14 +211,17 @@ impl PermissionChecker<'_> {
     }
 
     fn check_command(&mut self, cmd: &Command) {
-        // Assignment-only command (no command name)
-        if cmd.arguments.is_empty() {
-            return;
-        }
-
         // Argument literals, including any operand bash would have taken out of
         // a `>&-word` redirect. See `command_arg_literals`.
+        //
+        // This runs before the no-arguments check because the operand can *be*
+        // the command name: `>&-danger` has no arguments of its own, and bash
+        // closes stdout and runs `danger`.
         let arg_literals: Vec<Option<String>> = command_arg_literals(cmd);
+        // Assignment-only command: no command name, nothing to check.
+        if arg_literals.is_empty() {
+            return;
+        }
 
         // Get command name. Two forms are kept:
         //   - `raw_arg0`: the command as written (e.g. `./tools/rg.cmd`). Used
@@ -645,9 +648,14 @@ fn accesses_for_redirect(redirect: &Redirect, cwd: &str) -> Vec<FileAccess> {
             // "ambiguous redirect" error that opens nothing, verified for
             // `0>&f`, `2>&f`, `3>&f` and `10>&f`.
             let redirects_stdout = matches!(redirect.fd, None | Some(1));
+            if !redirects_stdout || names_a_descriptor(w) {
+                return Vec::new();
+            }
             // A bare leading dash closes the descriptor and hands the rest of
-            // the token to `closed_descriptor_operand`, so no file is named.
-            if !redirects_stdout || edge_is_unquoted_dash(w, Edge::First) || names_a_descriptor(w) {
+            // the token to `closed_descriptor_operand`, so no file is named —
+            // unless an escape means the dash only looks bare, in which case
+            // both readings are emitted rather than one being guessed.
+            if edge_is_unquoted_dash(w, Edge::First) && !escape_hides_the_edge(w) {
                 return Vec::new();
             }
             (w, &[Write])
@@ -746,6 +754,35 @@ fn edge_is_unquoted_dash(word: &Word, edge: Edge) -> bool {
                 Edge::Last => text.ends_with('-'),
             }
     })
+}
+
+/// Does this word's source hold characters its value does not?
+///
+/// thaum resolves `\-` to the same `Literal("-")` a bare dash produces, so an
+/// escape survives only as a span longer than the value. That says an escape
+/// happened, not where — and the two positions need opposite answers:
+///
+///   `>&\-2`            writes a file called `-2`, passes no argument
+///   `>&-vault\/creds`  closes, and passes `vault/creds` as an argument
+///
+/// Both arrive as an all-literal word whose value starts with `-`, so the
+/// position cannot be recovered. Recovering it would mean re-deriving bash's
+/// escaping from span arithmetic on top of a parse that already lost it.
+/// Instead the caller emits the file access *and* keeps the operand recovery,
+/// over-approximating both readings: each costs one spurious demand, while
+/// suppressing either would miss a real access. Tracked with thaum#14.
+///
+/// Sound only for a word of unquoted literals — quote delimiters occupy source
+/// bytes too — which is exactly the case where the leading-dash rule applies.
+fn escape_hides_the_edge(word: &Word) -> bool {
+    let mut value_len = 0;
+    for fragment in &word.parts {
+        match fragment {
+            Fragment::Literal(s) => value_len += s.len(),
+            _ => return false,
+        }
+    }
+    word.span.end.0 - word.span.start.0 > value_len
 }
 
 /// A fragment's static text, and whether it was written quoted.

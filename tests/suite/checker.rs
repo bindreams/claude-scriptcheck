@@ -2805,3 +2805,64 @@ fn the_dash_rule_is_specific_to_dup_output() {
         result.missing_rules,
     );
 }
+
+// Escapes: thaum records that one happened, not where -----------------------------------------------------------------
+//
+// `\-` and `-` both arrive as `Literal("-")`; only the span length differs, and
+// that says an escape exists without saying where. The two positions need
+// opposite answers — `>&\-2` writes a file called `-2`, `>&-vault\/creds`
+// closes and passes `vault/creds` as an argument — so neither reading can be
+// suppressed. Both are emitted, costing one spurious demand each.
+
+#[skuld::test]
+fn escaped_leading_dash_still_demands_the_write() {
+    // Verified: `log hi >&\-2` creates a file called `-2` and passes no
+    // argument. Reading it as a close would miss the write entirely.
+    let result = check("cat /tmp/x >&\\-2", &["Read(/tmp/x)"], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({})", canonical("/tmp/-2"))),
+        "escaped leading dash lost its write: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn escaped_leading_dash_fires_a_write_deny() {
+    assert!(matches!(
+        check("cat /tmp/x >&\\-2", &["Bash(cat *)"], &["Write(/tmp/**)"]).decision,
+        Decision::Deny(_),
+    ));
+}
+
+#[skuld::test]
+fn an_escape_elsewhere_keeps_the_operand_recovery() {
+    // Verified: `log hi >&-vault\/creds` reports argc=2 [hi vault/creds]. The
+    // leading dash is bare, so this is still a close plus an argument, and the
+    // escape further along must not suppress that reading.
+    assert!(
+        matches!(
+            check(
+                "cp >&-/tmp/vault\\/creds /tmp/stolen.txt",
+                &["Bash(cp *)"],
+                &["Read(/tmp/vault/**)"],
+            )
+            .decision,
+            Decision::Deny(_),
+        ),
+        "escape suppressed the operand recovery, hiding a denied read",
+    );
+}
+
+#[skuld::test]
+fn recovered_operand_can_be_the_command_name() {
+    // `>&-danger` has no arguments of its own: bash closes stdout and runs
+    // `danger`. The operand lands in position zero, so the no-arguments check
+    // has to come after the splice or the command escapes every rule.
+    assert!(matches!(
+        check(">&-danger", &[], &["Bash(danger)"]).decision,
+        Decision::Deny(_),
+    ));
+    assert_ne!(check(">&-danger", &[], &[]).decision, Decision::Allow);
+}
