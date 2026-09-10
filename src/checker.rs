@@ -887,3 +887,100 @@ mod apply_mode_tests {
         assert_eq!(once, twice);
     }
 }
+
+#[cfg(test)]
+mod fragment_descent_tests {
+    use super::*;
+    use crate::permission;
+    use crate::settings::Permissions;
+    use thaum::span::Span;
+
+    fn deny_rm() -> ParsedPermissions {
+        permission::parse_rules(
+            &Permissions {
+                deny: vec!["Bash(rm *)".to_string()],
+                ..Default::default()
+            },
+            "/tmp",
+            "/tmp",
+        )
+    }
+
+    fn word(parts: Vec<Fragment>) -> Word {
+        Word {
+            parts,
+            span: Span::new(0, 0),
+        }
+    }
+
+    /// `rm -rf /tmp/zzz` as a statement list, for embedding in a fragment.
+    fn rm_statements() -> Vec<Statement> {
+        let program = thaum::parse_with("rm -rf /tmp/zzz", thaum::Dialect::Bash).unwrap();
+        program.statements
+    }
+
+    fn program_running(parts: Vec<Fragment>) -> Program {
+        // `cat <word>` — the word carries the fragment under test.
+        let cmd = Command {
+            assignments: vec![],
+            arguments: vec![
+                Argument::Word(word(vec![Fragment::Literal("cat".to_string())])),
+                Argument::Word(word(parts)),
+            ],
+            redirects: vec![],
+            span: Span::new(0, 0),
+        };
+        Program {
+            statements: vec![Statement {
+                expression: Expression::Command(cmd),
+                mode: ExecutionMode::Sequential,
+                span: Span::new(0, 0),
+            }],
+            span: Span::new(0, 0),
+        }
+    }
+
+    /// The `Parameter { argument }` arm cannot be reached through the pinned
+    /// thaum revision, which stores `${Y:-$(...)}`'s interior as a `Literal`
+    /// instead of parsing it. Upstream thaum parses it, so the arm becomes live
+    /// on a dependency bump. Building the node by hand proves the descent is
+    /// correct *now*, rather than leaving it unverifiable until then — which is
+    /// how it stayed ambiguous long enough to be argued about twice.
+    #[test]
+    fn parameter_argument_descent_reaches_a_substitution() {
+        let fragment = Fragment::Parameter(ParameterExpansion::Complex {
+            name: "Y".to_string(),
+            operator: Some(ParamOp::Default),
+            argument: Some(Box::new(word(vec![Fragment::CommandSubstitution(
+                rm_statements(),
+            )]))),
+        });
+        let result = check_program(&program_running(vec![fragment]), &deny_rm(), "/tmp");
+        assert!(
+            matches!(result.decision, Decision::Deny(_)),
+            "Parameter argument descent did not reach the substitution: {result:?}",
+        );
+    }
+
+    /// The same, nested one level further: `"pre${Y:-$(rm ...)}post"`.
+    #[test]
+    fn parameter_argument_descent_works_inside_double_quotes() {
+        let inner = Fragment::Parameter(ParameterExpansion::Complex {
+            name: "Y".to_string(),
+            operator: Some(ParamOp::Default),
+            argument: Some(Box::new(word(vec![Fragment::CommandSubstitution(
+                rm_statements(),
+            )]))),
+        });
+        let fragment = Fragment::DoubleQuoted(vec![
+            Fragment::Literal("pre".to_string()),
+            inner,
+            Fragment::Literal("post".to_string()),
+        ]);
+        let result = check_program(&program_running(vec![fragment]), &deny_rm(), "/tmp");
+        assert!(
+            matches!(result.decision, Decision::Deny(_)),
+            "descent failed inside double quotes: {result:?}",
+        );
+    }
+}

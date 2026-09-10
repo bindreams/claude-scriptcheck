@@ -2572,18 +2572,18 @@ fn deny_fires_inside_a_brace_expansion_in_an_argument() {
 
 #[skuld::test]
 fn parameter_default_family_is_documented_as_unreached() {
-    // Pins the *known* state rather than the desired one. thaum parses the
-    // argument of `${Y:-...}` as a single Literal, so no descent can reach the
-    // substitution — see #69. If thaum starts parsing it, this test flips to
-    // Deny and the `Parameter` arm already added will carry it; update the
-    // test then, and do not "fix" it by widening the Literal handling, which
-    // costs 208 false positives per 48,814 commands (measured).
+    // Pins the *known* state, not the desired one. The pinned thaum revision
+    // (bf6b0ae) stores `${Y:-...}`'s interior as a single Literal, so there is
+    // nothing for any descent to reach; upstream (19bf51f) parses it. The
+    // `Parameter` arm is already in place and is proven correct by
+    // `checker::fragment_descent_tests`, which builds the node by hand — so
+    // this flips to Deny on a thaum bump with no code change. See #69.
     let d = check("X=${Y:-$(rm -rf /tmp/zzz)}", &[], &["Bash(rm *)"]);
     assert_eq!(
         d.decision,
         Decision::Allow,
-        "unreached-position pin: if this now denies, thaum parses the argument \
-         and the test should assert Deny — see #69",
+        "unreached-position pin: if this now denies, thaum has been bumped and \
+         the assertion should become Deny — see #69",
     );
 }
 
