@@ -537,7 +537,7 @@ fn the_dash_rule_is_specific_to_dup_output() {
     );
 }
 
-// Escapes: the source byte at the edge, not the parsed value -----------------------------------------------------------
+// Escapes: the source byte at the edge, not the parsed value ----------------------------------------------------------
 //
 // `-`, `\-` and `"-"` all parse to the same `Literal("-")`, so the decision
 // comes from the source byte at the word's edge. That byte reproduces bash's
@@ -689,7 +689,7 @@ fn an_escaped_operand_does_not_fabricate_a_write() {
     );
 }
 
-// Operands that do not resolve statically ------------------------------------------------------------------------------
+// Operands that do not resolve statically -----------------------------------------------------------------------------
 //
 // A `>&-word` operand can be a glob or an expansion. Its value is then unknown,
 // but its *position* is not, and position is what tells a source from a
@@ -747,7 +747,7 @@ fn an_empty_operand_is_still_an_argument() {
     ));
 }
 
-// `<&-word` is the same splice as `>&-word` ------------------------------------------------------------------------------
+// `<&-word` is the same splice as `>&-word` ---------------------------------------------------------------------------
 //
 // `closed_descriptor_operand` matches both, and so does bash: `p hi
 // <&-vault/creds` reports argc=2 [hi vault/creds]. The read side is the more
@@ -821,7 +821,7 @@ fn a_quoted_input_dash_form_names_nothing_at_all() {
     }
 }
 
-// Redirects with no command word -----------------------------------------------------------------------------------------
+// Redirects with no command word --------------------------------------------------------------------------------------
 //
 // `> log` truncates the file with nothing to run, and so does `FOO=x > log`.
 // bash performs the redirections either way, so the accesses have to be

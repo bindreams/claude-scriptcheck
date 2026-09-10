@@ -70,6 +70,14 @@ pub fn accesses_for_redirect(redirect: &Redirect, source: &str, cwd: &str) -> Ve
     let Some(path) = word.try_to_static_string() else {
         return Vec::new();
     };
+    // An empty target is a redirection error in every form — `> ""` and `<> ""`
+    // report "No such file or directory", `>& ""` reports "Bad file
+    // descriptor" — and bash abandons the command without opening anything.
+    // Resolving it instead names the working directory, which is not a file the
+    // command touches and which a `Deny(Write(...))` would then fire on.
+    if path.is_empty() {
+        return Vec::new();
+    }
     let resolved = file_access::resolve_path(&path, cwd);
     kinds
         .iter()
