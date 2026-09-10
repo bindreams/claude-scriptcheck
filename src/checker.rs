@@ -34,6 +34,16 @@ pub struct CheckResult {
     /// Used by synthetic Ask sites (parse failures, missing file paths) to preserve
     /// their informative reason across the `apply_permission_mode` transform.
     pub custom_reason: Option<String>,
+    /// Advisory lines shown after the missing-rule list, never inside it.
+    ///
+    /// `missing_rules` is a list of rules the user can paste into
+    /// `permissions.allow`, and every consumer iterates it on that assumption —
+    /// `cli::check` prints them as a bullet list, and `dontAsk` joins them into
+    /// "requires rule(s) not in settings: …, add the listed rule(s)". Anything
+    /// that is not a pasteable rule must go here instead: an explanation put in
+    /// `missing_rules` gets rendered as a rule and instructs the reader to paste
+    /// it, which is exactly what happened to the environment-assignment note.
+    pub notes: Vec<String>,
 }
 
 /// Transform a `CheckResult`'s decision based on the active permission mode.
@@ -71,6 +81,13 @@ pub fn apply_permission_mode(mut result: CheckResult, mode: Option<PermissionMod
                 Some(ctx) if !ctx.is_empty() => format!("{ctx}. {base}"),
                 _ => base,
             };
+            // Notes go after the paste instruction, never inside the rule list
+            // it refers to.
+            let reason = if result.notes.is_empty() {
+                reason
+            } else {
+                format!("{reason} Note: {}.", result.notes.join("; "))
+            };
             Decision::Deny(reason)
         }
         (other, _) => other,
@@ -84,6 +101,7 @@ pub fn check_program(program: &Program, perms: &ParsedPermissions, cwd: &str) ->
         perms,
         cwd,
         unmatched: Vec::new(),
+        notes: Vec::new(),
         denied: None,
         matched_allow: Vec::new(),
         matched_deny: Vec::new(),
@@ -103,6 +121,7 @@ pub fn check_file_accesses(
         perms,
         cwd,
         unmatched: Vec::new(),
+        notes: Vec::new(),
         denied: None,
         matched_allow: Vec::new(),
         matched_deny: Vec::new(),
@@ -120,6 +139,7 @@ struct PermissionChecker<'a> {
     perms: &'a ParsedPermissions,
     cwd: &'a str,
     unmatched: Vec<String>,
+    notes: Vec<String>,
     denied: Option<String>,
     matched_allow: Vec<String>,
     matched_deny: Vec<String>,
@@ -214,6 +234,20 @@ impl PermissionChecker<'_> {
     fn finalize(mut self) -> CheckResult {
         self.unmatched.sort();
         self.unmatched.dedup();
+        self.notes.sort();
+        self.notes.dedup();
+        // A native deny is authoritative and names its own reason, so rules
+        // collected for *other* commands in the program are not "rules that
+        // would need to be allowed" for anything — the deny stands whatever the
+        // user adds. `main.rs` documents native denies as carrying an empty
+        // list and the log writer relies on it; without this, a program like
+        // `unknown_cmd; rm -rf x` denied on `rm` still reported
+        // `Bash(unknown_cmd)` as missing, polluting the audit log with an entry
+        // about a different command.
+        if self.denied.is_some() {
+            self.unmatched.clear();
+            self.notes.clear();
+        }
         let decision = if let Some(reason) = self.denied {
             Decision::Deny(reason)
         } else if self.unmatched.is_empty() {
@@ -231,6 +265,7 @@ impl PermissionChecker<'_> {
             decision,
             missing_rules: self.unmatched,
             custom_reason: None,
+            notes: self.notes,
             matched_allow: self.matched_allow,
             matched_deny: self.matched_deny,
         }
@@ -465,17 +500,12 @@ impl PermissionChecker<'_> {
                     items.push(BashFilterItem::MatchZeroOrMore);
                 }
                 let filter = BashFilter::from_items(items);
-                // The rule string stays pastable on its own. The explanation
-                // goes in a separate entry prefixed `note:`, which sorts after
-                // every `Bash(`/`Read(`/`Write(` entry in `finalize`. Appending
-                // it to the rule made the whole line look pastable, and pasting
-                // it produced the identical ask with no warning — unlike
-                // `Bash(eval ...) -- cannot statically analyze eval`, where the
-                // rule half is not a usable rule either.
+                // `missing_rules` holds pasteable rules and nothing else; the
+                // explanation is advisory and belongs in `notes`.
                 self.unmatched.push(filter.to_rule_string());
                 if env_forced_the_rule {
-                    self.unmatched.push(format!(
-                        "note: environment assignment(s) {} can change what this command runs",
+                    self.notes.push(format!(
+                        "environment assignment(s) {} can change what this command runs",
                         unmodelled_env.join(", "),
                     ));
                 }
@@ -612,10 +642,8 @@ impl PermissionChecker<'_> {
     /// substitution it carries.
     ///
     /// **This match is deliberately exhaustive — do not add a `_ => {}` arm.**
-    /// It had one, and it silently dropped every fragment shape but two, so a
-    /// substitution one level deeper than `$(...)` escaped a funnel that was
-    /// otherwise reaching it correctly. Listing every variant makes a new
-    /// `Fragment` in thaum a compile error here instead of a new hole.
+    /// Listing every variant makes a new `Fragment` in thaum a compile error
+    /// here rather than a silently unwalked shape.
     ///
     /// Some variants are leaves in thaum's grammar and some are leaves only
     /// because thaum does not parse their interior; the difference matters and
@@ -758,6 +786,7 @@ mod apply_mode_tests {
             matched_deny: vec![],
             missing_rules: vec!["Bash(foo)".into(), "Bash(bar)".into()],
             custom_reason: None,
+            notes: vec![],
         }
     }
 
@@ -768,6 +797,7 @@ mod apply_mode_tests {
             matched_deny: vec![],
             missing_rules: vec![],
             custom_reason: None,
+            notes: vec![],
         }
     }
 
@@ -778,6 +808,7 @@ mod apply_mode_tests {
             matched_deny: vec!["Bash(rm *)".into()],
             missing_rules: vec![],
             custom_reason: None,
+            notes: vec![],
         }
     }
 

@@ -3271,12 +3271,14 @@ fn bypass_mode_still_allows_an_env_prefix_and_logs_the_missing_rule() {
     assert_eq!(parse_decision(&output), "allow");
 
     // The command text also contains the variable name, so assert on the
-    // `missing_rules` key as well — otherwise this passes for the wrong reason.
+    // `missing_rules` key and its contents — otherwise this passes for the
+    // wrong reason. The explanatory note is not logged: `missing_rules` is the
+    // actionable half, and the command line already records the assignment.
     let log = std::fs::read_to_string(&log_path).unwrap();
     assert!(log.contains("verdict: allow"), "unexpected log:\n{log}");
     assert!(log.contains("missing_rules:"), "unexpected log:\n{log}");
     assert!(
-        log.contains("environment assignment(s) GIT_EXTERNAL_DIFF"),
+        log.contains("Bash(git diff)"),
         "log should record the unmatched rule:\n{log}",
     );
 

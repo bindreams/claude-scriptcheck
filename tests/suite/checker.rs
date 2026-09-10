@@ -2397,8 +2397,12 @@ fn prefix_adds_nothing_when_a_bash_rule_was_needed_anyway() {
     // These already needed `Bash(...)`, so the prefix changes nothing — not
     // the verdict and not the suggested rule. This is why the fix is free for
     // the bulk of real usage.
+    // Both variables must be NON-inert, or the pair passes without ever
+    // reaching the branch under test: an inert name leaves `unmodelled_env`
+    // empty, so nothing is suppressed and nothing is asserted. `RUST_LOG` was
+    // here and made half this test vacuous.
     for (bare, prefixed) in [
-        ("cargo test", "RUST_LOG=debug cargo test"),
+        ("cargo test", "SKULD_LABELS=x cargo test"),
         ("make", "FOO=1 make"),
     ] {
         let plain = check(bare, &[], &[]);
@@ -2588,6 +2592,73 @@ fn parameter_default_family_is_documented_as_unreached() {
 }
 
 #[skuld::test]
+fn env_prefix_note_is_not_in_the_rule_list() {
+    // `missing_rules` is pasteable rules only. Under dontAsk the deny reason
+    // joins that list and tells the reader to paste it into permissions.allow,
+    // so an explanation in there instructs them to paste an explanation.
+    let d = check("GIT_EXTERNAL_DIFF=./evil.sh git diff", &[], &[]);
+    assert_eq!(d.missing_rules, vec!["Bash(git diff)".to_string()]);
+    assert_eq!(
+        d.notes,
+        vec![
+            "environment assignment(s) GIT_EXTERNAL_DIFF can change what this command runs"
+                .to_string()
+        ],
+    );
+    assert!(
+        !d.missing_rules.iter().any(|r| r.starts_with("note:")),
+        "notes must not appear in missing_rules: {:?}",
+        d.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn native_deny_carries_no_missing_rules() {
+    // `main.rs` documents native denies as carrying an empty list and the log
+    // writer relies on it. The walk keeps visiting statements after a deny, so
+    // rules collected for an unrelated earlier command used to survive into it.
+    let d = check(
+        "some_unknown_cmd_xyz; rm -rf /tmp/zzz",
+        &[],
+        &["Bash(rm *)"],
+    );
+    assert!(matches!(d.decision, Decision::Deny(_)), "{d:?}");
+    assert!(
+        d.missing_rules.is_empty(),
+        "native deny leaked missing_rules: {:?}",
+        d.missing_rules,
+    );
+    assert!(
+        d.notes.is_empty(),
+        "native deny leaked notes: {:?}",
+        d.notes
+    );
+}
+
+#[skuld::test]
+fn git_config_env_forces_a_bash_rule_even_for_an_inert_variable() {
+    // git reads the config value out of the named variable, so `--config-env`
+    // turns *any* variable into a config source — including one on the inert
+    // list. Verified against real git: the script executes.
+    for cmd in [
+        "LC_ALL=./evil.sh git --config-env=diff.external=LC_ALL diff",
+        "LANG=./evil.sh git --config-env=core.pager=LANG log",
+        "EVIL=./evil.sh git --config-env=diff.external=EVIL diff",
+        "LC_ALL=./evil.sh git --config-env diff.external=LC_ALL diff",
+    ] {
+        let d = check(cmd, &[], &[]);
+        assert_eq!(d.decision, Decision::Ask, "{cmd}: {d:?}");
+    }
+    // And it is still suppressed by an explicit Bash allow, like `-c`.
+    let d = check(
+        "LC_ALL=./evil.sh git --config-env=diff.external=LC_ALL diff",
+        &["Bash(git *)"],
+        &[],
+    );
+    assert_eq!(d.decision, Decision::Allow, "{d:?}");
+}
+
+#[skuld::test]
 fn env_prefix_note_does_not_masquerade_as_a_pastable_rule() {
     // The suggestion must be pastable on its own; the explanation is a
     // separate entry that no one can mistake for a rule.
@@ -2599,11 +2670,11 @@ fn env_prefix_note_does_not_masquerade_as_a_pastable_rule() {
         d.missing_rules,
     );
     assert!(
-        d.missing_rules
+        d.notes
             .iter()
-            .any(|r| r.starts_with("note: environment assignment(s) GIT_EXTERNAL_DIFF")),
-        "expected a separate note entry, got {:?}",
-        d.missing_rules,
+            .any(|n| n.starts_with("environment assignment(s) GIT_EXTERNAL_DIFF")),
+        "expected a note, got {:?}",
+        d.notes,
     );
     // And pasting the pastable half must actually resolve it.
     let d = check(
