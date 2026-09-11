@@ -191,18 +191,27 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
         if self.denied.is_some() || self.is_commented_out(cmd.span.start.0) {
             return;
         }
-        // Assignment values are expanded before the command runs, so they are
-        // walked first. `walk_assignment` routes both `Scalar` and array
-        // values into `visit_word`, which is why nothing here enumerates the
-        // two shapes. This also covers assignment-only commands (`X=$(...)`),
-        // which `check_command` returns from early.
+        // `check_command` first: it is what discovers a comment in this
+        // command's own words, and the assignments below can sit inside it —
+        // `>&-#foo V=$(rm -rf x)` runs nothing at all.
+        self.check_command(cmd);
+        if self.denied.is_some() {
+            return;
+        }
+        // Assignment values are expanded before the command runs.
+        // `walk_assignment` routes both `Scalar` and array values into
+        // `visit_word`, which is why nothing here enumerates the two shapes.
+        // This also covers assignment-only commands (`X=$(...)`), which
+        // `check_command` returns from early.
         for assignment in &cmd.assignments {
+            if self.is_commented_out(assignment.span.start.0) {
+                continue;
+            }
             self.visit_assignment(assignment);
         }
         if self.denied.is_some() {
             return;
         }
-        self.check_command(cmd);
         // Walk arguments for embedded process substitutions / command substitutions.
         // Don't call walk_command — we already handled redirects inside check_command,
         // and their words are #65.
@@ -266,7 +275,7 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
     /// intercepts them before `walk_redirect` can deliver them, and closing
     /// that is issue #65.
     fn visit_word(&mut self, word: &'ast Word) {
-        if self.denied.is_some() {
+        if self.denied.is_some() || self.is_commented_out(word.span.start.0) {
             return;
         }
         // The word's own source, so a substitution inside it can be walked
@@ -413,18 +422,20 @@ impl<'a> PermissionChecker<'a> {
         // closes stdout and runs `danger`.
         let redirect::CommandLine {
             arguments: arg_literals,
-            comment_at,
+            comment,
         } = redirect::command_line(cmd, self.source);
         // A comment runs to the end of the line, so it silences what follows in
         // this command *and* every later one — `cat x >&-#foo | rm -rf zzz`
         // runs no `rm`, and demanding a write for it is a deny no rule lifts.
-        if let Some(at) = comment_at {
-            // To the newline, and no further: the next line is ordinary code.
-            if let Some(source) = self.source {
-                let end = source[at..]
-                    .find('\n')
-                    .map_or(source.len(), |offset| at + offset);
-                self.comment = Some(at..end);
+        if let Some(range) = comment.clone() {
+            self.comment = Some(range);
+        }
+        // The operand bash lexed out of a `>&-word` is an argument, and an
+        // argument's interior is walked: `cat >&-$(rm -rf x)` runs the `rm`.
+        for word in redirect::recovered_operand_words(cmd, self.source) {
+            self.visit_word(word);
+            if self.denied.is_some() {
+                return;
             }
         }
 
@@ -434,7 +445,7 @@ impl<'a> PermissionChecker<'a> {
         // argument is looked at. Deriving them further down is what let each
         // new short-circuit carry its redirects past the file rules (#53).
         let redirect_accesses =
-            redirect::accesses(&cmd.redirects, self.source, self.cwd, comment_at);
+            redirect::accesses(&cmd.redirects, self.source, self.cwd, comment.as_ref());
 
         // No command name — an assignment-only command (`FOO=x > log`) or a
         // null one (`> log`). `bash_allowed` is false because no `Bash(...)`

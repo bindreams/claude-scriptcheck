@@ -1521,3 +1521,90 @@ fn a_quoted_assignment_value_still_locates_its_substitution() {
         result.missing_rules,
     );
 }
+
+#[skuld::test]
+fn a_continuation_inside_the_operand_does_not_hide_an_assignment() {
+    // bash removes `\<newline>` before deciding what kind of word this is, and
+    // one can split a name. Verified: `>&-FOO\<newline>=1 p x` reports
+    // `argc=1 [x] FOO=1`, so `FOO=1` is a prefix assignment and `p` the
+    // command. Leaving the continuation in makes `FOO` an invalid name, and
+    // then the whole word becomes the command that no `Bash(rm ...)` rule
+    // describes.
+    for cmd in [
+        ">&\\\n-FOO=1 rm -rf /tmp/zzz",
+        ">&-FOO\\\n=1 rm -rf /tmp/zzz",
+        ">&-\\\nFOO=1 rm -rf /tmp/zzz",
+        ">&-F\\\nOO=1 rm -rf /tmp/zzz",
+    ] {
+        let result = check(cmd, &[], &[]);
+        assert_eq!(
+            result.missing_rules,
+            vec![format!("Write({}/**)", canonical("/tmp/zzz"))],
+            "a continuation hid the command name: {cmd:?}",
+        );
+        assert!(
+            matches!(check(cmd, &[], &["Bash(rm *)"]).decision, Decision::Deny(_)),
+            "a deny rule missed the command behind a continuation: {cmd:?}",
+        );
+    }
+}
+
+#[skuld::test]
+fn a_substitution_inside_a_recovered_operand_is_walked() {
+    // The operand is an argument, and an argument's interior is walked:
+    // `cat >&-$(rm -rf vault)` runs the `rm`. Leaving it unwalked put a command
+    // substitution somewhere no rule could see it.
+    for cmd in [
+        "cat /tmp/in >&-$(rm -rf /tmp/vault)",
+        "cat /tmp/in <&-$(rm -rf /tmp/vault)",
+        "cat /tmp/in >&-`rm -rf /tmp/vault`",
+    ] {
+        assert!(
+            matches!(check(cmd, &[], &["Bash(rm *)"]).decision, Decision::Deny(_)),
+            "a substitution hid inside a recovered operand: {cmd}",
+        );
+    }
+    // The control: commented out, so bash runs none of it.
+    assert!(
+        !matches!(
+            check(
+                "cat /tmp/in >&-#foo $(rm -rf /tmp/vault)",
+                &[],
+                &["Bash(rm *)"],
+            )
+            .decision,
+            Decision::Deny(_),
+        ),
+        "a commented-out substitution was walked anyway",
+    );
+}
+
+#[skuld::test]
+fn a_redirect_on_the_line_after_a_comment_survives() {
+    // A guard rather than a regression test: the redirect filter and the
+    // command filter derive their answer from one shared range now, where they
+    // once each computed an end. No spelling was found where the two disagreed,
+    // so this pins the property rather than a defect.
+    let cmd = "cat /tmp/in >&-#foo\ncat /tmp/in2 > /tmp/vault/pwned";
+    let result = check(cmd, &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({})", canonical("/tmp/vault/pwned"))),
+        "a redirect on the next line was silenced: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn a_comment_silences_an_assignment_value_on_the_same_line() {
+    // `>&-#foo V=$(rm -rf vault)` is a comment from `#` onwards, so the
+    // assignment never runs — its value must not be walked either.
+    assert!(
+        !matches!(
+            check(">&-#foo V=$(rm -rf /tmp/vault)", &[], &["Bash(rm *)"]).decision,
+            Decision::Deny(_),
+        ),
+        "a commented-out assignment value was walked",
+    );
+}

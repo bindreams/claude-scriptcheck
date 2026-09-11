@@ -7,6 +7,8 @@
 //! expensive in both directions — a file read as a descriptor slips past every
 //! rule, and a descriptor read as a file produces a deny no rule can lift.
 
+use std::ops::Range;
+
 use thaum::ast::*;
 
 use crate::file_access::{self, AccessKind, FileAccess};
@@ -14,18 +16,17 @@ use crate::file_access::{self, AccessKind, FileAccess};
 /// The file accesses a command's redirects perform.
 ///
 /// `source` is the text the command was parsed from, or `None` where that text
-/// is not available — see `edge_is_bare_dash`. Redirects at or after
-/// `comment_at` are skipped: a comment runs to the end of the line, so bash
-/// never performs them.
+/// is not available — see `begins_with_bare_dash`. Redirects inside `comment`
+/// are skipped: bash never performs them.
 pub fn accesses(
     redirects: &[Redirect],
     source: Option<&str>,
     cwd: &str,
-    comment_at: Option<usize>,
+    comment: Option<&Range<usize>>,
 ) -> Vec<FileAccess> {
     redirects
         .iter()
-        .filter(|r| comment_at.is_none_or(|at| r.span.start.0 < at))
+        .filter(|r| comment.is_none_or(|range| !range.contains(&r.span.start.0)))
         .flat_map(|r| accesses_for_redirect(r, source, cwd))
         .collect()
 }
@@ -289,10 +290,10 @@ fn first_character(word: &Word, source: &str) -> Option<usize> {
 /// where the fix belongs. When thaum#14 lands the operand arrives as an ordinary
 /// `Argument`, and this function and its call in `command_arg_literals` should
 /// be deleted rather than adapted.
-fn closed_descriptor_operand<'a>(
+fn closed_descriptor_operand(
     redirect: &Redirect,
-    source: Option<&'a str>,
-) -> Option<RecoveredOperand<'a>> {
+    source: Option<&str>,
+) -> Option<RecoveredOperand> {
     let word = match &redirect.kind {
         RedirectKind::DupInput(w) | RedirectKind::DupOutput(w) => w,
         _ => return None,
@@ -337,32 +338,40 @@ fn closed_descriptor_operand<'a>(
         // Which kind of word bash reads this as is decided from the spelling,
         // so without the source it cannot be decided: an argument is the
         // reading that keeps its position and its access.
-        text: source.and_then(|s| s.get(position..word.span.end.0)),
+        text: source
+            .and_then(|s| s.get(position..word.span.end.0))
+            .map(without_continuations),
         literal,
     })
 }
 
 /// An argument bash took out of a `>&-word` redirect.
-struct RecoveredOperand<'a> {
+struct RecoveredOperand {
     /// Where the operand starts in the source, which is its position among the
     /// command's words.
     position: usize,
-    /// The operand as written, when the source it came from is known. What
-    /// kind of word bash reads it as — an argument, an assignment, the start of
-    /// a comment — is decided from the spelling, before any expansion.
-    text: Option<&'a str>,
+    /// The operand as written, when the source it came from is known, with
+    /// line continuations removed.
+    ///
+    /// What kind of word bash reads it as — an argument, an assignment, the
+    /// start of a comment — is decided from the spelling, before any expansion.
+    /// bash removes `\` followed by a newline before it decides, and one can
+    /// split a name: `>&-FOO\`⏎`=1 rm x` assigns `FOO` and runs `rm`, so
+    /// leaving the continuation in would make `FOO` an invalid name and the
+    /// whole word the command.
+    text: Option<String>,
     /// Its value, when the word resolves statically.
     literal: Option<String>,
 }
 
-impl RecoveredOperand<'_> {
+impl RecoveredOperand {
     /// Does this operand start a comment, ending the command line?
     ///
     /// `>&-` ends the redirect token, so what follows begins a fresh word — and
     /// a word starting with `#` is a comment. Verified: `p in >&-#foo bar`
     /// reports `argc=1 [in]`, so both `#foo` and `bar` are comment text.
     fn starts_a_comment(&self) -> bool {
-        self.text.is_some_and(|t| t.starts_with('#'))
+        self.text.as_ref().is_some_and(|t| t.starts_with('#'))
     }
 
     /// Would bash read this operand as a variable assignment?
@@ -374,7 +383,7 @@ impl RecoveredOperand<'_> {
     /// with `FOO=1` in the environment, while `>&-1FOO=1 p x` is a
     /// `command not found` for `1FOO=1` — an invalid name is an ordinary word.
     fn is_assignment(&self) -> bool {
-        match self.text {
+        match self.text.as_deref() {
             Some(text) => is_assignment_word(text),
             // Unknown source. bash decides from the spelling, and the value is
             // the closest thing to it available — they differ only where the
@@ -385,6 +394,11 @@ impl RecoveredOperand<'_> {
             None => self.literal.as_deref().is_some_and(is_assignment_word),
         }
     }
+}
+
+/// `\` followed by a newline removed, as bash removes it before tokenising.
+fn without_continuations(text: &str) -> String {
+    text.replace("\\\n", "")
 }
 
 /// Could this word's first source character be a bare `-`?
@@ -431,15 +445,35 @@ fn is_assignment_word(text: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// The redirect target words that hid an argument.
+///
+/// bash lexed an argument out of each of these, and an argument's interior is
+/// walked like any other — `cat >&-$(rm -rf x)` runs the `rm`. The whole word
+/// is returned rather than the operand alone, because the substitution inside
+/// it is one AST node either way.
+pub fn recovered_operand_words<'c>(cmd: &'c Command, source: Option<&str>) -> Vec<&'c Word> {
+    cmd.redirects
+        .iter()
+        .filter(|r| closed_descriptor_operand(r, source).is_some())
+        .filter_map(|r| match &r.kind {
+            RedirectKind::DupInput(w) | RedirectKind::DupOutput(w) => Some(w),
+            _ => None,
+        })
+        .collect()
+}
+
 /// What the command line says: the arguments bash passes, and where a comment
 /// begins if one does.
 pub struct CommandLine {
     /// Argument literals in source order, arg0 first, with `None` for a word
     /// that does not resolve statically.
     pub arguments: Vec<Option<String>>,
-    /// Where a comment starts, if a recovered operand began one. A comment runs
-    /// to the end of the line, so the redirects after it are never performed.
-    pub comment_at: Option<usize>,
+    /// What a comment silences, if a recovered operand began one: from its `#`
+    /// to the end of that line, and no further — the next line is ordinary
+    /// code. `None` when no comment was found, or when there is no source to
+    /// find the line's end in, which silences nothing beyond this command's own
+    /// words.
+    pub comment: Option<Range<usize>>,
 }
 
 /// Read a command's words the way bash does, in source order.
@@ -455,7 +489,7 @@ pub struct CommandLine {
 /// `closed_descriptor_operand`. Once that lands, this collapses back to mapping
 /// `cmd.arguments`.
 pub fn command_line(cmd: &Command, source: Option<&str>) -> CommandLine {
-    enum Word<'a> {
+    enum Word {
         /// A word the parser saw as an argument. It is one by construction:
         /// the parser only reaches arguments past the command name.
         Argument(Option<String>),
@@ -467,10 +501,10 @@ pub fn command_line(cmd: &Command, source: Option<&str>) -> CommandLine {
         /// A word recovered from a `>&-word` redirect, which the parser did not
         /// see at all, so bash's rules for what kind of word it is have to be
         /// applied here.
-        Recovered(RecoveredOperand<'a>),
+        Recovered(RecoveredOperand),
     }
 
-    impl Word<'_> {
+    impl Word {
         /// Is this word part of the command prefix rather than the command?
         fn is_prefix_assignment(&self) -> bool {
             match self {
@@ -522,6 +556,16 @@ pub fn command_line(cmd: &Command, source: Option<&str>) -> CommandLine {
     if let Some(at) = comment_at {
         words.retain(|(position, _)| *position < at);
     }
+    // One range, computed once, for every consumer. Deriving the end separately
+    // in each of them is how the redirect filter came to silence a redirect two
+    // lines further down while the command filter stopped at the newline.
+    let comment = comment_at.and_then(|at| {
+        let source = source?;
+        let end = source[at..]
+            .find('\n')
+            .map_or(source.len(), |offset| at + offset);
+        Some(at..end)
+    });
 
     // The command name is the first word that is not an assignment; everything
     // before it is the prefix, and everything after it is an argument whatever
@@ -534,8 +578,5 @@ pub fn command_line(cmd: &Command, source: Option<&str>) -> CommandLine {
         // nothing but still performs its redirects.
         None => Vec::new(),
     };
-    CommandLine {
-        arguments,
-        comment_at,
-    }
+    CommandLine { arguments, comment }
 }
