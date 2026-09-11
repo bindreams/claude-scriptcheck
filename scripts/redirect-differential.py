@@ -89,6 +89,10 @@ def words():
         # A comment: ends the line, and what follows it is text — including a
         # substitution in the same word, and a continuation at its end.
         "-#f", "-#f zzz", '-"#"f', "-\\#f", "-#$(:)", "-#f\\\n",
+        # A backslash inside a comment is comment text, not a continuation, so
+        # the next line is ordinary code. thaum joins the lines into one word,
+        # which is what makes this worth crossing.
+        "-#c\\", "-#c\\\n",
         # A substitution in the operand, which bash runs.
         "-$(:)", "-`:`", "-$(:)f", "$(:)", "-x$(:)",
         # An assignment, which is a prefix rather than a command name.

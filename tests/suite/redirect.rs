@@ -1690,3 +1690,34 @@ fn a_word_that_cannot_begin_with_a_bare_dash_is_ruled_out() {
         assert_eq!(denied, recovers, "{cmd}");
     }
 }
+
+#[skuld::test]
+fn a_backslash_in_a_comment_does_not_continue_it() {
+    // A backslash inside a comment is comment text, not a line continuation:
+    // the comment still ends at the newline and the next line runs. Verified —
+    // a script whose commented line ends in `\` still prints the next line's
+    // output. thaum has no comment model, so it joins the two lines into one
+    // word, and every consumer of the comment range has to test *containment*
+    // rather than "is it after the comment started".
+    for cmd in [
+        "cat /tmp/in >&-#c\\\ncat /tmp/vault/creds",
+        "cat /tmp/in >&-#c\\\ncat /tmp/vault/creds | cat",
+        "cat /tmp/in >&-#c\\\ncat >&-/tmp/vault/creds",
+    ] {
+        let result = check(cmd, &[], &[]);
+        assert!(
+            result
+                .missing_rules
+                .contains(&format!("Read({})", canonical("/tmp/vault/creds"))),
+            "the line after a commented continuation was silenced: {cmd:?} -> {:?}",
+            result.missing_rules,
+        );
+        assert!(
+            matches!(
+                check(cmd, &["Bash(cat *)"], &["Read(/tmp/vault/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "a deny rule missed a read after a commented continuation: {cmd:?}",
+        );
+    }
+}

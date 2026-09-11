@@ -482,9 +482,12 @@ pub fn recovered_operand_words<'c>(
         .iter()
         .filter_map(|r| {
             let operand = closed_descriptor_operand(r, source)?;
-            // The operand that *starts* a comment is comment text, and so is
-            // everything after it: `cat in >&-#$(rm -rf x)` runs no `rm`.
-            if comment.is_some_and(|range| operand.position >= range.start) {
+            // A word the comment covers is comment text: `cat in >&-#$(rm -rf x)`
+            // runs no `rm`. The test is containment, not "after the start" — a
+            // word past the comment's newline is ordinary code.
+            if comment
+                .is_some_and(|range| range.contains(&past_continuations(source, operand.position)))
+            {
                 return None;
             }
             match &r.kind {
@@ -586,12 +589,11 @@ pub fn command_line(cmd: &Command, source: Option<&str>) -> CommandLine {
         .iter()
         .find(|(_, w)| matches!(w, Word::Recovered(o) if o.starts_a_comment()))
         .map(|(position, _)| *position);
-    if let Some(at) = comment_at {
-        words.retain(|(position, _)| *position < at);
-    }
-    // One range, computed once, for every consumer. Deriving the end separately
-    // in each of them is how the redirect filter came to silence a redirect two
-    // lines further down while the command filter stopped at the newline.
+    // One range, computed once, for every consumer. Deriving the end
+    // separately in each of them is how the redirect filter came to silence a
+    // redirect two lines further down while the command filter stopped at the
+    // newline — and comparing against `range.start` alone does the same, since
+    // a word after the newline is still "after the comment began".
     let comment = comment_at.and_then(|at| {
         let source = source?;
         let end = source[at..]
@@ -599,6 +601,13 @@ pub fn command_line(cmd: &Command, source: Option<&str>) -> CommandLine {
             .map_or(source.len(), |offset| at + offset);
         Some(at..end)
     });
+    if let Some(range) = &comment {
+        words.retain(|(position, _)| !range.contains(&past_continuations(source, *position)));
+    } else if let Some(at) = comment_at {
+        // No source to find the line's end in, so nothing beyond this
+        // command's own words is silenced.
+        words.retain(|(position, _)| *position < at);
+    }
 
     // The command name is the first word that is not an assignment; everything
     // before it is the prefix, and everything after it is an argument whatever
