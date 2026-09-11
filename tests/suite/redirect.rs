@@ -1245,3 +1245,89 @@ fn a_comment_ends_the_line_for_redirects_too() {
         "a commented-out redirect fired a deny",
     );
 }
+
+// One substitution's source is not another's --------------------------------------------------------------------------
+//
+// A word can hold more than one substitution, and `$(a)$(b)` starts with `$(`
+// and ends with `)` exactly as `$(cmd)` does. Deciding from the text would
+// strip it to `a)$(b` — a source that is wrong rather than absent, which is the
+// one outcome worse than not knowing.
+
+#[skuld::test]
+fn a_second_substitution_does_not_borrow_the_first_ones_source() {
+    // The padding puts a `-` where the stolen source would be read, so the
+    // classification flips and the write disappears. The path is relative
+    // because that is the alignment that lands the stolen byte on the dash —
+    // an absolute one shifts the offsets and the bug hides.
+    let result = check("echo $(xxxxxxxxxxxxxxxx-)$(cat >&vault/creds)", &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({})", canonical("/tmp/vault/creds"))),
+        "a write escaped through a second substitution: {:?}",
+        result.missing_rules,
+    );
+    assert!(
+        matches!(
+            check(
+                "echo $(xxxxxxxxxxxxxxxx-)$(cat >&vault/creds)",
+                &["Bash(echo *)", "Bash(cat *)", "Bash(xxxxxxxxxxxxxxxx- *)"],
+                &["Write(/tmp/vault/**)"],
+            )
+            .decision,
+            Decision::Deny(_),
+        ),
+        "a deny rule missed a write hidden behind a second substitution",
+    );
+}
+
+#[skuld::test]
+fn the_trailing_edge_is_decided_without_the_source() {
+    // Inside a word holding two substitutions the source is unknown, and the
+    // trailing-dash rule still has to be right — escaping does not change it,
+    // quoting does, and a fragment's kind says which happened. `$(:)` is a
+    // no-op that makes the enclosing word unlocatable.
+    for (cmd, writes) in [
+        ("echo $(:)$(cat /tmp/x >&2-)", false),
+        ("echo $(:)$(cat /tmp/x >&\"2\"-)", false),
+        ("echo $(:)$(cat /tmp/x >&2\\-)", false),
+        ("echo $(:)$(cat /tmp/x >&2\"-\")", true),
+    ] {
+        let result = check(cmd, &[], &[]);
+        let wrote = result
+            .missing_rules
+            .contains(&format!("Write({})", canonical("/tmp/2-")));
+        assert_eq!(wrote, writes, "{cmd} -> {:?}", result.missing_rules);
+    }
+}
+
+#[skuld::test]
+fn an_unlocatable_body_keeps_an_unresolved_operand_in_place() {
+    // `cp <unknown> vault/creds` writes the vault path and `cp vault/creds`
+    // only reads it. With no source to confirm the dash is bare, the operand is
+    // recovered anyway — dropping it would move the denied path into the other
+    // slot.
+    let result = check("echo pre$(cp /tmp/vault/creds >&-$P)post", &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Read({})", canonical("/tmp/vault/creds"))),
+        "an unresolved operand was dropped, inverting the read: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn an_unlocatable_body_still_recognises_an_assignment() {
+    // Without the source the spelling is unavailable, and the value is the
+    // closest thing to it. Reading `FOO=1` as the command name would leave
+    // `cat`'s own arguments unparsed, so the read never reaches the rules.
+    let result = check("echo pre$(>&-FOO=1 cat /tmp/vault/creds)post", &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Read({})", canonical("/tmp/vault/creds"))),
+        "an assignment was read as the command name: {:?}",
+        result.missing_rules,
+    );
+}

@@ -218,7 +218,9 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
         match arg {
             Argument::Atom(Atom::BashProcessSubstitution { body, .. }) => {
                 let span = arg.span();
-                let source = self.slice(span.start.0, span.end.0).and_then(nested_body);
+                let source = self
+                    .slice(span.start.0, span.end.0)
+                    .and_then(process_substitution_body);
                 self.visit_nested(body, source);
             }
             Argument::Word(w) => {
@@ -247,37 +249,64 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
         // The word's own source, so a substitution inside it can be walked
         // against the text it was parsed from rather than the enclosing
         // command's. See `visit_nested`.
-        let word_source = self.slice(word.span.start.0, word.span.end.0);
+        // Resolved once, for the word as a whole: a substitution's body is
+        // locatable only when it is the entire word, so every fragment below
+        // shares one answer.
+        let body = sole_substitution_body(word, self.slice(word.span.start.0, word.span.end.0));
         for fragment in &word.parts {
-            self.check_fragment_command_subs(fragment, word_source);
+            self.check_fragment_command_subs(fragment, body);
         }
     }
 }
 
-/// The text inside a substitution, given the whole word that holds it.
+/// The text a substitution was parsed from, when the word is nothing but that
+/// substitution.
 ///
-/// `$(cmd)`, `` `cmd` ``, `<(cmd)` and `>(cmd)` each wrap their body in a fixed
-/// prefix and suffix, so the body is the slice between them — and the spans
-/// thaum produced inside the body index exactly that slice.
+/// `$(cmd)`, `` `cmd` `` and their quoted form `"$(cmd)"` wrap the body in a
+/// fixed prefix and suffix, so the body is the slice between them — and the
+/// spans thaum produced inside the body index exactly that slice.
 ///
-/// `None` when the substitution is only part of the word, as in `pre$(cmd)post`
-/// or a word holding two of them. Locating the body there means re-deriving
-/// where each fragment started, which is the lexer's job and not a
-/// reconstruction worth doing on top of a parse that already dropped it.
-fn nested_body(word_source: &str) -> Option<&str> {
-    // A substitution that is the whole word may still be quoted: `"$(cmd)"`.
-    let unquoted = word_source
+/// The word has to be checked structurally, not by looking at its text.
+/// `$(a)$(b)` also starts with `$(` and ends with `)`, and stripping those
+/// yields `a)$(b` — a source that is wrong rather than absent, which is the one
+/// outcome worse than not knowing. So the body is returned only for a word
+/// whose entire content is the one substitution; `pre$(cmd)post` and
+/// `$(a)$(b)` get `None`, and `None` makes the classifier over-approximate.
+///
+/// Locating a substitution inside a word that holds anything else means
+/// re-deriving where each fragment started, which the parse dropped. That is
+/// the second half of thaum#50.
+fn sole_substitution_body<'a>(word: &Word, word_source: Option<&'a str>) -> Option<&'a str> {
+    // `"$(cmd)"`: one quoted fragment wrapping one substitution.
+    let parts = match word.parts.as_slice() {
+        [Fragment::DoubleQuoted(inner)] => inner.as_slice(),
+        other => other,
+    };
+    if !matches!(parts, [Fragment::CommandSubstitution(_)]) {
+        return None;
+    }
+    let source = word_source?;
+    let unquoted = source
         .strip_prefix('"')
         .and_then(|s| s.strip_suffix('"'))
-        .unwrap_or(word_source);
-    for prefix in ["$(", "<(", ">("] {
-        if let Some(body) = unquoted.strip_prefix(prefix) {
-            return body.strip_suffix(')');
-        }
+        .unwrap_or(source);
+    if let Some(body) = unquoted.strip_prefix("$(") {
+        return body.strip_suffix(')');
     }
     unquoted
         .strip_prefix('`')
         .and_then(|body| body.strip_suffix('`'))
+}
+
+/// The text a process substitution was parsed from.
+///
+/// `<(cmd)` and `>(cmd)` are a whole argument rather than a fragment of a word,
+/// so there is no question of what else the word holds.
+fn process_substitution_body(source: &str) -> Option<&str> {
+    source
+        .strip_prefix("<(")
+        .or_else(|| source.strip_prefix(">("))
+        .and_then(|body| body.strip_suffix(')'))
 }
 
 // ─── Domain logic ────────────────────────────────────────────────────────────
@@ -739,24 +768,24 @@ impl<'a> PermissionChecker<'a> {
     /// Some variants are leaves in thaum's grammar and some are leaves only
     /// because thaum does not parse their interior; the difference matters and
     /// is noted per arm.
-    fn check_fragment_command_subs(&mut self, fragment: &Fragment, word_source: Option<&'a str>) {
+    fn check_fragment_command_subs(&mut self, fragment: &Fragment, body: Option<&'a str>) {
         if self.denied.is_some() {
             return;
         }
         match fragment {
             Fragment::CommandSubstitution(stmts) => {
-                self.visit_nested(stmts, word_source.and_then(nested_body));
+                self.visit_nested(stmts, body);
             }
             // Carriers of further fragments — recurse.
             Fragment::DoubleQuoted(inner) | Fragment::BashLocaleQuoted(inner) => {
                 for f in inner {
-                    self.check_fragment_command_subs(f, word_source);
+                    self.check_fragment_command_subs(f, body);
                 }
             }
             Fragment::BashBraceExpansion(BraceExpansionKind::List(alternatives)) => {
                 for alternative in alternatives {
                     for f in alternative {
-                        self.check_fragment_command_subs(f, word_source);
+                        self.check_fragment_command_subs(f, body);
                     }
                 }
             }
@@ -771,7 +800,7 @@ impl<'a> PermissionChecker<'a> {
                 ..
             }) => {
                 for f in &word.parts {
-                    self.check_fragment_command_subs(f, word_source);
+                    self.check_fragment_command_subs(f, body);
                 }
             }
             // True leaves: no nested fragments in the grammar.

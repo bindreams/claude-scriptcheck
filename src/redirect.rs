@@ -67,7 +67,7 @@ pub fn accesses_for_redirect(
             // "ambiguous redirect" error that opens nothing, verified for
             // `0>&f`, `2>&f`, `3>&f` and `10>&f`.
             let redirects_stdout = matches!(redirect.fd, None | Some(1));
-            if !redirects_stdout || names_a_descriptor(w, source) {
+            if !redirects_stdout || names_a_descriptor(w) {
                 return Vec::new();
             }
             // A bare leading dash closes the descriptor and ends the token;
@@ -78,7 +78,7 @@ pub fn accesses_for_redirect(
             // opposite answers, so both are taken: the write is recorded here
             // and the operand is recovered anyway. One of them is spurious and
             // neither is missing.
-            if edge_is_bare_dash(w, source, Edge::First) == Some(true) {
+            if begins_with_bare_dash(w, source) == Some(true) {
                 return Vec::new();
             }
             (w, &[Write])
@@ -125,7 +125,7 @@ pub fn accesses_for_redirect(
 /// A word that does not resolve statically could be any of these or a filename.
 /// Of those readings only the file one needs checking, so it is not treated as
 /// a descriptor.
-fn names_a_descriptor(word: &Word, source: Option<&str>) -> bool {
+fn names_a_descriptor(word: &Word) -> bool {
     let Some(s) = word.try_to_static_string() else {
         return false;
     };
@@ -141,31 +141,69 @@ fn names_a_descriptor(word: &Word, source: Option<&str>) -> bool {
     // spec whatever precedes it — `>&2-` moves fd 2, `>&x-` is an "ambiguous
     // redirect" — and neither opens a file. Quote that one character and it is
     // an ordinary filename again: `>&"2"-` moves, but `>&2"-"` writes `2-`.
-    // With no source the character's spelling is unknown. Reading it as a
-    // descriptor would drop a file access, so it is read as a filename: the
-    // over-approximating direction.
-    edge_is_bare_dash(word, source, Edge::Last) == Some(true)
+    // An unquoted trailing dash makes bash read the whole word as a descriptor
+    // spec whatever precedes it — `>&2-` moves fd 2, `>&x-` is an "ambiguous
+    // redirect" — and neither opens a file. Quote that one character and it is
+    // an ordinary filename again: `>&"2"-` moves, but `>&2"-"` writes `2-`.
+    //
+    // A word whose last fragment does not resolve could be either. Reading it
+    // as a descriptor would drop a file access, so it is read as a filename:
+    // the over-approximating direction.
+    ends_with_descriptor_dash(word) == Some(true)
 }
 
-/// Which end of a redirect word to inspect.
-#[derive(Clone, Copy)]
-enum Edge {
-    First,
-    Last,
+/// Is this word's last character a `-` that bash reads as part of a descriptor
+/// spec?
+///
+/// The source is not needed here, and that is not a coincidence. A fragment's
+/// *kind* says how its text was written: only a literal can hold a bare dash,
+/// and at this edge an escaped dash and a bare one mean the same thing —
+/// `>&2-` and `>&2\-` both move fd 2. Quoting is what differs, and a quoted
+/// dash arrives in a quoted fragment.
+///
+/// `None` when the last fragment does not resolve, since its expansion decides.
+fn ends_with_descriptor_dash(word: &Word) -> Option<bool> {
+    let last = word
+        .parts
+        .iter()
+        .rev()
+        .find(|f| !fragment_text(f).is_some_and(|(_, t)| t.is_empty()))?;
+    match fragment_text(last) {
+        // A literal `-` at the end: bare or escaped, bash reads a descriptor.
+        Some((false, text)) => Some(text.ends_with('-')),
+        // A quoted one is an ordinary filename character: `>&2"-"` writes `2-`.
+        Some((true, _)) => Some(false),
+        None => None,
+    }
 }
 
-/// Is the character at `edge` of this word a `-` that bash saw bare?
+/// A fragment's text, and whether it was written quoted.
 ///
-/// `None` when the source the word was parsed from is not available, which is
-/// not the same as "no". Both dash rules turn on how one character was
-/// *written*, and the parsed word no longer holds that: `-`, `\-` and `"-"` all
-/// arrive as `Literal("-")`. The source byte at the word's edge does hold it,
-/// and it decides both rules outright — a `-` there is a bare dash, and a `\`
-/// or a quote there means the word's edge character is something bash had to
-/// unescape to reach.
+/// `None` for the fragment kinds whose text is not known until expansion.
+fn fragment_text(fragment: &Fragment) -> Option<(bool, String)> {
+    match fragment {
+        Fragment::Literal(s) => Some((false, s.clone())),
+        Fragment::SingleQuoted(s) | Fragment::BashAnsiCQuoted(s) => Some((true, s.clone())),
+        Fragment::DoubleQuoted(parts) | Fragment::BashLocaleQuoted(parts) => {
+            let mut text = String::new();
+            for part in parts {
+                text.push_str(&fragment_text(part)?.1);
+            }
+            Some((true, text))
+        }
+        _ => None,
+    }
+}
+
+/// Is this word's first character a `-` that bash saw bare?
 ///
-/// This is also what makes the two edges behave differently, which is the part
-/// of bash's grammar nobody predicts:
+/// Unlike the trailing edge, this one needs the source. `-`, `\-` and `"-"` all
+/// arrive as `Literal("-")` or a quoted fragment, and here the three do *not*
+/// agree: `>&-2` closes and passes `2` as an argument, while `>&\-2` and
+/// `>&"-2"` both write a file called `-2`. Only the source byte separates the
+/// first from the second.
+///
+/// That is the whole of bash's asymmetry, which is the part nobody predicts:
 ///
 /// ```text
 /// >&\-2   >&"-2"    both write a file called `-2`
@@ -173,19 +211,16 @@ enum Edge {
 /// >&2"-"            writes a file called `2-`
 /// ```
 ///
-/// One rule reads one byte and reproduces all four, because the byte at the
-/// leading edge of `\-2` is `\` while the byte at the trailing edge of `2\-`
-/// is `-`.
-///
 /// # When the source is unknown
 ///
 /// Spans are positions in the text the node was parsed from, and thaum parses a
 /// command substitution's body separately: spans inside `$(...)`, `` `...` ``
 /// and `<(...)` restart at zero. Indexing the outer command's text with them
-/// reads another command's bytes — which is a wrong answer, not a missing one,
-/// so the caller re-bases the source when it descends and passes `None` where
-/// it cannot. Tracked as thaum#50.
-fn edge_is_bare_dash(word: &Word, source: Option<&str>, edge: Edge) -> Option<bool> {
+/// reads another command's bytes — a wrong answer, not a missing one — so the
+/// caller re-bases the source when it descends and passes `None` where it
+/// cannot. `None` is not "no": the callers take both readings there.
+/// Tracked as thaum#50.
+fn begins_with_bare_dash(word: &Word, source: Option<&str>) -> Option<bool> {
     let source = source?;
     debug_assert!(
         word.span.end.0 <= source.len(),
@@ -194,16 +229,11 @@ fn edge_is_bare_dash(word: &Word, source: Option<&str>, edge: Edge) -> Option<bo
         word.span.end.0,
         source.len(),
     );
-    // A word with no source bytes has no edge character. No parse produces one,
-    // but the subtraction below would underflow if one ever did.
+    // A word with no source bytes has no first character.
     if word.span.end.0 <= word.span.start.0 {
         return Some(false);
     }
-    let index = match edge {
-        Edge::First => word.span.start.0,
-        Edge::Last => word.span.end.0 - 1,
-    };
-    Some(source.as_bytes().get(index) == Some(&b'-'))
+    Some(source.as_bytes().get(word.span.start.0) == Some(&b'-'))
 }
 
 /// The argument hiding inside a `>&-word` / `<&-word` redirect: where it starts
@@ -250,10 +280,16 @@ fn closed_descriptor_operand<'a>(
     // the write was recorded as well, so one reading is spurious and the
     // operand — which can hide a denied path — is not missed.
     let value = word.try_to_static_string();
-    match edge_is_bare_dash(word, source, Edge::First) {
+    match begins_with_bare_dash(word, source) {
         Some(true) => {}
         Some(false) => return None,
-        None if value.as_deref().is_some_and(|v| v.starts_with('-')) => {}
+        // Unknown source. The fragment kinds still rule out every word that
+        // cannot begin with a bare dash; for the rest the write was recorded
+        // as well, so one reading is spurious and the operand — which can hide
+        // a denied path — is not missed. The word need not resolve statically:
+        // a `None` literal holds the position, and position is what decides
+        // whether an operand is a source or a destination.
+        None if may_begin_with_bare_dash(word) => {}
         None => return None,
     }
     // The `-` is one source byte, so the operand starts one byte into the word.
@@ -308,8 +344,34 @@ impl RecoveredOperand<'_> {
     /// with `FOO=1` in the environment, while `>&-1FOO=1 p x` is a
     /// `command not found` for `1FOO=1` — an invalid name is an ordinary word.
     fn is_assignment(&self) -> bool {
-        self.text.is_some_and(is_assignment_word)
+        match self.text {
+            Some(text) => is_assignment_word(text),
+            // Unknown source. bash decides from the spelling, and the value is
+            // the closest thing to it available — they differ only where the
+            // name itself was quoted, as in `"FOO"=1`, which is not an
+            // assignment but looks like one here. Treating an assignment as
+            // the command name is the worse error: the real command's
+            // arguments are then never parsed at all.
+            None => self.literal.as_deref().is_some_and(is_assignment_word),
+        }
     }
+}
+
+/// Could this word's first source character be a bare `-`?
+///
+/// Answerable without the source, because a fragment's *kind* says what its
+/// first source character can be: a quoted fragment starts with a quote, a
+/// parameter with `$`, a substitution with `$` or a backtick, a tilde prefix
+/// with `~`. Only a literal can start with a bare dash — and only *could*,
+/// since `\-` reaches the parser as the same literal.
+///
+/// Used where the source is unknown, to decide whether the close-plus-operand
+/// reading is available at all. `true` there means both readings are taken.
+fn may_begin_with_bare_dash(word: &Word) -> bool {
+    word.parts
+        .iter()
+        .find(|f| !matches!(f, Fragment::Literal(s) if s.is_empty()))
+        .is_some_and(|f| matches!(f, Fragment::Literal(s) if s.starts_with('-')))
 }
 
 /// Would bash read this word as a variable assignment?
