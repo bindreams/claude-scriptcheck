@@ -222,6 +222,28 @@ fn fragment_text(fragment: &Fragment) -> Option<(bool, String)> {
 /// Tracked as thaum#50.
 fn begins_with_bare_dash(word: &Word, source: Option<&str>) -> Option<bool> {
     let source = source?;
+    let start = first_character(word, source)?;
+    Some(source.as_bytes().get(start) == Some(&b'-'))
+}
+
+/// Where a word's first character sits in the source.
+///
+/// Not always its span's start. bash removes `\` followed by a newline before
+/// it tokenises anything, so a word can begin one or more line continuations
+/// into its own span: in
+///
+/// ```text
+/// p a >&\
+/// -vault/creds b
+/// ```
+///
+/// the redirect target is `-vault/creds`, and bash reads its leading dash as
+/// bare — `argc=3 [a vault/creds b]`, with no file created. Reading the span's
+/// first byte finds the backslash instead, which both invents a write and drops
+/// the operand that carries the real read.
+///
+/// `None` for a word with no source bytes. No parse produces one.
+fn first_character(word: &Word, source: &str) -> Option<usize> {
     debug_assert!(
         word.span.end.0 <= source.len(),
         "word span {}..{} is outside the source it was parsed from (length {})",
@@ -229,11 +251,15 @@ fn begins_with_bare_dash(word: &Word, source: Option<&str>) -> Option<bool> {
         word.span.end.0,
         source.len(),
     );
-    // A word with no source bytes has no first character.
     if word.span.end.0 <= word.span.start.0 {
-        return Some(false);
+        return None;
     }
-    Some(source.as_bytes().get(word.span.start.0) == Some(&b'-'))
+    let bytes = source.as_bytes();
+    let mut start = word.span.start.0;
+    while bytes.get(start) == Some(&b'\\') && bytes.get(start + 1) == Some(&b'\n') {
+        start += 2;
+    }
+    Some(start)
 }
 
 /// The argument hiding inside a `>&-word` / `<&-word` redirect: where it starts
@@ -292,8 +318,12 @@ fn closed_descriptor_operand<'a>(
         None if may_begin_with_bare_dash(word) => {}
         None => return None,
     }
-    // The `-` is one source byte, so the operand starts one byte into the word.
-    let position = word.span.start.0 + 1;
+    // The `-` is one source byte, so the operand starts one byte past it —
+    // past any line continuations the word opens with, not past its span start.
+    let position = source
+        .and_then(|source| first_character(word, source))
+        .unwrap_or(word.span.start.0)
+        + 1;
     if position >= word.span.end.0 {
         // A bare `>&-` closes the descriptor and names nothing.
         return None;

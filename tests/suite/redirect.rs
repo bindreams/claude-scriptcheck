@@ -1426,3 +1426,98 @@ fn an_assignment_value_still_locates_its_substitution() {
         result.missing_rules,
     );
 }
+
+#[skuld::test]
+fn a_comment_stops_at_the_newline() {
+    // Verified: `cat in >&-#foo` followed by `echo PWNED > secret.txt` on the
+    // next line writes `secret.txt`. A comment ends the *line*, so silencing
+    // everything after it silences ordinary code — and silence here is an
+    // access that reaches no rule at all.
+    let cmd = "cat /tmp/in >&-#foo\necho BOO > /tmp/vault/pwned";
+    let result = check(cmd, &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({})", canonical("/tmp/vault/pwned"))),
+        "the line after a comment was silenced: {:?}",
+        result.missing_rules,
+    );
+    assert!(
+        matches!(
+            check(
+                cmd,
+                &["Bash(cat *)", "Bash(echo *)"],
+                &["Write(/tmp/vault/**)"]
+            )
+            .decision,
+            Decision::Deny(_),
+        ),
+        "a deny rule missed a write on the line after a comment",
+    );
+}
+
+#[skuld::test]
+fn a_comment_silences_the_arguments_after_it() {
+    // The same line, the other direction: words after the comment are comment
+    // text, substitutions included, so `$(rm -rf vault)` never runs.
+    let result = check("cat /tmp/in >&-#foo $(rm -rf /tmp/vault)", &[], &[]);
+    assert_eq!(
+        result.missing_rules,
+        vec![format!("Read({})", canonical("/tmp/in"))],
+        "a commented-out substitution was still walked",
+    );
+}
+
+#[skuld::test]
+fn a_line_continuation_does_not_hide_the_leading_dash() {
+    // bash removes `\<newline>` before tokenising, so a word can begin a
+    // continuation into its own span. Verified: with the dash on the next line
+    // `p a >&\<newline>-vault/creds b` reports `argc=3 [a vault/creds b]` and
+    // creates no file — reading the span's first byte finds the backslash,
+    // invents a write, and drops the operand carrying the real read.
+    for cmd in [
+        "cat a >&\\\n-/tmp/vault/creds b",
+        "cat a >&\\\n\\\n-/tmp/vault/creds b",
+    ] {
+        let result = check(cmd, &[], &[]);
+        assert!(
+            result
+                .missing_rules
+                .contains(&format!("Read({})", canonical("/tmp/vault/creds"))),
+            "a continuation hid the operand: {cmd:?} -> {:?}",
+            result.missing_rules,
+        );
+        assert!(
+            !result.missing_rules.iter().any(|r| r.contains("/-/")),
+            "a continuation fabricated a write: {cmd:?} -> {:?}",
+            result.missing_rules,
+        );
+        assert!(
+            matches!(
+                check(cmd, &["Bash(cat *)"], &["Read(/tmp/vault/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "a deny rule missed a read hidden by a continuation: {cmd:?}",
+        );
+    }
+}
+
+#[skuld::test]
+fn a_quoted_assignment_value_still_locates_its_substitution() {
+    // `v="$(cmd)"` wears both a name and quotes, and the name has to come off
+    // first. Otherwise the body is unlocatable and the redirect is scored
+    // twice — the fabricated half being a write to `-<path>`.
+    let result = check("V=\"$(cat /tmp/in >&-/tmp/vault/creds)\"", &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Read({})", canonical("/tmp/vault/creds"))),
+        "the operand was lost: {:?}",
+        result.missing_rules,
+    );
+    assert!(
+        !result.missing_rules.iter().any(|r| r.starts_with("Write(")),
+        "an unlocated body fabricated a write: {:?}",
+        result.missing_rules,
+    );
+}
