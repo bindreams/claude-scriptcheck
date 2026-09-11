@@ -207,6 +207,24 @@ fn parse_global_options<'a>(args: &'a [&'a str], cwd: &str) -> GlobalOptions<'a>
             continue;
         }
 
+        // `--config-env=<key>=<envvar>` / `--config-env <key>=<envvar>`: git's
+        // documented alias for `-c`, taking the *value* from a named
+        // environment variable. It reaches every key `-c` does, so it gets the
+        // same guardrail. Missing it left `LC_ALL=./evil.sh git
+        // --config-env=diff.external=LC_ALL diff` allowed with no rules at all,
+        // because the variable is on the inert list and the subcommand is
+        // read-only — verified against real git, which executes the script.
+        if arg == "--config-env" {
+            has_config_override = true;
+            i += 2; // consumes the next argument (key=envvar)
+            continue;
+        }
+        if arg.starts_with("--config-env=") {
+            has_config_override = true;
+            i += 1;
+            continue;
+        }
+
         // --git-dir=<path> or --git-dir <path>
         if let Some(val) = arg.strip_prefix("--git-dir=") {
             git_dir = Some(resolve_str(val, &effective_cwd));

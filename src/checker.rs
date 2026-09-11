@@ -2,6 +2,7 @@ use thaum::ast::*;
 use thaum::visit::Visit;
 
 use crate::cmd_parser::{self, CmdParseResult};
+use crate::env_prefix;
 use crate::file_access::{self, AccessKind, AccessScope, FileAccess};
 use crate::filter::{Arg0Pattern, BashFilter, BashFilterItem, Filter, PathFilter};
 use crate::permission::ParsedPermissions;
@@ -34,6 +35,16 @@ pub struct CheckResult {
     /// Used by synthetic Ask sites (parse failures, missing file paths) to preserve
     /// their informative reason across the `apply_permission_mode` transform.
     pub custom_reason: Option<String>,
+    /// Advisory lines shown after the missing-rule list, never inside it.
+    ///
+    /// `missing_rules` is a list of rules the user can paste into
+    /// `permissions.allow`, and every consumer iterates it on that assumption —
+    /// `cli::check` prints them as a bullet list, and `dontAsk` joins them into
+    /// "requires rule(s) not in settings: …, add the listed rule(s)". Anything
+    /// that is not a pasteable rule must go here instead: an explanation put in
+    /// `missing_rules` gets rendered as a rule and instructs the reader to paste
+    /// it, which is exactly what happened to the environment-assignment note.
+    pub notes: Vec<String>,
 }
 
 /// Transform a `CheckResult`'s decision based on the active permission mode.
@@ -71,6 +82,13 @@ pub fn apply_permission_mode(mut result: CheckResult, mode: Option<PermissionMod
                 Some(ctx) if !ctx.is_empty() => format!("{ctx}. {base}"),
                 _ => base,
             };
+            // Notes go after the paste instruction, never inside the rule list
+            // it refers to.
+            let reason = if result.notes.is_empty() {
+                reason
+            } else {
+                format!("{reason} Note: {}.", result.notes.join("; "))
+            };
             Decision::Deny(reason)
         }
         (other, _) => other,
@@ -90,6 +108,7 @@ pub fn check_program(
         cwd,
         source: Some(source),
         unmatched: Vec::new(),
+        notes: Vec::new(),
         denied: None,
         matched_allow: Vec::new(),
         matched_deny: Vec::new(),
@@ -111,6 +130,7 @@ pub fn check_file_accesses(
         // No program, so no redirect can need its source.
         source: None,
         unmatched: Vec::new(),
+        notes: Vec::new(),
         denied: None,
         matched_allow: Vec::new(),
         matched_deny: Vec::new(),
@@ -138,6 +158,7 @@ struct PermissionChecker<'a> {
     /// with them. See `crate::redirect`.
     source: Option<&'a str>,
     unmatched: Vec<String>,
+    notes: Vec<String>,
     denied: Option<String>,
     matched_allow: Vec<String>,
     matched_deny: Vec<String>,
@@ -153,9 +174,21 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
         if self.denied.is_some() {
             return;
         }
+        // Assignment values are expanded before the command runs, so they are
+        // walked first. `walk_assignment` routes both `Scalar` and array
+        // values into `visit_word`, which is why nothing here enumerates the
+        // two shapes. This also covers assignment-only commands (`X=$(...)`),
+        // which `check_command` returns from early.
+        for assignment in &cmd.assignments {
+            self.visit_assignment(assignment);
+        }
+        if self.denied.is_some() {
+            return;
+        }
         self.check_command(cmd);
         // Walk arguments for embedded process substitutions / command substitutions.
-        // Don't call walk_command — we already handled redirects inside check_command.
+        // Don't call walk_command — we already handled redirects inside check_command,
+        // and their words are #65.
         for arg in &cmd.arguments {
             self.visit_argument(arg);
         }
@@ -189,8 +222,34 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
                 self.visit_nested(body, source);
             }
             Argument::Word(w) => {
-                self.check_word_command_subs(w);
+                self.visit_word(w);
             }
+        }
+    }
+
+    /// The word funnel.
+    ///
+    /// thaum documents word-level traversal as opt-in: `Visit::visit_word` is
+    /// a no-op leaf, and every `Word` in the AST reaches it through the
+    /// `walk_*` functions. Overriding it here is what makes a command
+    /// substitution get checked wherever it hides — assignment values, `for`
+    /// and `select` word lists, `case` scrutinees and arm patterns — instead
+    /// of only in the positions this checker happens to hand-walk. Adding a
+    /// position is then routing its word here, not writing a new mechanism.
+    ///
+    /// Redirect words are the exception, and deliberately so: `visit_redirect`
+    /// intercepts them before `walk_redirect` can deliver them, and closing
+    /// that is issue #65.
+    fn visit_word(&mut self, word: &'ast Word) {
+        if self.denied.is_some() {
+            return;
+        }
+        // The word's own source, so a substitution inside it can be walked
+        // against the text it was parsed from rather than the enclosing
+        // command's. See `visit_nested`.
+        let word_source = self.slice(word.span.start.0, word.span.end.0);
+        for fragment in &word.parts {
+            self.check_fragment_command_subs(fragment, word_source);
         }
     }
 }
@@ -227,6 +286,20 @@ impl<'a> PermissionChecker<'a> {
     fn finalize(mut self) -> CheckResult {
         self.unmatched.sort();
         self.unmatched.dedup();
+        self.notes.sort();
+        self.notes.dedup();
+        // A native deny is authoritative and names its own reason, so rules
+        // collected for *other* commands in the program are not "rules that
+        // would need to be allowed" for anything — the deny stands whatever the
+        // user adds. `main.rs` documents native denies as carrying an empty
+        // list and the log writer relies on it; without this, a program like
+        // `unknown_cmd; rm -rf x` denied on `rm` still reported
+        // `Bash(unknown_cmd)` as missing, polluting the audit log with an entry
+        // about a different command.
+        if self.denied.is_some() {
+            self.unmatched.clear();
+            self.notes.clear();
+        }
         let decision = if let Some(reason) = self.denied {
             Decision::Deny(reason)
         } else if self.unmatched.is_empty() {
@@ -244,6 +317,7 @@ impl<'a> PermissionChecker<'a> {
             decision,
             missing_rules: self.unmatched,
             custom_reason: None,
+            notes: self.notes,
             matched_allow: self.matched_allow,
             matched_deny: self.matched_deny,
         }
@@ -424,9 +498,23 @@ impl<'a> PermissionChecker<'a> {
         //   3. the parser didn't fail (we trust the extracted accesses).
         // Similarly, when Python AST analysis succeeded, the Bash() rule is suppressed.
         if !bash_allowed && !parse_failed {
+            // The command's environment is a second input channel, and argv
+            // does not describe it. An assignment to a variable that is not
+            // provably inert can make an otherwise file-only invocation run an
+            // arbitrary program — `GIT_EXTERNAL_DIFF=./evil.sh git diff` — so
+            // it is not file-only, exactly as `find -exec` is not. The list is
+            // of inert names rather than dangerous ones because no enumeration
+            // of dangerous names terminates; see `env_prefix`.
+            let unmodelled_env: Vec<&str> = cmd
+                .assignments
+                .iter()
+                .map(|a| a.name.as_str())
+                .filter(|name| !env_prefix::is_inert(name))
+                .collect();
+
             let has_file_accesses = !redirect_accesses.is_empty() || !cmd_accesses.is_empty();
             let has_dynamic_args = arg_literals[1..].iter().any(|a| a.is_none());
-            let can_skip = match file_only_override {
+            let can_skip_ignoring_env = match file_only_override {
                 // Parser explicitly declared this invocation's effects.
                 // Trust it even with zero file accesses (e.g. read-only git
                 // subcommands), but still require static args.
@@ -442,6 +530,12 @@ impl<'a> PermissionChecker<'a> {
                         && !bash_asked
                 }
             } || (python_analyzed && !bash_asked);
+
+            // Only when the prefix is what tipped the decision does the
+            // suggestion say so. `SKULD_LABELS=… cargo test` needed its
+            // `Bash(cargo *)` rule anyway and keeps the plain message.
+            let env_forced_the_rule = can_skip_ignoring_env && !unmodelled_env.is_empty();
+            let can_skip = can_skip_ignoring_env && unmodelled_env.is_empty();
 
             if !can_skip {
                 // Build a name-form suggestion filter: `Arg0::Name(stripped
@@ -466,7 +560,15 @@ impl<'a> PermissionChecker<'a> {
                     items.push(BashFilterItem::MatchZeroOrMore);
                 }
                 let filter = BashFilter::from_items(items);
+                // `missing_rules` holds pasteable rules and nothing else; the
+                // explanation is advisory and belongs in `notes`.
                 self.unmatched.push(filter.to_rule_string());
+                if env_forced_the_rule {
+                    self.notes.push(format!(
+                        "environment assignment(s) {} can change what this command runs",
+                        unmodelled_env.join(", "),
+                    ));
+                }
             }
         }
     }
@@ -606,14 +708,6 @@ impl<'a> PermissionChecker<'a> {
         (asked, allowed)
     }
 
-    /// Walk word fragments for command substitutions.
-    fn check_word_command_subs(&mut self, word: &Word) {
-        let word_source = self.slice(word.span.start.0, word.span.end.0);
-        for fragment in &word.parts {
-            self.check_fragment_command_subs(fragment, word_source);
-        }
-    }
-
     /// `source[start..end]`, when there is a source and the range is valid.
     fn slice(&self, start: usize, end: usize) -> Option<&'a str> {
         self.source.and_then(|source| source.get(start..end))
@@ -635,6 +729,16 @@ impl<'a> PermissionChecker<'a> {
         self.source = outer;
     }
 
+    /// The funnel's second storey: descend a fragment into any nested
+    /// substitution it carries.
+    ///
+    /// **This match is deliberately exhaustive — do not add a `_ => {}` arm.**
+    /// Listing every variant makes a new `Fragment` in thaum a compile error
+    /// here rather than a silently unwalked shape.
+    ///
+    /// Some variants are leaves in thaum's grammar and some are leaves only
+    /// because thaum does not parse their interior; the difference matters and
+    /// is noted per arm.
     fn check_fragment_command_subs(&mut self, fragment: &Fragment, word_source: Option<&'a str>) {
         if self.denied.is_some() {
             return;
@@ -643,12 +747,46 @@ impl<'a> PermissionChecker<'a> {
             Fragment::CommandSubstitution(stmts) => {
                 self.visit_nested(stmts, word_source.and_then(nested_body));
             }
-            Fragment::DoubleQuoted(inner) => {
+            // Carriers of further fragments — recurse.
+            Fragment::DoubleQuoted(inner) | Fragment::BashLocaleQuoted(inner) => {
                 for f in inner {
                     self.check_fragment_command_subs(f, word_source);
                 }
             }
-            _ => {}
+            Fragment::BashBraceExpansion(BraceExpansionKind::List(alternatives)) => {
+                for alternative in alternatives {
+                    for f in alternative {
+                        self.check_fragment_command_subs(f, word_source);
+                    }
+                }
+            }
+            // `${x:-word}` and friends. thaum currently stores the argument's
+            // interior as a single `Literal` rather than parsing it, so today
+            // this arm finds nothing for `${Y:-$(rm -rf x)}` — that family is
+            // unreached and tracked in #69. The arm is here so the descent is
+            // correct the moment thaum parses the argument, rather than needing
+            // to be rediscovered then.
+            Fragment::Parameter(ParameterExpansion::Complex {
+                argument: Some(word),
+                ..
+            }) => {
+                for f in &word.parts {
+                    self.check_fragment_command_subs(f, word_source);
+                }
+            }
+            // True leaves: no nested fragments in the grammar.
+            Fragment::Literal(_)
+            | Fragment::SingleQuoted(_)
+            | Fragment::BashAnsiCQuoted(_)
+            | Fragment::Glob(_)
+            | Fragment::TildePrefix(_)
+            | Fragment::Parameter(ParameterExpansion::Simple(_))
+            | Fragment::Parameter(ParameterExpansion::Complex { argument: None, .. })
+            | Fragment::BashBraceExpansion(BraceExpansionKind::Sequence { .. }) => {}
+            // Leaves only because thaum keeps their interior as a string:
+            // `$(( $(...) ))` and `@( $(...) )` are unreachable from here at
+            // any call depth. Tracked in #69 with the `${x:-...}` family.
+            Fragment::ArithmeticExpansion(_) | Fragment::BashExtGlob { .. } => {}
         }
     }
 }
@@ -707,6 +845,7 @@ mod apply_mode_tests {
             matched_deny: vec![],
             missing_rules: vec!["Bash(foo)".into(), "Bash(bar)".into()],
             custom_reason: None,
+            notes: vec![],
         }
     }
 
@@ -717,6 +856,7 @@ mod apply_mode_tests {
             matched_deny: vec![],
             missing_rules: vec![],
             custom_reason: None,
+            notes: vec![],
         }
     }
 
@@ -727,6 +867,7 @@ mod apply_mode_tests {
             matched_deny: vec!["Bash(rm *)".into()],
             missing_rules: vec![],
             custom_reason: None,
+            notes: vec![],
         }
     }
 
@@ -834,5 +975,107 @@ mod apply_mode_tests {
         let once = apply_permission_mode(ask_result(), Some(PermissionMode::DontAsk));
         let twice = apply_permission_mode(once.clone(), Some(PermissionMode::DontAsk));
         assert_eq!(once, twice);
+    }
+}
+
+#[cfg(test)]
+mod fragment_descent_tests {
+    use super::*;
+    use crate::permission;
+    use crate::settings::Permissions;
+    use thaum::span::Span;
+
+    fn deny_rm() -> ParsedPermissions {
+        permission::parse_rules(
+            &Permissions {
+                deny: vec!["Bash(rm *)".to_string()],
+                ..Default::default()
+            },
+            "/tmp",
+            "/tmp",
+        )
+    }
+
+    fn word(parts: Vec<Fragment>) -> Word {
+        Word {
+            parts,
+            span: Span::new(0, 0),
+        }
+    }
+
+    /// `rm -rf /tmp/zzz` as a statement list, for embedding in a fragment.
+    fn rm_statements() -> Vec<Statement> {
+        let program = thaum::parse_with("rm -rf /tmp/zzz", thaum::Dialect::Bash).unwrap();
+        program.statements
+    }
+
+    fn program_running(parts: Vec<Fragment>) -> Program {
+        // `cat <word>` — the word carries the fragment under test.
+        let cmd = Command {
+            assignments: vec![],
+            arguments: vec![
+                Argument::Word(word(vec![Fragment::Literal("cat".to_string())])),
+                Argument::Word(word(parts)),
+            ],
+            redirects: vec![],
+            span: Span::new(0, 0),
+        };
+        Program {
+            statements: vec![Statement {
+                expression: Expression::Command(cmd),
+                mode: ExecutionMode::Sequential,
+                span: Span::new(0, 0),
+            }],
+            span: Span::new(0, 0),
+        }
+    }
+
+    /// The `Parameter { argument }` arm cannot be reached through the pinned
+    /// thaum revision, which builds `${Y:-$(...)}`'s interior as a flat
+    /// `Literal`. Upstream parses it, so the arm goes live when the pin moves.
+    /// Building the node by hand proves the descent is correct now rather than
+    /// leaving it unverifiable until then.
+    #[test]
+    fn parameter_argument_descent_reaches_a_substitution() {
+        let fragment = Fragment::Parameter(ParameterExpansion::Complex {
+            name: "Y".to_string(),
+            operator: Some(ParamOp::Default),
+            argument: Some(Box::new(word(vec![Fragment::CommandSubstitution(
+                rm_statements(),
+            )]))),
+        });
+        // Hand-built nodes carry no source text, and none is needed: the deny
+        // comes from the command name inside the substitution, not from how
+        // any character was written.
+        let result = check_program(&program_running(vec![fragment]), "", &deny_rm(), "/tmp");
+        assert!(
+            matches!(result.decision, Decision::Deny(_)),
+            "Parameter argument descent did not reach the substitution: {result:?}",
+        );
+    }
+
+    /// The same, nested one level further: `"pre${Y:-$(rm ...)}post"`.
+    #[test]
+    fn parameter_argument_descent_works_inside_double_quotes() {
+        let inner = Fragment::Parameter(ParameterExpansion::Complex {
+            name: "Y".to_string(),
+            operator: Some(ParamOp::Default),
+            argument: Some(Box::new(word(vec![Fragment::CommandSubstitution(
+                rm_statements(),
+            )]))),
+        });
+        let fragment = Fragment::DoubleQuoted(vec![
+            Fragment::Literal("pre".to_string()),
+            inner,
+            Fragment::Literal("post".to_string()),
+        ]);
+        // Hand-built nodes carry no source text, and none is needed: the deny
+        // comes from the command name inside the substitution, not from how
+        // any character was written.
+        let result = check_program(&program_running(vec![fragment]), "", &deny_rm(), "/tmp");
+        assert!(
+            matches!(result.decision, Decision::Deny(_)),
+            "descent failed inside double quotes: {result:?}",
+        );
     }
 }

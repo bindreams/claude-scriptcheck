@@ -113,6 +113,7 @@ fn check(agent: Agent, command: &str, cwd: &str, permission_mode: Option<Permiss
                     matched_deny: vec![],
                     missing_rules: vec!["Bash(<parse error>)".into()],
                     custom_reason: Some("Shell command could not be parsed".into()),
+                    notes: vec![],
                 },
             };
             let result = checker::apply_permission_mode(result, permission_mode);
@@ -469,6 +470,7 @@ fn handle_bash(
             matched_deny: vec![],
             missing_rules: vec![format!("{}(<parse error>)", hook_input.tool_name)],
             custom_reason: Some("Shell command could not be parsed".into()),
+            notes: vec![],
         },
     };
 
@@ -548,6 +550,7 @@ fn handle_file_tool(
                     "Missing file path in {} tool input",
                     hook_input.tool_name,
                 )),
+                notes: vec![],
             };
             let result = checker::apply_permission_mode(result, permission_mode);
             log_and_output(
@@ -604,6 +607,7 @@ fn handle_apply_patch(
             matched_deny: vec![],
             missing_rules: vec!["Write(<apply_patch parse error>)".into()],
             custom_reason: Some(reason),
+            notes: vec![],
         },
     };
     let result = checker::apply_permission_mode(result, permission_mode);
@@ -681,12 +685,15 @@ fn log_and_output(
             output_decision(agent, "deny", reason, output_command, None);
         }
         checker::Decision::Ask => {
-            let reason = result.custom_reason.clone().unwrap_or_else(|| {
+            let mut reason = result.custom_reason.clone().unwrap_or_else(|| {
                 format!(
                     "Missing permission rules: {}",
                     result.missing_rules.join(", ")
                 )
             });
+            if !result.notes.is_empty() {
+                reason = format!("{reason}. Note: {}.", result.notes.join("; "));
+            }
             logging::log_decision(
                 session_id,
                 cwd,

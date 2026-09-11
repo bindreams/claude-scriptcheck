@@ -6,6 +6,7 @@ pub mod cli;
 pub mod cmd_parser;
 pub mod codex_settings;
 pub mod env_hooks;
+pub mod env_prefix;
 pub mod file_access;
 pub mod filter;
 pub mod hook;
