@@ -2,8 +2,12 @@
 //!
 //! Support for `scripts/redirect-differential.py`, which compares these against
 //! what real bash does. Reads NUL-separated commands from a file and writes
-//! `<command>\t<demand>\u{1f}<demand>…`, using empty permissions so every
+//! `<command>\t<demand>\u{1f}<demand>…\0`, using empty permissions so every
 //! access the checker derives shows up as a missing rule.
+//!
+//! Records are NUL-terminated, not newline-terminated: a command can contain a
+//! newline, and splitting on those made every demand of a multi-line spelling
+//! look missing.
 //!
 //! ```sh
 //! cargo run --example file_demands -- <cwd> <commands-file>
@@ -29,6 +33,6 @@ fn main() {
                 .join("\u{1f}"),
             Err(_) => "<parse-error>".to_string(),
         };
-        println!("{}\t{}", cmd.replace('\t', "\\t"), demands);
+        print!("{}\t{}\0", cmd.replace('\t', "\\t"), demands);
     }
 }
