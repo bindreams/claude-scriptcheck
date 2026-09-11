@@ -106,6 +106,7 @@ pub fn check_program(
     let mut checker = PermissionChecker {
         perms,
         cwd,
+        comment_at: None,
         source: Some(source),
         unmatched: Vec::new(),
         notes: Vec::new(),
@@ -127,6 +128,7 @@ pub fn check_file_accesses(
     let mut checker = PermissionChecker {
         perms,
         cwd,
+        comment_at: None,
         // No program, so no redirect can need its source.
         source: None,
         unmatched: Vec::new(),
@@ -147,6 +149,13 @@ pub fn check_file_accesses(
 struct PermissionChecker<'a> {
     perms: &'a ParsedPermissions,
     cwd: &'a str,
+    /// Where a comment begins in the text currently being walked, if one does.
+    ///
+    /// A comment runs to the end of the *line*, not to the end of the command
+    /// that revealed it: `cat x >&-#foo | rm -rf zzz` runs no `rm`. So every
+    /// node starting at or after this offset is skipped. Scoped like `source`,
+    /// because a comment inside `$(...)` ends that line, not the outer one.
+    comment_at: Option<usize>,
     /// The text the AST currently being walked was parsed from, or `None`
     /// where it is not available.
     ///
@@ -171,7 +180,7 @@ struct PermissionChecker<'a> {
 
 impl<'ast> Visit<'ast> for PermissionChecker<'_> {
     fn visit_command(&mut self, cmd: &'ast Command) {
-        if self.denied.is_some() {
+        if self.denied.is_some() || self.is_commented_out(cmd.span.start.0) {
             return;
         }
         // Assignment values are expanded before the command runs, so they are
@@ -195,6 +204,9 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
     }
 
     fn visit_redirect(&mut self, redirect: &'ast Redirect) {
+        if self.is_commented_out(redirect.span.start.0) {
+            return;
+        }
         // Handles redirects for compound / function-def contexts (e.g.
         // `{ ...; } > /log`). Simple-command redirects are handled inside
         // `check_command` via `redirect::accesses`. Compound redirects
@@ -290,12 +302,36 @@ fn sole_substitution_body<'a>(word: &Word, word_source: Option<&'a str>) -> Opti
         .strip_prefix('"')
         .and_then(|s| s.strip_suffix('"'))
         .unwrap_or(source);
-    if let Some(body) = unquoted.strip_prefix("$(") {
-        return body.strip_suffix(')');
-    }
+    // An assignment's value word spans the whole `name=value`, so the name has
+    // to come off before the wrapper shows: `v=$(cmd)`.
+    let unquoted = strip_assignment_name(unquoted);
+    // `$(cmd)` only. A backtick substitution's body is *not* the bytes between
+    // the backticks: bash resolves `\$`, `` \` `` and `\\` inside it before
+    // parsing, so the text that was parsed is shorter than the slice and every
+    // span inside it is shifted. Slicing anyway reads the wrong bytes, which is
+    // how `` `cat \$\$\$\$- >&vault/creds` `` came out as a read of
+    // `vault/creds` when bash writes it. Unknown is the honest answer.
     unquoted
-        .strip_prefix('`')
-        .and_then(|body| body.strip_suffix('`'))
+        .strip_prefix("$(")
+        .and_then(|body| body.strip_suffix(')'))
+}
+
+/// `name=` / `name+=` removed from the front, if one is there.
+fn strip_assignment_name(text: &str) -> &str {
+    let Some((before, after)) = text.split_once('=') else {
+        return text;
+    };
+    let name = before.strip_suffix('+').unwrap_or(before);
+    let mut chars = name.chars();
+    let valid = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if valid {
+        after
+    } else {
+        text
+    }
 }
 
 /// The text a process substitution was parsed from.
@@ -369,6 +405,12 @@ impl<'a> PermissionChecker<'a> {
             arguments: arg_literals,
             comment_at,
         } = redirect::command_line(cmd, self.source);
+        // A comment runs to the end of the line, so it silences what follows in
+        // this command *and* every later one — `cat x >&-#foo | rm -rf zzz`
+        // runs no `rm`, and demanding a write for it is a deny no rule lifts.
+        if let Some(at) = comment_at {
+            self.comment_at = Some(self.comment_at.map_or(at, |prior| prior.min(at)));
+        }
 
         // The shell performs a command's redirections whatever shape the
         // command has, so these are derived once, up here, and checked on every
@@ -737,6 +779,11 @@ impl<'a> PermissionChecker<'a> {
         (asked, allowed)
     }
 
+    /// Is this offset past the start of a comment on the same line?
+    fn is_commented_out(&self, position: usize) -> bool {
+        self.comment_at.is_some_and(|at| position >= at)
+    }
+
     /// `source[start..end]`, when there is a source and the range is valid.
     fn slice(&self, start: usize, end: usize) -> Option<&'a str> {
         self.source.and_then(|source| source.get(start..end))
@@ -750,12 +797,15 @@ impl<'a> PermissionChecker<'a> {
     /// `None` where the body cannot be located, which the redirect classifier
     /// answers by over-approximating rather than by guessing.
     fn visit_nested(&mut self, stmts: &[Statement], body: Option<&'a str>) {
-        let outer = self.source;
+        let outer = (self.source, self.comment_at);
         self.source = body;
+        // A comment inside the substitution ends the substitution's line, and
+        // one outside it never reached here.
+        self.comment_at = None;
         for stmt in stmts {
             self.visit_statement(stmt);
         }
-        self.source = outer;
+        (self.source, self.comment_at) = outer;
     }
 
     /// The funnel's second storey: descend a fragment into any nested

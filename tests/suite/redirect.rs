@@ -1255,30 +1255,34 @@ fn a_comment_ends_the_line_for_redirects_too() {
 
 #[skuld::test]
 fn a_second_substitution_does_not_borrow_the_first_ones_source() {
-    // The padding puts a `-` where the stolen source would be read, so the
-    // classification flips and the write disappears. The path is relative
-    // because that is the alignment that lands the stolen byte on the dash —
-    // an absolute one shifts the offsets and the bug hides.
-    let result = check("echo $(xxxxxxxxxxxxxxxx-)$(cat >&vault/creds)", &[], &[]);
-    assert!(
-        result
-            .missing_rules
-            .contains(&format!("Write({})", canonical("/tmp/vault/creds"))),
-        "a write escaped through a second substitution: {:?}",
-        result.missing_rules,
-    );
-    assert!(
-        matches!(
-            check(
-                "echo $(xxxxxxxxxxxxxxxx-)$(cat >&vault/creds)",
-                &["Bash(echo *)", "Bash(cat *)", "Bash(xxxxxxxxxxxxxxxx- *)"],
-                &["Write(/tmp/vault/**)"],
-            )
-            .decision,
-            Decision::Deny(_),
-        ),
-        "a deny rule missed a write hidden behind a second substitution",
-    );
+    // Whether a stolen source gives the wrong answer depends on what byte the
+    // shifted offset lands on, so one spelling pins nothing: the padding is
+    // swept instead. Every length must classify the write, and the first
+    // substitution ends in `-` so a stolen byte reads as a descriptor dash.
+    for pad in 0..24 {
+        let filler = "x".repeat(pad);
+        let cmd = format!("echo $({filler}-)$(cat >&vault/creds)");
+        let result = check(&cmd, &[], &[]);
+        assert!(
+            result
+                .missing_rules
+                .contains(&format!("Write({})", canonical("/tmp/vault/creds"))),
+            "a write escaped through a second substitution at padding {pad}: {:?}",
+            result.missing_rules,
+        );
+        assert!(
+            matches!(
+                check(
+                    &cmd,
+                    &["Bash(echo *)", "Bash(cat *)", "Bash(*)"],
+                    &["Write(/tmp/vault/**)"],
+                )
+                .decision,
+                Decision::Deny(_),
+            ),
+            "a deny rule missed the write at padding {pad}",
+        );
+    }
 }
 
 #[skuld::test]
@@ -1328,6 +1332,97 @@ fn an_unlocatable_body_still_recognises_an_assignment() {
             .missing_rules
             .contains(&format!("Read({})", canonical("/tmp/vault/creds"))),
         "an assignment was read as the command name: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn a_comment_ends_the_line_not_just_the_command() {
+    // Verified: `cat /etc/hosts >&-#foo | rm -rf zzz` leaves `zzz` in place —
+    // the `rm` is comment text. Demanding its write is a deny no rule lifts,
+    // on a command bash never runs.
+    for cmd in [
+        "cat /tmp/in >&-#foo | rm -rf /tmp/zzz",
+        "cat /tmp/in >&-#foo; rm -rf /tmp/zzz",
+        "cat /tmp/in >&-#foo && rm -rf /tmp/zzz",
+    ] {
+        let result = check(cmd, &[], &[]);
+        assert_eq!(
+            result.missing_rules,
+            vec![format!("Read({})", canonical("/tmp/in"))],
+            "a commented-out command was still demanded: {cmd}",
+        );
+        assert!(
+            !matches!(
+                check(cmd, &["Bash(cat *)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "a commented-out command fired a deny: {cmd}",
+        );
+    }
+}
+
+#[skuld::test]
+fn a_comment_inside_a_substitution_ends_only_its_own_line() {
+    // The scoping control. The comment is inside `$(...)`, so the `rm` after
+    // the substitution is a real command and must still be demanded.
+    let result = check("echo $(cat /tmp/in >&-#foo) ; rm -rf /tmp/zzz", &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({}/**)", canonical("/tmp/zzz"))),
+        "a comment inside a substitution silenced the line outside it: {:?}",
+        result.missing_rules,
+    );
+}
+
+// Sources that are not the bytes they came from -----------------------------------------------------------------------
+
+#[skuld::test]
+fn a_backtick_substitution_is_never_sliced_for_its_body() {
+    // bash resolves `\$`, `` \` `` and `\\` inside backticks *before* parsing,
+    // so the body that was parsed is shorter than the text between them and
+    // every span inside it is shifted. Verified: bash writes `vault/creds`
+    // here, and slicing anyway classified it as a read — the write escaped
+    // every rule.
+    let result = check("echo `cat \\$\\$\\$\\$- >&vault/creds`", &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({})", canonical("/tmp/vault/creds"))),
+        "a write escaped through a backtick substitution: {:?}",
+        result.missing_rules,
+    );
+    assert!(
+        matches!(
+            check(
+                "echo `cat \\$\\$\\$\\$- >&vault/creds`",
+                &["Bash(echo *)", "Bash(cat *)"],
+                &["Write(/tmp/vault/**)"],
+            )
+            .decision,
+            Decision::Deny(_),
+        ),
+        "a deny rule missed a write inside backticks",
+    );
+}
+
+#[skuld::test]
+fn an_assignment_value_still_locates_its_substitution() {
+    // An assignment's value word spans the whole `name=value`, so the name has
+    // to come off before the `$(` shows. Without that the body is unlocatable
+    // and the redirect is scored twice — the write below is the spurious half.
+    let result = check("V=$(cat /tmp/in >&-/tmp/vault/creds)", &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Read({})", canonical("/tmp/vault/creds"))),
+        "the operand was lost: {:?}",
+        result.missing_rules,
+    );
+    assert!(
+        !result.missing_rules.iter().any(|r| r.starts_with("Write(")),
+        "an unlocated body fabricated a write: {:?}",
         result.missing_rules,
     );
 }
