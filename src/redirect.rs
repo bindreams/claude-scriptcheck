@@ -109,12 +109,11 @@ fn names_a_descriptor(word: &Word, source: &str) -> bool {
     let Some(s) = word.try_to_static_string() else {
         return false;
     };
-    // `>&""` is a "Bad file descriptor" error. It opens nothing.
-    if s.is_empty() {
-        return true;
-    }
     // Closing and duplicating survive quoting: `>&"-"` closes and `>&"2"`
-    // duplicates, exactly as their bare spellings do.
+    // duplicates, exactly as their bare spellings do. The empty word takes the
+    // digits branch too, `all` being vacuously true over no bytes — which is
+    // the right answer rather than an accident to guard against, since `>&""`
+    // is a "Bad file descriptor" error and opens nothing either.
     if s == "-" || s.bytes().all(|b| b.is_ascii_digit()) {
         return true;
     }
@@ -160,6 +159,8 @@ fn edge_is_bare_dash(word: &Word, source: &str, edge: Edge) -> bool {
         word.span.end.0,
         source.len(),
     );
+    // A word with no source bytes has no edge character. No parse produces one,
+    // but the subtraction below would underflow if one ever did.
     if word.span.end.0 <= word.span.start.0 {
         return false;
     }
@@ -197,7 +198,10 @@ fn edge_is_bare_dash(word: &Word, source: &str, edge: Edge) -> bool {
 /// where the fix belongs. When thaum#14 lands the operand arrives as an ordinary
 /// `Argument`, and this function and its call in `command_arg_literals` should
 /// be deleted rather than adapted.
-fn closed_descriptor_operand(redirect: &Redirect, source: &str) -> Option<(usize, Option<String>)> {
+fn closed_descriptor_operand<'a>(
+    redirect: &Redirect,
+    source: &'a str,
+) -> Option<RecoveredOperand<'a>> {
     let word = match &redirect.kind {
         RedirectKind::DupInput(w) | RedirectKind::DupOutput(w) => w,
         _ => return None,
@@ -210,18 +214,67 @@ fn closed_descriptor_operand(redirect: &Redirect, source: &str) -> Option<(usize
         return None;
     }
     // The `-` is one source byte, so the operand starts one byte into the word.
-    let start = word.span.start.0 + 1;
-    if start >= word.span.end.0 {
+    let position = word.span.start.0 + 1;
+    if position >= word.span.end.0 {
         // A bare `>&-` closes the descriptor and names nothing.
         return None;
     }
     // A static word's value starts with the same `-` its source does, so what
     // follows the dash is the operand. `>&-""` passes an empty argument, which
     // is an argument.
-    let text = word
+    let literal = word
         .try_to_static_string()
         .map(|t| t.strip_prefix('-').unwrap_or(&t).to_string());
-    Some((start, text))
+    Some(RecoveredOperand {
+        position,
+        text: &source[position..word.span.end.0],
+        literal,
+    })
+}
+
+/// An argument bash took out of a `>&-word` redirect.
+struct RecoveredOperand<'a> {
+    /// Where the operand starts in the source, which is its position among the
+    /// command's words.
+    position: usize,
+    /// The operand as written. What kind of word bash reads it as — an
+    /// argument, an assignment, the start of a comment — is decided from the
+    /// spelling, before any expansion, so the source is what decides it.
+    text: &'a str,
+    /// Its value, when the word resolves statically.
+    literal: Option<String>,
+}
+
+impl RecoveredOperand<'_> {
+    /// Does this operand start a comment, ending the command line?
+    ///
+    /// `>&-` ends the redirect token, so what follows begins a fresh word — and
+    /// a word starting with `#` is a comment. Verified: `p in >&-#foo bar`
+    /// reports `argc=1 [in]`, so both `#foo` and `bar` are comment text.
+    fn starts_a_comment(&self) -> bool {
+        self.text.starts_with('#')
+    }
+
+    /// Would bash read this operand as a variable assignment?
+    ///
+    /// Only in the command prefix, which the caller decides. A word is an
+    /// assignment when it starts with a name followed by `=` or `+=` — a rule
+    /// about the spelling, not the value, so `>&-$P` is a command word even if
+    /// `$P` expands to `FOO=1`. Verified: `>&-FOO=1 p x` reports `argc=1 [x]`
+    /// with `FOO=1` in the environment, while `>&-1FOO=1 p x` is a
+    /// `command not found` for `1FOO=1` — an invalid name is an ordinary word.
+    fn is_assignment(&self) -> bool {
+        let name = self
+            .text
+            .split_once('=')
+            .map(|(before, _)| before.strip_suffix('+').unwrap_or(before));
+        let Some(name) = name else { return false };
+        let mut chars = name.chars();
+        chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    }
 }
 
 /// The arguments bash passes to the command, in source order.
@@ -232,16 +285,58 @@ fn closed_descriptor_operand(redirect: &Redirect, source: &str) -> Option<(usize
 /// work around thaum#14; see `closed_descriptor_operand`. Once that lands, this
 /// collapses back to mapping `cmd.arguments`.
 pub fn command_arg_literals(cmd: &Command, source: &str) -> Vec<Option<String>> {
-    let mut items: Vec<(usize, Option<String>)> = cmd
+    enum Word<'a> {
+        /// A word the parser already saw as an argument.
+        Parsed(Option<String>),
+        /// A word recovered from a `>&-word` redirect, which the parser did not
+        /// see as a word at all, so bash's rules for what kind of word it is
+        /// have to be applied here.
+        Recovered(RecoveredOperand<'a>),
+    }
+
+    let mut items: Vec<(usize, Word)> = cmd
         .arguments
         .iter()
-        .map(|a| (a.span().start.0, a.try_to_static_string()))
+        .map(|a| (a.span().start.0, Word::Parsed(a.try_to_static_string())))
         .collect();
     items.extend(
         cmd.redirects
             .iter()
-            .filter_map(|r| closed_descriptor_operand(r, source)),
+            .filter_map(|r| closed_descriptor_operand(r, source))
+            .map(|operand| (operand.position, Word::Recovered(operand))),
     );
-    items.sort_by_key(|(pos, _)| *pos);
-    items.into_iter().map(|(_, literal)| literal).collect()
+    items.sort_by_key(|(position, _)| *position);
+
+    // A recovered operand starting with `#` is a comment, and a comment runs to
+    // the end of the line: every word after it is comment text too.
+    if let Some(comment) = items
+        .iter()
+        .position(|(_, w)| matches!(w, Word::Recovered(o) if o.starts_a_comment()))
+    {
+        items.truncate(comment);
+    }
+
+    // Leading assignment-shaped operands are assignments rather than arguments,
+    // and the command name is the first word that is not one. Treating
+    // `>&-FOO=1 rm -rf zzz` as a command called `FOO=1` would leave every
+    // `Bash(rm ...)` rule looking at the wrong name. Words the parser saw are
+    // already sorted into assignments and arguments, so only a recovered
+    // operand can still be sitting in the prefix.
+    let command_word = items
+        .iter()
+        .position(|(_, w)| !matches!(w, Word::Recovered(o) if o.is_assignment()));
+    let items = match command_word {
+        Some(first) => &items[first..],
+        // Every word was an assignment: an assignment-only command, which runs
+        // nothing but still performs its redirects.
+        None => &[],
+    };
+
+    items
+        .iter()
+        .map(|(_, word)| match word {
+            Word::Parsed(literal) => literal.clone(),
+            Word::Recovered(operand) => operand.literal.clone(),
+        })
+        .collect()
 }

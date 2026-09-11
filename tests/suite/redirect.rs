@@ -924,15 +924,196 @@ fn eval_still_performs_its_redirects() {
 }
 
 #[skuld::test]
-fn a_bash_allow_rule_suppresses_a_redirect_demand_but_not_a_deny() {
-    // The documented suppression contract, checked on the paths that return
-    // early: a matching Bash allow rule silences the missing-rule demand, and a
-    // Deny still fires.
+fn a_bash_allow_rule_suppresses_an_evals_redirect_demand() {
+    // The documented suppression contract on a path that returns early: a
+    // matching Bash allow rule silences the missing-rule demand. The deny half
+    // is `eval_still_performs_its_redirects`, which runs the same command with
+    // the same allow rule and a deny rule in force.
     let result = check("eval x > /tmp/out", &["Bash(eval *)"], &[]);
     assert_eq!(
         result.decision,
         Decision::Allow,
         "{:?}",
         result.missing_rules
+    );
+}
+
+// Words and shapes that name no file ----------------------------------------------------------------------------------
+//
+// Each of these opens nothing in bash, so recording an access would be a demand
+// — or a `Deny` — on a file the command never touches.
+
+#[skuld::test]
+fn an_empty_target_names_no_file() {
+    // Verified: `cat /etc/hosts > ""` reports "No such file or directory" and
+    // creates nothing. Resolving the empty path instead names the working
+    // directory, which a `Deny(Write(...))` over the project would then block.
+    for cmd in [
+        "cat /tmp/in > \"\"",
+        "cat /tmp/in >> ''",
+        "cat /tmp/in >| \"\"",
+        "cat /tmp/in < \"\"",
+        "cat /tmp/in <> \"\"",
+        "cat /tmp/in >& \"\"",
+        "cat /tmp/in &> \"\"",
+        "> \"\"",
+    ] {
+        let result = check(cmd, &[], &[]);
+        let from_the_redirect: Vec<&String> = result
+            .missing_rules
+            .iter()
+            .filter(|r| {
+                (r.starts_with("Read(") || r.starts_with("Write("))
+                    && !r.ends_with(&format!("{})", canonical("/tmp/in")))
+            })
+            .collect();
+        assert!(
+            from_the_redirect.is_empty(),
+            "an empty target named a file: {cmd} -> {from_the_redirect:?}",
+        );
+    }
+}
+
+#[skuld::test]
+fn an_empty_target_does_not_deny_the_working_directory() {
+    // The specific failure the guard prevents: a deny over the directory the
+    // command runs in, fired by a redirect that opens nothing.
+    for cmd in ["cat /tmp/in > \"\"", "cat /tmp/in <> \"\"", "> \"\""] {
+        assert!(
+            !matches!(
+                check(cmd, &["Bash(cat *)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "an empty target denied the working directory: {cmd}",
+        );
+    }
+}
+
+// Redirects on a compound command -------------------------------------------------------------------------------------
+//
+// `{ ...; } > log` is not attached to any one command, so it is walked by
+// `visit_redirect` rather than by `check_command`, and no `Bash(...)` rule can
+// suppress it. The classification is the same; the route to it is not.
+
+#[skuld::test]
+fn a_compound_redirect_is_classified_the_same_way() {
+    for cmd in [
+        "{ cat /tmp/x; } <> /tmp/y",
+        "while read l; do echo; done <> /tmp/y",
+        "if true; then echo; fi <> /tmp/y",
+    ] {
+        let result = check(cmd, &[], &[]);
+        for demand in [
+            format!("Read({})", canonical("/tmp/y")),
+            format!("Write({})", canonical("/tmp/y")),
+        ] {
+            assert!(
+                result.missing_rules.contains(&demand),
+                "compound `<>` lost {demand}: {cmd} -> {:?}",
+                result.missing_rules,
+            );
+        }
+    }
+}
+
+#[skuld::test]
+fn a_compound_redirect_fires_both_denies() {
+    for rule in ["Read(/tmp/vault/**)", "Write(/tmp/vault/**)"] {
+        assert!(
+            matches!(
+                check("{ cat; } <> /tmp/vault/creds", &["Bash(cat *)"], &[rule]).decision,
+                Decision::Deny(_),
+            ),
+            "compound `<>` escaped {rule}",
+        );
+    }
+}
+
+#[skuld::test]
+fn a_compound_redirect_is_not_suppressed_by_a_bash_rule() {
+    // The redirect belongs to the group, not to `cat`, so a rule naming `cat`
+    // has not consented to it.
+    let result = check("{ cat /tmp/x; } > /tmp/y", &["Bash(cat *)"], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({})", canonical("/tmp/y"))),
+        "a Bash rule suppressed a compound redirect: {:?}",
+        result.missing_rules,
+    );
+}
+
+// What kind of word bash reads the recovered operand as ---------------------------------------------------------------
+//
+// `>&-` ends the redirect token, so what follows starts a fresh word — and
+// bash decides what kind of word it is from the spelling, before expansion.
+// The parser never saw a word boundary there, so these rules have to be
+// applied where the operand is recovered.
+
+#[skuld::test]
+fn an_assignment_shaped_operand_is_not_the_command_name() {
+    // Verified: `>&-FOO=1 p x` reports `argc=1 [x]` with `FOO=1` in the
+    // environment. Reading `FOO=1` as the command name leaves every
+    // `Bash(rm ...)` rule looking at a name no rule can match.
+    for cmd in [
+        ">&-FOO=1 rm -rf /tmp/zzz",
+        ">&-FOO+=1 rm -rf /tmp/zzz",
+        ">&-FOO=1 >&-BAR=2 rm -rf /tmp/zzz",
+    ] {
+        assert!(
+            matches!(check(cmd, &[], &["Bash(rm *)"]).decision, Decision::Deny(_),),
+            "an assignment-shaped operand hid the command name: {cmd}",
+        );
+    }
+}
+
+#[skuld::test]
+fn an_assignment_shaped_operand_after_the_command_name_is_an_argument() {
+    // Verified: `p a >&-FOO=1` reports `argc=2 [a] [FOO=1]` and leaves `FOO`
+    // unset. Past the command word, the assignment rule no longer applies.
+    let result = check("cat /tmp/in >&-FOO=1", &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Read({})", canonical("/tmp/FOO=1"))),
+        "expected the operand to be an argument, got {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn an_invalid_name_is_a_command_word_not_an_assignment() {
+    // Verified: `>&-1FOO=1 p x` is a `command not found` for `1FOO=1` — a name
+    // cannot start with a digit, so the word is an ordinary one.
+    let result = check(">&-1FOO=1 x", &[], &[]);
+    assert!(
+        result.missing_rules.iter().any(|r| r.contains("1FOO=1")),
+        "an invalid name was swallowed as an assignment: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn an_operand_starting_a_comment_ends_the_command() {
+    // Verified: `p in >&-#foo bar` reports `argc=1 [in]`. Both `#foo` and the
+    // word after it are comment text, so demanding a read on either is a
+    // demand — or a deny — on a file the command never opens.
+    let result = check("cat /tmp/in >&-#foo /tmp/vault/creds", &[], &[]);
+    assert_eq!(
+        result.missing_rules,
+        vec![format!("Read({})", canonical("/tmp/in"))],
+        "a comment was read as arguments",
+    );
+    assert!(
+        !matches!(
+            check(
+                "cat /tmp/in >&-#foo /tmp/vault/creds",
+                &["Bash(cat *)"],
+                &["Read(/tmp/vault/**)"],
+            )
+            .decision,
+            Decision::Deny(_),
+        ),
+        "a commented-out path fired a deny",
     );
 }
