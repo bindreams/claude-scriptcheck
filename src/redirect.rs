@@ -12,9 +12,20 @@ use thaum::ast::*;
 use crate::file_access::{self, AccessKind, FileAccess};
 
 /// The file accesses a command's redirects perform.
-pub fn accesses(redirects: &[Redirect], source: &str, cwd: &str) -> Vec<FileAccess> {
+///
+/// `source` is the text the command was parsed from, or `None` where that text
+/// is not available — see `edge_is_bare_dash`. Redirects at or after
+/// `comment_at` are skipped: a comment runs to the end of the line, so bash
+/// never performs them.
+pub fn accesses(
+    redirects: &[Redirect],
+    source: Option<&str>,
+    cwd: &str,
+    comment_at: Option<usize>,
+) -> Vec<FileAccess> {
     redirects
         .iter()
+        .filter(|r| comment_at.is_none_or(|at| r.span.start.0 < at))
         .flat_map(|r| accesses_for_redirect(r, source, cwd))
         .collect()
 }
@@ -26,7 +37,11 @@ pub fn accesses(redirects: &[Redirect], source: &str, cwd: &str) -> Vec<FileAcce
 ///
 /// A redirect can name a file in more than one way, hence the `Vec`: `<>` opens
 /// one path for both reading and writing.
-pub fn accesses_for_redirect(redirect: &Redirect, source: &str, cwd: &str) -> Vec<FileAccess> {
+pub fn accesses_for_redirect(
+    redirect: &Redirect,
+    source: Option<&str>,
+    cwd: &str,
+) -> Vec<FileAccess> {
     use AccessKind::{Read, Write};
 
     let (word, kinds): (&Word, &[AccessKind]) = match &redirect.kind {
@@ -58,7 +73,12 @@ pub fn accesses_for_redirect(redirect: &Redirect, source: &str, cwd: &str) -> Ve
             // A bare leading dash closes the descriptor and ends the token;
             // what follows is a separate word, recovered by
             // `closed_descriptor_operand`. Nothing here opens a file.
-            if edge_is_bare_dash(w, source, Edge::First) {
+            //
+            // An unknown source cannot answer this, and the two readings need
+            // opposite answers, so both are taken: the write is recorded here
+            // and the operand is recovered anyway. One of them is spurious and
+            // neither is missing.
+            if edge_is_bare_dash(w, source, Edge::First) == Some(true) {
                 return Vec::new();
             }
             (w, &[Write])
@@ -105,7 +125,7 @@ pub fn accesses_for_redirect(redirect: &Redirect, source: &str, cwd: &str) -> Ve
 /// A word that does not resolve statically could be any of these or a filename.
 /// Of those readings only the file one needs checking, so it is not treated as
 /// a descriptor.
-fn names_a_descriptor(word: &Word, source: &str) -> bool {
+fn names_a_descriptor(word: &Word, source: Option<&str>) -> bool {
     let Some(s) = word.try_to_static_string() else {
         return false;
     };
@@ -121,7 +141,10 @@ fn names_a_descriptor(word: &Word, source: &str) -> bool {
     // spec whatever precedes it — `>&2-` moves fd 2, `>&x-` is an "ambiguous
     // redirect" — and neither opens a file. Quote that one character and it is
     // an ordinary filename again: `>&"2"-` moves, but `>&2"-"` writes `2-`.
-    edge_is_bare_dash(word, source, Edge::Last)
+    // With no source the character's spelling is unknown. Reading it as a
+    // descriptor would drop a file access, so it is read as a filename: the
+    // over-approximating direction.
+    edge_is_bare_dash(word, source, Edge::Last) == Some(true)
 }
 
 /// Which end of a redirect word to inspect.
@@ -133,11 +156,13 @@ enum Edge {
 
 /// Is the character at `edge` of this word a `-` that bash saw bare?
 ///
-/// Both dash rules turn on how one character was *written*, and the parsed word
-/// no longer holds that: `-`, `\-` and `"-"` all arrive as `Literal("-")`. The
-/// source byte at the word's edge does hold it, and it decides both rules
-/// outright — a `-` there is a bare dash, and a `\` or a quote there means the
-/// word's edge character is something bash had to unescape to reach.
+/// `None` when the source the word was parsed from is not available, which is
+/// not the same as "no". Both dash rules turn on how one character was
+/// *written*, and the parsed word no longer holds that: `-`, `\-` and `"-"` all
+/// arrive as `Literal("-")`. The source byte at the word's edge does hold it,
+/// and it decides both rules outright — a `-` there is a bare dash, and a `\`
+/// or a quote there means the word's edge character is something bash had to
+/// unescape to reach.
 ///
 /// This is also what makes the two edges behave differently, which is the part
 /// of bash's grammar nobody predicts:
@@ -151,7 +176,17 @@ enum Edge {
 /// One rule reads one byte and reproduces all four, because the byte at the
 /// leading edge of `\-2` is `\` while the byte at the trailing edge of `2\-`
 /// is `-`.
-fn edge_is_bare_dash(word: &Word, source: &str, edge: Edge) -> bool {
+///
+/// # When the source is unknown
+///
+/// Spans are positions in the text the node was parsed from, and thaum parses a
+/// command substitution's body separately: spans inside `$(...)`, `` `...` ``
+/// and `<(...)` restart at zero. Indexing the outer command's text with them
+/// reads another command's bytes — which is a wrong answer, not a missing one,
+/// so the caller re-bases the source when it descends and passes `None` where
+/// it cannot. Tracked as thaum#50.
+fn edge_is_bare_dash(word: &Word, source: Option<&str>, edge: Edge) -> Option<bool> {
+    let source = source?;
     debug_assert!(
         word.span.end.0 <= source.len(),
         "word span {}..{} is outside the source it was parsed from (length {})",
@@ -162,13 +197,13 @@ fn edge_is_bare_dash(word: &Word, source: &str, edge: Edge) -> bool {
     // A word with no source bytes has no edge character. No parse produces one,
     // but the subtraction below would underflow if one ever did.
     if word.span.end.0 <= word.span.start.0 {
-        return false;
+        return Some(false);
     }
     let index = match edge {
         Edge::First => word.span.start.0,
         Edge::Last => word.span.end.0 - 1,
     };
-    source.as_bytes().get(index) == Some(&b'-')
+    Some(source.as_bytes().get(index) == Some(&b'-'))
 }
 
 /// The argument hiding inside a `>&-word` / `<&-word` redirect: where it starts
@@ -200,7 +235,7 @@ fn edge_is_bare_dash(word: &Word, source: &str, edge: Edge) -> bool {
 /// be deleted rather than adapted.
 fn closed_descriptor_operand<'a>(
     redirect: &Redirect,
-    source: &'a str,
+    source: Option<&'a str>,
 ) -> Option<RecoveredOperand<'a>> {
     let word = match &redirect.kind {
         RedirectKind::DupInput(w) | RedirectKind::DupOutput(w) => w,
@@ -210,8 +245,16 @@ fn closed_descriptor_operand<'a>(
     // one character makes the whole word a filename instead — `>&"-2"` and
     // `>&\-2` both write `-2` — while quoting anywhere *after* it changes
     // nothing: `>&-"vault/creds"` still passes `vault/creds` as an argument.
-    if !edge_is_bare_dash(word, source, Edge::First) {
-        return None;
+    //
+    // With no source to read, a value starting with `-` is recovered anyway:
+    // the write was recorded as well, so one reading is spurious and the
+    // operand — which can hide a denied path — is not missed.
+    let value = word.try_to_static_string();
+    match edge_is_bare_dash(word, source, Edge::First) {
+        Some(true) => {}
+        Some(false) => return None,
+        None if value.as_deref().is_some_and(|v| v.starts_with('-')) => {}
+        None => return None,
     }
     // The `-` is one source byte, so the operand starts one byte into the word.
     let position = word.span.start.0 + 1;
@@ -222,12 +265,13 @@ fn closed_descriptor_operand<'a>(
     // A static word's value starts with the same `-` its source does, so what
     // follows the dash is the operand. `>&-""` passes an empty argument, which
     // is an argument.
-    let literal = word
-        .try_to_static_string()
-        .map(|t| t.strip_prefix('-').unwrap_or(&t).to_string());
+    let literal = value.map(|t| t.strip_prefix('-').unwrap_or(&t).to_string());
     Some(RecoveredOperand {
         position,
-        text: &source[position..word.span.end.0],
+        // Which kind of word bash reads this as is decided from the spelling,
+        // so without the source it cannot be decided: an argument is the
+        // reading that keeps its position and its access.
+        text: source.and_then(|s| s.get(position..word.span.end.0)),
         literal,
     })
 }
@@ -237,10 +281,10 @@ struct RecoveredOperand<'a> {
     /// Where the operand starts in the source, which is its position among the
     /// command's words.
     position: usize,
-    /// The operand as written. What kind of word bash reads it as — an
-    /// argument, an assignment, the start of a comment — is decided from the
-    /// spelling, before any expansion, so the source is what decides it.
-    text: &'a str,
+    /// The operand as written, when the source it came from is known. What
+    /// kind of word bash reads it as — an argument, an assignment, the start of
+    /// a comment — is decided from the spelling, before any expansion.
+    text: Option<&'a str>,
     /// Its value, when the word resolves statically.
     literal: Option<String>,
 }
@@ -252,7 +296,7 @@ impl RecoveredOperand<'_> {
     /// a word starting with `#` is a comment. Verified: `p in >&-#foo bar`
     /// reports `argc=1 [in]`, so both `#foo` and `bar` are comment text.
     fn starts_a_comment(&self) -> bool {
-        self.text.starts_with('#')
+        self.text.is_some_and(|t| t.starts_with('#'))
     }
 
     /// Would bash read this operand as a variable assignment?
@@ -264,79 +308,142 @@ impl RecoveredOperand<'_> {
     /// with `FOO=1` in the environment, while `>&-1FOO=1 p x` is a
     /// `command not found` for `1FOO=1` — an invalid name is an ordinary word.
     fn is_assignment(&self) -> bool {
-        let name = self
-            .text
-            .split_once('=')
-            .map(|(before, _)| before.strip_suffix('+').unwrap_or(before));
-        let Some(name) = name else { return false };
-        let mut chars = name.chars();
-        chars
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        self.text.is_some_and(is_assignment_word)
     }
 }
 
-/// The arguments bash passes to the command, in source order.
+/// Would bash read this word as a variable assignment?
 ///
-/// Ordering matters because position is what gives an operand its meaning:
-/// `cp a b` reads `a` and writes `b`, so appending a recovered operand instead
-/// of splicing it would invert a read and a write. The splice exists only to
-/// work around thaum#14; see `closed_descriptor_operand`. Once that lands, this
-/// collapses back to mapping `cmd.arguments`.
-pub fn command_arg_literals(cmd: &Command, source: &str) -> Vec<Option<String>> {
+/// Only in the command prefix, which the caller decides. A word is an
+/// assignment when it starts with a name — optionally with an array subscript —
+/// followed by `=` or `+=`. The rule is about the spelling, not the value, so
+/// `$P` is a command word even if it expands to `FOO=1`. Verified:
+/// `>&-FOO=1 p x` and `>&-a[0]=1 p x` both run `p` with `x`, while
+/// `>&-1FOO=1 p x` is a `command not found` for `1FOO=1` — an invalid name is
+/// an ordinary word.
+fn is_assignment_word(text: &str) -> bool {
+    let Some((before, _)) = text.split_once('=') else {
+        return false;
+    };
+    let name = before.strip_suffix('+').unwrap_or(before);
+    // An array element assignment names an index: `a[0]=1`, `a[$i]=1`.
+    let name = match name.split_once('[') {
+        Some((name, subscript)) if subscript.ends_with(']') => name,
+        Some(_) => return false,
+        None => name,
+    };
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// What the command line says: the arguments bash passes, and where a comment
+/// begins if one does.
+pub struct CommandLine {
+    /// Argument literals in source order, arg0 first, with `None` for a word
+    /// that does not resolve statically.
+    pub arguments: Vec<Option<String>>,
+    /// Where a comment starts, if a recovered operand began one. A comment runs
+    /// to the end of the line, so the redirects after it are never performed.
+    pub comment_at: Option<usize>,
+}
+
+/// Read a command's words the way bash does, in source order.
+///
+/// Ordering matters because position is what gives a word its meaning: `cp a b`
+/// reads `a` and writes `b`, and the words before the command name are
+/// assignments while the ones after it are arguments. The parser sorted the
+/// words *it* saw, but `>&-word` hides one from it — so where that hidden word
+/// lands changes what every later word means, and the sorting has to be redone
+/// over all of them together.
+///
+/// The splice exists only to work around thaum#14; see
+/// `closed_descriptor_operand`. Once that lands, this collapses back to mapping
+/// `cmd.arguments`.
+pub fn command_line(cmd: &Command, source: Option<&str>) -> CommandLine {
     enum Word<'a> {
-        /// A word the parser already saw as an argument.
-        Parsed(Option<String>),
+        /// A word the parser saw as an argument. It is one by construction:
+        /// the parser only reaches arguments past the command name.
+        Argument(Option<String>),
+        /// A word the parser saw as an assignment, which it is only while no
+        /// command name has appeared. A recovered operand can supply that name
+        /// earlier, and then this is an ordinary argument — `>&-env FOO=1 rm x`
+        /// runs `env` with `FOO=1` as its first argument.
+        Assignment(Option<String>),
         /// A word recovered from a `>&-word` redirect, which the parser did not
-        /// see as a word at all, so bash's rules for what kind of word it is
-        /// have to be applied here.
+        /// see at all, so bash's rules for what kind of word it is have to be
+        /// applied here.
         Recovered(RecoveredOperand<'a>),
     }
 
-    let mut items: Vec<(usize, Word)> = cmd
+    impl Word<'_> {
+        /// Is this word part of the command prefix rather than the command?
+        fn is_prefix_assignment(&self) -> bool {
+            match self {
+                Word::Argument(_) => false,
+                Word::Assignment(_) => true,
+                Word::Recovered(operand) => operand.is_assignment(),
+            }
+        }
+
+        fn literal(&self) -> Option<String> {
+            match self {
+                Word::Argument(literal) | Word::Assignment(literal) => literal.clone(),
+                Word::Recovered(operand) => operand.literal.clone(),
+            }
+        }
+    }
+
+    let mut words: Vec<(usize, Word)> = cmd
         .arguments
         .iter()
-        .map(|a| (a.span().start.0, Word::Parsed(a.try_to_static_string())))
+        .map(|a| (a.span().start.0, Word::Argument(a.try_to_static_string())))
         .collect();
-    items.extend(
+    words.extend(cmd.assignments.iter().map(|a| {
+        // As an argument it is one word, `name=value`, however its value was
+        // quoted. An array literal — `name=(a b)` — is not reconstructed.
+        let literal = match &a.value {
+            AssignmentValue::Scalar(word) => word
+                .try_to_static_string()
+                .map(|value| format!("{}={}", a.name, value)),
+            _ => None,
+        };
+        (a.span.start.0, Word::Assignment(literal))
+    }));
+    words.extend(
         cmd.redirects
             .iter()
             .filter_map(|r| closed_descriptor_operand(r, source))
             .map(|operand| (operand.position, Word::Recovered(operand))),
     );
-    items.sort_by_key(|(position, _)| *position);
+    words.sort_by_key(|(position, _)| *position);
 
     // A recovered operand starting with `#` is a comment, and a comment runs to
-    // the end of the line: every word after it is comment text too.
-    if let Some(comment) = items
+    // the end of the line: every word after it is comment text, and so is every
+    // redirect.
+    let comment_at = words
         .iter()
-        .position(|(_, w)| matches!(w, Word::Recovered(o) if o.starts_a_comment()))
-    {
-        items.truncate(comment);
+        .find(|(_, w)| matches!(w, Word::Recovered(o) if o.starts_a_comment()))
+        .map(|(position, _)| *position);
+    if let Some(at) = comment_at {
+        words.retain(|(position, _)| *position < at);
     }
 
-    // Leading assignment-shaped operands are assignments rather than arguments,
-    // and the command name is the first word that is not one. Treating
-    // `>&-FOO=1 rm -rf zzz` as a command called `FOO=1` would leave every
-    // `Bash(rm ...)` rule looking at the wrong name. Words the parser saw are
-    // already sorted into assignments and arguments, so only a recovered
-    // operand can still be sitting in the prefix.
-    let command_word = items
-        .iter()
-        .position(|(_, w)| !matches!(w, Word::Recovered(o) if o.is_assignment()));
-    let items = match command_word {
-        Some(first) => &items[first..],
+    // The command name is the first word that is not an assignment; everything
+    // before it is the prefix, and everything after it is an argument whatever
+    // it looks like. Treating `>&-FOO=1 rm -rf zzz` as a command called `FOO=1`
+    // would leave every `Bash(rm ...)` rule looking at a name nothing matches.
+    let command_name = words.iter().position(|(_, w)| !w.is_prefix_assignment());
+    let arguments = match command_name {
+        Some(first) => words[first..].iter().map(|(_, w)| w.literal()).collect(),
         // Every word was an assignment: an assignment-only command, which runs
         // nothing but still performs its redirects.
-        None => &[],
+        None => Vec::new(),
     };
-
-    items
-        .iter()
-        .map(|(_, word)| match word {
-            Word::Parsed(literal) => literal.clone(),
-            Word::Recovered(operand) => operand.literal.clone(),
-        })
-        .collect()
+    CommandLine {
+        arguments,
+        comment_at,
+    }
 }

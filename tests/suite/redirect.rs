@@ -1117,3 +1117,131 @@ fn an_operand_starting_a_comment_ends_the_command() {
         "a commented-out path fired a deny",
     );
 }
+
+// Nested commands carry their own source ------------------------------------------------------------------------------
+//
+// thaum parses a substitution's body separately, so spans inside `$(...)`,
+// `` `...` `` and `<(...)` restart at zero. Reading the outer command's text at
+// those offsets lands in another command's bytes — a wrong answer rather than a
+// missing one, which is why the source is re-based when the walk descends.
+
+#[skuld::test]
+fn a_redirect_inside_a_substitution_is_classified_against_its_own_source() {
+    // The operand is a real read wherever it appears. Padding shifts the outer
+    // offsets so a stale source reads a different byte for every case.
+    for cmd in [
+        "echo $(cat >&-/tmp/vault/creds)",
+        "echo aaaaaaaaaaaaaaaaaaaa $(cat >&-/tmp/vault/creds)",
+        "echo \"$(cat >&-/tmp/vault/creds)\"",
+        "echo `cat >&-/tmp/vault/creds`",
+        "diff <(cat >&-/tmp/vault/creds) /tmp/b",
+        "echo $(echo $(cat >&-/tmp/vault/creds))",
+    ] {
+        assert!(
+            matches!(
+                check(
+                    cmd,
+                    &["Bash(echo *)", "Bash(cat *)", "Bash(diff *)"],
+                    &["Read(/tmp/vault/**)"]
+                )
+                .decision,
+                Decision::Deny(_),
+            ),
+            "a denied read hid inside a substitution: {cmd}",
+        );
+    }
+}
+
+#[skuld::test]
+fn a_substitution_does_not_fabricate_a_write_from_the_outer_source() {
+    // Reading the outer text at inner offsets also invents file accesses. The
+    // operand here is an argument, not a target, so nothing is written.
+    let result = check("echo aaaaaaaaaaaaaaaa $(cat >&-/tmp/in)", &[], &[]);
+    assert!(
+        !result.missing_rules.iter().any(|r| r.starts_with("Write(")),
+        "a stale source invented a write: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn an_unlocatable_substitution_body_still_misses_nothing() {
+    // `pre$(cmd)post` holds the substitution in part of a word, and locating
+    // the body there would mean re-deriving where each fragment started. The
+    // source is unknown instead, and an unknown source over-approximates: the
+    // operand is recovered even though the dash cannot be confirmed bare.
+    assert!(
+        matches!(
+            check(
+                "echo pre$(cat >&-/tmp/vault/creds)post",
+                &["Bash(echo *)", "Bash(cat *)"],
+                &["Read(/tmp/vault/**)"],
+            )
+            .decision,
+            Decision::Deny(_),
+        ),
+        "a denied read hid in a partly-substituted word",
+    );
+}
+
+// Words the parser sorted before it knew where the command name was ---------------------------------------------------
+
+#[skuld::test]
+fn an_assignment_after_a_recovered_command_name_is_an_argument() {
+    // Verified: `>&-env FOO=1 p x` runs `env` with `FOO=1` as an argument —
+    // env reports `p: No such file or directory`, so it consumed `FOO=1`
+    // itself. The parser sorted `FOO=1` into the assignments because it never
+    // saw `env`, and dropping it there shifts every later argument left.
+    let result = check(">&-env FOO=1 cat /tmp/in", &[], &[]);
+    assert_eq!(
+        result.missing_rules,
+        vec!["Bash(env FOO=1 cat /tmp/in)".to_string()],
+        "a word the parser sorted as an assignment went missing",
+    );
+}
+
+#[skuld::test]
+fn a_subscripted_name_is_still_an_assignment() {
+    // Verified: `>&-a[0]=1 p x` runs `p`, so `a[0]=1` is a prefix assignment
+    // and not the command name. `[0]` also makes the word a glob, so reading it
+    // as the command name produces a *dynamic* name — which a deny rule happens
+    // to catch anyway. The rule the command demands is what tells them apart.
+    // `rm` is file-only, so recognising it as the command name is what turns
+    // the demand into a path rule instead of one for a command name nobody can
+    // write.
+    let result = check(">&-a[0]=1 rm -rf /tmp/zzz", &[], &[]);
+    assert_eq!(
+        result.missing_rules,
+        vec![format!("Write({}/**)", canonical("/tmp/zzz"))],
+        "an array-element assignment was read as the command name",
+    );
+    assert!(matches!(
+        check(">&-a[0]=1 rm -rf /tmp/zzz", &[], &["Bash(rm *)"]).decision,
+        Decision::Deny(_),
+    ));
+}
+
+#[skuld::test]
+fn a_comment_ends_the_line_for_redirects_too() {
+    // Verified: `p in >&-#foo > evil` reports `argc=1 [in]` and creates no
+    // `evil`. A comment runs to the end of the line, so the redirects after it
+    // are never performed either.
+    let result = check("cat /tmp/in >&-#foo > /tmp/vault/creds", &[], &[]);
+    assert_eq!(
+        result.missing_rules,
+        vec![format!("Read({})", canonical("/tmp/in"))],
+        "a redirect after a comment was performed",
+    );
+    assert!(
+        !matches!(
+            check(
+                "cat /tmp/in >&-#foo > /tmp/vault/creds",
+                &["Bash(cat *)"],
+                &["Write(/tmp/vault/**)"],
+            )
+            .decision,
+            Decision::Deny(_),
+        ),
+        "a commented-out redirect fired a deny",
+    );
+}
