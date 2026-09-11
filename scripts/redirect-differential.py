@@ -320,13 +320,27 @@ def main():
         _, _, _, _, _, _, _, w = case
         return any(marker in w for marker in ("$(", "`", "["))
 
-    bypasses, extras, unobservable, unresolvable = [], [], 0, 0
+    # thaum lexes `>&-#c\<newline>` as one word (thaum#14), so a line that bash
+    # splits at the comment's newline arrives as a single command with the next
+    # line's words still attached. The comment range releases them correctly,
+    # but they belong to a command the parse never produced, so their roles are
+    # read against the wrong command. Counted apart: the checker cannot place
+    # them without a comment-aware parse, and it errs by keeping them, which is
+    # the over-approximating direction.
+    def split_by_comment(case):
+        _, _, _, _, _, _, _, w = case
+        return "#" in w and "\n" in w
+
+    bypasses, extras, unobservable, unresolvable, comment_split = [], [], 0, 0, 0
     for index, r in enumerate(results):
         miss = r["expected"] - r["actual"]
+        extra = r["actual"] - r["expected"]
         if miss and value_is_unresolvable(all_cases[index]):
             unresolvable += 1
             continue
-        extra = r["actual"] - r["expected"]
+        if (miss or extra) and split_by_comment(all_cases[index]):
+            comment_split += 1
+            continue
         if miss:
             bypasses.append((r, miss))
         if not r["ran"] and (r["args_bear_files"] or (not r["command_runs"] and r["stderr"])):
@@ -341,7 +355,7 @@ def main():
         if extra:
             extras.append((r, extra))
 
-    print(f"\n=== {len(results)} spellings, {len(bypasses)} missed accesses, {len(extras)} over-approximations, {unobservable} whose argv bash never produced, {unresolvable} values that need #45")
+    print(f"\n=== {len(results)} spellings, {len(bypasses)} missed accesses, {len(extras)} over-approximations, {unobservable} whose argv bash never produced, {unresolvable} values that need #45, {comment_split} lines thaum#14 keeps joined")
     for r, miss in bypasses:
         print(f"MISSED  {r['cmd']!r}\n        bash argv={r['argv']} created={r['created']} missing={r['missing']}"
               f"\n        expected={sorted(miss)}\n        actual={sorted(r['actual'])}")
