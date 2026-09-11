@@ -1608,3 +1608,85 @@ fn a_comment_silences_an_assignment_value_on_the_same_line() {
         "a commented-out assignment value was walked",
     );
 }
+
+#[skuld::test]
+fn a_continuation_does_not_drag_the_next_line_into_a_comment() {
+    // A node's span can start on a line continuation, which belongs to neither
+    // line. Verified: this script creates `vault/pwned` — the comment ends at
+    // the newline and the redirect is on the line after it, so comparing the
+    // span's raw start against the comment's range silenced a write bash
+    // performs.
+    let cmd = "cat /tmp/in >&-#foo\\\n> /tmp/vault/pwned";
+    let result = check(cmd, &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({})", canonical("/tmp/vault/pwned"))),
+        "a continuation dragged the next line into the comment: {:?}",
+        result.missing_rules,
+    );
+    assert!(
+        matches!(
+            check(cmd, &["Bash(cat *)"], &["Write(/tmp/vault/**)"]).decision,
+            Decision::Deny(_),
+        ),
+        "a deny rule missed a write on the line after a continued comment",
+    );
+}
+
+#[skuld::test]
+fn the_operand_that_starts_a_comment_is_not_walked() {
+    // `cat in >&-#$(rm -rf x)` is a comment from the `#`, so the substitution
+    // inside it never runs. Walking it anyway demands a write — and under a
+    // directory-wide deny, blocks a command that does nothing.
+    let result = check("cat /tmp/in >&-#$(rm -rf /tmp/zzz)", &[], &[]);
+    assert_eq!(
+        result.missing_rules,
+        vec![format!("Read({})", canonical("/tmp/in"))],
+        "a substitution inside a comment was walked",
+    );
+    assert!(
+        !matches!(
+            check(
+                "cat /tmp/in >&-#$(rm -rf /tmp/zzz)",
+                &["Bash(cat *)"],
+                &["Write(/tmp/**)"],
+            )
+            .decision,
+            Decision::Deny(_),
+        ),
+        "a commented-out substitution fired a deny",
+    );
+    // The control: uncommented, the same substitution must still be walked.
+    assert!(
+        matches!(
+            check("cat /tmp/in >&-$(rm -rf /tmp/zzz)", &[], &["Bash(rm *)"]).decision,
+            Decision::Deny(_),
+        ),
+        "the control stopped working: an uncommented operand substitution is unwalked",
+    );
+}
+
+#[skuld::test]
+fn a_word_that_cannot_begin_with_a_bare_dash_is_ruled_out() {
+    // With no source to read, the fragment kinds still settle it: only a
+    // literal can hold a bare dash, so a quoted, parameter or substitution
+    // fragment at the front means this is not the close form. `$(:)$(...)`
+    // makes the body unlocatable, which is what removes the source.
+    for (cmd, recovers) in [
+        ("echo $(:)$(cat >&-/tmp/vault/creds)", true),
+        ("echo $(:)$(cat >&\"-\"/tmp/vault/creds)", false),
+        ("echo $(:)$(cat >&$X/tmp/vault/creds)", false),
+    ] {
+        let denied = matches!(
+            check(
+                cmd,
+                &["Bash(echo *)", "Bash(cat *)"],
+                &["Read(/tmp/vault/**)"]
+            )
+            .decision,
+            Decision::Deny(_),
+        );
+        assert_eq!(denied, recovers, "{cmd}");
+    }
+}

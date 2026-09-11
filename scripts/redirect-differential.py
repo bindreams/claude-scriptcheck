@@ -86,8 +86,9 @@ def words():
         # A line continuation: bash removes it before tokenising, so a word can
         # begin, and a name can be split, across one.
         "\\\n-f", "-\\\nf", "-F\\\nOO=1", "\\\n-FOO=1", "-f\\\n-",
-        # A comment: ends the line, and what follows it is text.
-        "-#f", "-#f zzz", '-"#"f', "-\\#f",
+        # A comment: ends the line, and what follows it is text — including a
+        # substitution in the same word, and a continuation at its end.
+        "-#f", "-#f zzz", '-"#"f', "-\\#f", "-#$(:)", "-#f\\\n",
         # A substitution in the operand, which bash runs.
         "-$(:)", "-`:`", "-$(:)f", "$(:)", "-x$(:)",
         # An assignment, which is a prefix rather than a command name.
@@ -134,6 +135,9 @@ COMMANDS = [
     ("grep", roles_grep, "grep in.txt {redir} zzz", True, True),
     ("true", roles_none, "true {redir}", False, True),
     ("eval", roles_none, "eval x {redir}", False, True),
+    # A second line, so a comment's right-hand bound is exercised: what follows
+    # the newline is ordinary code that bash runs.
+    ("twoline", roles_cat, "cat in.txt {redir}\ncat in.txt", True, True),
     ("", roles_none, "{redir}", False, False),
     ("assign", roles_none, "FOO=x {redir}", False, False),
 ]

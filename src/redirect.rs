@@ -26,7 +26,9 @@ pub fn accesses(
 ) -> Vec<FileAccess> {
     redirects
         .iter()
-        .filter(|r| comment.is_none_or(|range| !range.contains(&r.span.start.0)))
+        .filter(|r| {
+            comment.is_none_or(|range| !range.contains(&past_continuations(source, r.span.start.0)))
+        })
         .flat_map(|r| accesses_for_redirect(r, source, cwd))
         .collect()
 }
@@ -227,6 +229,31 @@ fn begins_with_bare_dash(word: &Word, source: Option<&str>) -> Option<bool> {
     Some(source.as_bytes().get(start) == Some(&b'-'))
 }
 
+/// Where the text at `index` really begins.
+///
+/// A node's span can start on a line continuation, since `\` followed by a
+/// newline is removed before tokenising and belongs to neither side. That
+/// matters when the offset is compared against a comment's range: in
+///
+/// ```text
+/// cat in >&-#foo\
+/// > vault/pwned
+/// ```
+///
+/// the second redirect's span starts on the `\`, which is inside the comment,
+/// while the redirect itself is on the next line and bash performs it.
+pub fn past_continuations(source: Option<&str>, index: usize) -> usize {
+    let Some(source) = source else {
+        return index;
+    };
+    let bytes = source.as_bytes();
+    let mut index = index;
+    while bytes.get(index) == Some(&b'\\') && bytes.get(index + 1) == Some(&b'\n') {
+        index += 2;
+    }
+    index
+}
+
 /// Where a word's first character sits in the source.
 ///
 /// Not always its span's start. bash removes `\` followed by a newline before
@@ -255,12 +282,7 @@ fn first_character(word: &Word, source: &str) -> Option<usize> {
     if word.span.end.0 <= word.span.start.0 {
         return None;
     }
-    let bytes = source.as_bytes();
-    let mut start = word.span.start.0;
-    while bytes.get(start) == Some(&b'\\') && bytes.get(start + 1) == Some(&b'\n') {
-        start += 2;
-    }
-    Some(start)
+    Some(past_continuations(Some(source), word.span.start.0))
 }
 
 /// The argument hiding inside a `>&-word` / `<&-word` redirect: where it starts
@@ -451,13 +473,24 @@ fn is_assignment_word(text: &str) -> bool {
 /// walked like any other — `cat >&-$(rm -rf x)` runs the `rm`. The whole word
 /// is returned rather than the operand alone, because the substitution inside
 /// it is one AST node either way.
-pub fn recovered_operand_words<'c>(cmd: &'c Command, source: Option<&str>) -> Vec<&'c Word> {
+pub fn recovered_operand_words<'c>(
+    cmd: &'c Command,
+    source: Option<&str>,
+    comment: Option<&Range<usize>>,
+) -> Vec<&'c Word> {
     cmd.redirects
         .iter()
-        .filter(|r| closed_descriptor_operand(r, source).is_some())
-        .filter_map(|r| match &r.kind {
-            RedirectKind::DupInput(w) | RedirectKind::DupOutput(w) => Some(w),
-            _ => None,
+        .filter_map(|r| {
+            let operand = closed_descriptor_operand(r, source)?;
+            // The operand that *starts* a comment is comment text, and so is
+            // everything after it: `cat in >&-#$(rm -rf x)` runs no `rm`.
+            if comment.is_some_and(|range| operand.position >= range.start) {
+                return None;
+            }
+            match &r.kind {
+                RedirectKind::DupInput(w) | RedirectKind::DupOutput(w) => Some(w),
+                _ => None,
+            }
         })
         .collect()
 }

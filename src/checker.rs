@@ -432,7 +432,7 @@ impl<'a> PermissionChecker<'a> {
         }
         // The operand bash lexed out of a `>&-word` is an argument, and an
         // argument's interior is walked: `cat >&-$(rm -rf x)` runs the `rm`.
-        for word in redirect::recovered_operand_words(cmd, self.source) {
+        for word in redirect::recovered_operand_words(cmd, self.source, comment.as_ref()) {
             self.visit_word(word);
             if self.denied.is_some() {
                 return;
@@ -808,6 +808,7 @@ impl<'a> PermissionChecker<'a> {
 
     /// Does a comment cover this offset?
     fn is_commented_out(&self, position: usize) -> bool {
+        let position = redirect::past_continuations(self.source, position);
         self.comment
             .as_ref()
             .is_some_and(|range| range.contains(&position))
