@@ -19,7 +19,7 @@ fn check_command(command: &str, cwd: &str) -> CheckResult {
     let loaded = settings::load_settings_from_contents(None, &[TEST_SETTINGS_JSON]);
     let parsed_perms = permission::parse_rules(&loaded.permissions, cwd, cwd);
     let program = thaum::parse_with(command, thaum::Dialect::Bash).unwrap();
-    checker::check_program(&program, &parsed_perms, cwd)
+    checker::check_program(&program, command, &parsed_perms, cwd)
 }
 
 // ── Logic tests (via library API) ───────────────────────────────────────────
@@ -159,6 +159,26 @@ fn apply_test_isolation(cmd: &mut Command) -> IsolatedLog {
     }
 }
 
+/// Write the hook payload to a child's stdin, tolerating a closed pipe.
+///
+/// The binary exits before reading stdin whenever it rejects the invocation
+/// early — a missing `--agent`, malformed JSON — and its stdin closes with it.
+/// Whether the write lands is then a race against process exit, which `EPIPE`
+/// loses. The payload is small enough to fit the pipe buffer nearly always,
+/// which is why this surfaced as an intermittent failure rather than a
+/// consistent one. Nothing here depends on the child having read the payload:
+/// every caller asserts on the exit status and captured output.
+fn write_stdin(child: &mut std::process::Child, bytes: &[u8]) {
+    let mut stdin = child.stdin.take().expect("stdin was not piped");
+    if let Err(e) = stdin.write_all(bytes) {
+        assert_eq!(
+            e.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "unexpected error writing to child stdin: {e}",
+        );
+    }
+}
+
 fn run_binary(stdin_bytes: &[u8]) -> std::process::Output {
     run_binary_for_agent("claude", stdin_bytes)
 }
@@ -175,7 +195,7 @@ fn run_binary_for_agent(agent: &str, stdin_bytes: &[u8]) -> std::process::Output
         .spawn()
         .expect("Failed to start binary");
 
-    child.stdin.take().unwrap().write_all(stdin_bytes).unwrap();
+    write_stdin(&mut child, stdin_bytes);
 
     child.wait_with_output().unwrap()
 }
@@ -199,7 +219,7 @@ fn run_binary_for_agent_with_env(
         .spawn()
         .expect("Failed to start binary");
 
-    child.stdin.take().unwrap().write_all(stdin_bytes).unwrap();
+    write_stdin(&mut child, stdin_bytes);
 
     child.wait_with_output().unwrap()
 }
@@ -500,11 +520,7 @@ fn hook_mode_requires_explicit_agent() {
         .stderr(Stdio::piped())
         .spawn()
         .and_then(|mut child| {
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(&hook_json("Bash", "ls"))?;
+            write_stdin(&mut child, &hook_json("Bash", "ls"));
             child.wait_with_output()
         })
         .expect("Failed to run binary");
@@ -968,7 +984,7 @@ fn run_binary_with_env(stdin_bytes: &[u8], env: &[(&str, &str)]) -> std::process
         .spawn()
         .expect("Failed to start binary");
 
-    child.stdin.take().unwrap().write_all(stdin_bytes).unwrap();
+    write_stdin(&mut child, stdin_bytes);
     child.wait_with_output().unwrap()
 }
 
@@ -1430,7 +1446,7 @@ fn auto_preserves_missing_rules_after_transform(#[fixture(temp_dir)] dir: &std::
         .stderr(Stdio::piped())
         .spawn()
         .and_then(|mut child| {
-            child.stdin.take().unwrap().write_all(&input)?;
+            write_stdin(&mut child, &input);
             child.wait_with_output()
         })
         .expect("binary run");
@@ -1760,7 +1776,7 @@ fn dont_ask_preserves_missing_rules_in_log(#[fixture(temp_dir)] dir: &std::path:
         .stderr(Stdio::piped())
         .spawn()
         .and_then(|mut child| {
-            child.stdin.take().unwrap().write_all(&input)?;
+            write_stdin(&mut child, &input);
             child.wait_with_output()
         })
         .expect("binary run");
@@ -2134,15 +2150,15 @@ fn cli_check_rejects_invalid_mode() {
 /// The prefix has to go for two reasons: prepended to Claude's `//`
 /// absolute-path escape it would form `///?/…`, and embedded in a shell command
 /// it is not a path any command could open.
-struct VaultProject {
-    root: String,
+pub(crate) struct VaultProject {
+    pub(crate) root: String,
     /// A directory outside the workspace, for the tests that need a path the
     /// project's rules do not cover. It lives inside the test's own fixture, so
     /// no test depends on or writes to shared machine state such as `/tmp`.
-    outside: String,
+    pub(crate) outside: String,
 }
 
-fn vault_paths(dir: &std::path::Path) -> VaultProject {
+pub(crate) fn vault_paths(dir: &std::path::Path) -> VaultProject {
     let canonical = std::fs::canonicalize(dir).unwrap();
     let slashed = canonical.to_string_lossy().replace('\\', "/");
     let base = slashed.strip_prefix("//?/").unwrap_or(&slashed);
@@ -2155,7 +2171,7 @@ fn vault_paths(dir: &std::path::Path) -> VaultProject {
 }
 
 /// Populate the project with `vault/creds` and a settings file.
-fn write_vault_project(dir: &std::path::Path, permissions: &str) -> VaultProject {
+pub(crate) fn write_vault_project(dir: &std::path::Path, permissions: &str) -> VaultProject {
     let paths = vault_paths(dir);
     let canonical = std::path::PathBuf::from(&paths.root);
     std::fs::create_dir_all(&paths.outside).unwrap();
@@ -2170,7 +2186,7 @@ fn write_vault_project(dir: &std::path::Path, permissions: &str) -> VaultProject
     paths
 }
 
-fn run_bash_hook(command: &str, project_root: &str) -> String {
+pub(crate) fn run_bash_hook(command: &str, project_root: &str) -> String {
     let input = hook_json_with_mode(
         "Bash",
         serde_json::json!({ "command": command }),

@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use thaum::ast::*;
 use thaum::visit::Visit;
 
@@ -8,6 +10,7 @@ use crate::filter::{Arg0Pattern, BashFilter, BashFilterItem, Filter, PathFilter}
 use crate::permission::ParsedPermissions;
 use crate::permission_mode::PermissionMode;
 use crate::python_ast::{self, PythonAnalysis};
+use crate::redirect;
 
 /// Final decision for a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,10 +99,17 @@ pub fn apply_permission_mode(mut result: CheckResult, mode: Option<PermissionMod
 }
 
 /// Top-level entry point: check a parsed program against permission rules.
-pub fn check_program(program: &Program, perms: &ParsedPermissions, cwd: &str) -> CheckResult {
+pub fn check_program(
+    program: &Program,
+    source: &str,
+    perms: &ParsedPermissions,
+    cwd: &str,
+) -> CheckResult {
     let mut checker = PermissionChecker {
         perms,
         cwd,
+        comment: None,
+        source: Some(source),
         unmatched: Vec::new(),
         notes: Vec::new(),
         denied: None,
@@ -120,6 +130,9 @@ pub fn check_file_accesses(
     let mut checker = PermissionChecker {
         perms,
         cwd,
+        comment: None,
+        // No program, so no redirect can need its source.
+        source: None,
         unmatched: Vec::new(),
         notes: Vec::new(),
         denied: None,
@@ -138,6 +151,28 @@ pub fn check_file_accesses(
 struct PermissionChecker<'a> {
     perms: &'a ParsedPermissions,
     cwd: &'a str,
+    /// The half-open range a comment silences in the text currently being
+    /// walked, if one does.
+    ///
+    /// A comment runs to the end of the *line* — not to the end of the command
+    /// that revealed it, and not to the end of the program. `cat x >&-#foo |
+    /// rm -rf zzz` runs no `rm`, but the command on the next line runs
+    /// normally, so the range ends at the newline. Scoped like `source`,
+    /// because a comment inside `$(...)` ends that line, not the outer one.
+    ///
+    /// Only ever set when there is a source: a comment is recognised from the
+    /// spelling of a recovered operand, which is unavailable without one.
+    comment: Option<Range<usize>>,
+    /// The text the AST currently being walked was parsed from, or `None`
+    /// where it is not available.
+    ///
+    /// Redirect classification turns on how a character was *written* — `-`,
+    /// `\-` and `"-"` all parse to the same literal — so the source has to
+    /// travel with the AST. It is not one string for the whole walk: thaum
+    /// parses a command substitution's body separately, so spans inside
+    /// `$(...)`, `` `...` `` and `<(...)` restart at zero and this is re-based
+    /// with them. See `crate::redirect`.
+    source: Option<&'a str>,
     unmatched: Vec<String>,
     notes: Vec<String>,
     denied: Option<String>,
@@ -152,40 +187,66 @@ struct PermissionChecker<'a> {
 
 impl<'ast> Visit<'ast> for PermissionChecker<'_> {
     fn visit_command(&mut self, cmd: &'ast Command) {
+        if self.denied.is_some() || self.is_commented_out(cmd.span.start.0) {
+            return;
+        }
+        // `check_command` first: it is what discovers a comment in this
+        // command's own words, and the assignments below can sit inside it —
+        // `>&-#foo V=$(rm -rf x)` runs nothing at all.
+        self.check_command(cmd);
         if self.denied.is_some() {
             return;
         }
-        // Assignment values are expanded before the command runs, so they are
-        // walked first. `walk_assignment` routes both `Scalar` and array
-        // values into `visit_word`, which is why nothing here enumerates the
-        // two shapes. This also covers assignment-only commands (`X=$(...)`),
-        // which `check_command` returns from early.
+        // Assignment values are expanded before the command runs.
+        // `walk_assignment` routes both `Scalar` and array values into
+        // `visit_word`, which is why nothing here enumerates the two shapes.
+        // This also covers assignment-only commands (`X=$(...)`), which
+        // `check_command` returns from early.
         for assignment in &cmd.assignments {
+            if self.is_commented_out(assignment.span.start.0) {
+                continue;
+            }
             self.visit_assignment(assignment);
         }
         if self.denied.is_some() {
             return;
         }
-        self.check_command(cmd);
         // Walk arguments for embedded process substitutions / command substitutions.
         // Don't call walk_command — we already handled redirects inside check_command,
         // and their words are #65.
         for arg in &cmd.arguments {
+            if self.is_commented_out(arg.span().start.0) {
+                continue;
+            }
             self.visit_argument(arg);
         }
     }
 
     fn visit_redirect(&mut self, redirect: &'ast Redirect) {
+        if self.is_commented_out(redirect.span.start.0) {
+            return;
+        }
+        // A compound command's redirects belong to no command, so nothing else
+        // looks for a comment among them: `{ ...; } >&-#c > log` creates no
+        // `log`, and the redirects are walked in source order, so recording it
+        // here silences the ones that follow.
+        if let Some(range) = redirect::comment_started_by(redirect, self.source) {
+            self.comment = Some(range);
+            return;
+        }
         // Handles redirects for compound / function-def contexts (e.g.
         // `{ ...; } > /log`). Simple-command redirects are handled inside
-        // `check_command` via `extract_redirect_accesses`. Compound redirects
+        // `check_command` via `redirect::accesses`. Compound redirects
         // are not bound to a single command, so no Bash allow rule can
         // suppress them.
         if self.denied.is_some() {
             return;
         }
-        if let Some(access) = extract_redirect_access(redirect, self.cwd) {
+        for access in redirect::accesses_for_redirect(redirect, self.source, self.cwd) {
             self.check_file_access(&access, false);
+            if self.denied.is_some() {
+                return;
+            }
         }
     }
 
@@ -195,9 +256,11 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
         }
         match arg {
             Argument::Atom(Atom::BashProcessSubstitution { body, .. }) => {
-                for stmt in body {
-                    self.visit_statement(stmt);
-                }
+                let span = arg.span();
+                let source = self
+                    .slice(span.start.0, span.end.0)
+                    .and_then(process_substitution_body);
+                self.visit_nested(body, source);
             }
             Argument::Word(w) => {
                 self.visit_word(w);
@@ -219,18 +282,98 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
     /// intercepts them before `walk_redirect` can deliver them, and closing
     /// that is issue #65.
     fn visit_word(&mut self, word: &'ast Word) {
-        if self.denied.is_some() {
+        if self.denied.is_some() || self.is_commented_out(word.span.start.0) {
             return;
         }
+        // The word's own source, so a substitution inside it can be walked
+        // against the text it was parsed from rather than the enclosing
+        // command's. See `visit_nested`.
+        // Resolved once, for the word as a whole: a substitution's body is
+        // locatable only when it is the entire word, so every fragment below
+        // shares one answer.
+        let body = sole_substitution_body(word, self.slice(word.span.start.0, word.span.end.0));
         for fragment in &word.parts {
-            self.check_fragment_command_subs(fragment);
+            self.check_fragment_command_subs(fragment, body);
         }
     }
 }
 
+/// The text a substitution was parsed from, when the word is nothing but that
+/// substitution.
+///
+/// `$(cmd)`, `` `cmd` `` and their quoted form `"$(cmd)"` wrap the body in a
+/// fixed prefix and suffix, so the body is the slice between them — and the
+/// spans thaum produced inside the body index exactly that slice.
+///
+/// The word has to be checked structurally, not by looking at its text.
+/// `$(a)$(b)` also starts with `$(` and ends with `)`, and stripping those
+/// yields `a)$(b` — a source that is wrong rather than absent, which is the one
+/// outcome worse than not knowing. So the body is returned only for a word
+/// whose entire content is the one substitution; `pre$(cmd)post` and
+/// `$(a)$(b)` get `None`, and `None` makes the classifier over-approximate.
+///
+/// Locating a substitution inside a word that holds anything else means
+/// re-deriving where each fragment started, which the parse dropped. That is
+/// the second half of thaum#50.
+fn sole_substitution_body<'a>(word: &Word, word_source: Option<&'a str>) -> Option<&'a str> {
+    // `"$(cmd)"`: one quoted fragment wrapping one substitution.
+    let parts = match word.parts.as_slice() {
+        [Fragment::DoubleQuoted(inner)] => inner.as_slice(),
+        other => other,
+    };
+    if !matches!(parts, [Fragment::CommandSubstitution(_)]) {
+        return None;
+    }
+    // An assignment's value word spans the whole `name=value`, so the name
+    // comes off first — before the quotes, since `v="$(cmd)"` wears both.
+    let source = strip_assignment_name(word_source?);
+    let unquoted = source
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(source);
+    // `$(cmd)` only. A backtick substitution's body is *not* the bytes between
+    // the backticks: bash resolves `\$`, `` \` `` and `\\` inside it before
+    // parsing, so the text that was parsed is shorter than the slice and every
+    // span inside it is shifted. Slicing anyway reads the wrong bytes, which is
+    // how `` `cat \$\$\$\$- >&vault/creds` `` came out as a read of
+    // `vault/creds` when bash writes it. Unknown is the honest answer.
+    unquoted
+        .strip_prefix("$(")
+        .and_then(|body| body.strip_suffix(')'))
+}
+
+/// `name=` / `name+=` removed from the front, if one is there.
+fn strip_assignment_name(text: &str) -> &str {
+    let Some((before, after)) = text.split_once('=') else {
+        return text;
+    };
+    let name = before.strip_suffix('+').unwrap_or(before);
+    let mut chars = name.chars();
+    let valid = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if valid {
+        after
+    } else {
+        text
+    }
+}
+
+/// The text a process substitution was parsed from.
+///
+/// `<(cmd)` and `>(cmd)` are a whole argument rather than a fragment of a word,
+/// so there is no question of what else the word holds.
+fn process_substitution_body(source: &str) -> Option<&str> {
+    source
+        .strip_prefix("<(")
+        .or_else(|| source.strip_prefix(">("))
+        .and_then(|body| body.strip_suffix(')'))
+}
+
 // ─── Domain logic ────────────────────────────────────────────────────────────
 
-impl PermissionChecker<'_> {
+impl<'a> PermissionChecker<'a> {
     fn finalize(mut self) -> CheckResult {
         self.unmatched.sort();
         self.unmatched.dedup();
@@ -278,17 +421,46 @@ impl PermissionChecker<'_> {
     }
 
     fn check_command(&mut self, cmd: &Command) {
-        // Assignment-only command (no command name)
-        if cmd.arguments.is_empty() {
-            return;
+        // Argument literals, including any operand bash would have taken out of
+        // a `>&-word` redirect. See `redirect::command_arg_literals`.
+        //
+        // This runs before the no-arguments check because the operand can *be*
+        // the command name: `>&-danger` has no arguments of its own, and bash
+        // closes stdout and runs `danger`.
+        let redirect::CommandLine {
+            arguments: arg_literals,
+            comment,
+        } = redirect::command_line(cmd, self.source);
+        // A comment runs to the end of the line, so it silences what follows in
+        // this command *and* every later one — `cat x >&-#foo | rm -rf zzz`
+        // runs no `rm`, and demanding a write for it is a deny no rule lifts.
+        if let Some(range) = comment.clone() {
+            self.comment = Some(range);
+        }
+        // The operand bash lexed out of a `>&-word` is an argument, and an
+        // argument's interior is walked: `cat >&-$(rm -rf x)` runs the `rm`.
+        for word in redirect::recovered_operand_words(cmd, self.source, comment.as_ref()) {
+            self.visit_word(word);
+            if self.denied.is_some() {
+                return;
+            }
         }
 
-        // Extract argument literals
-        let arg_literals: Vec<Option<String>> = cmd
-            .arguments
-            .iter()
-            .map(|a| a.try_to_static_string())
-            .collect();
+        // The shell performs a command's redirections whatever shape the
+        // command has, so these are derived once, up here, and checked on every
+        // path out of this function — including the ones that return before any
+        // argument is looked at. Deriving them further down is what let each
+        // new short-circuit carry its redirects past the file rules (#53).
+        let redirect_accesses =
+            redirect::accesses(&cmd.redirects, self.source, self.cwd, comment.as_ref());
+
+        // No command name — an assignment-only command (`FOO=x > log`) or a
+        // null one (`> log`). `bash_allowed` is false because no `Bash(...)`
+        // rule can name a command that has no name.
+        if arg_literals.is_empty() {
+            self.check_redirect_accesses(&redirect_accesses, false);
+            return;
+        }
 
         // Get command name. Two forms are kept:
         //   - `raw_arg0`: the command as written (e.g. `./tools/rg.cmd`). Used
@@ -317,14 +489,7 @@ impl PermissionChecker<'_> {
                 if !bash_allowed {
                     self.unmatched.push("Bash(<dynamic command>)".to_string());
                 }
-                for redirect in &cmd.redirects {
-                    if let Some(access) = extract_redirect_access(redirect, self.cwd) {
-                        self.check_file_access(&access, bash_allowed);
-                        if self.denied.is_some() {
-                            return;
-                        }
-                    }
-                }
+                self.check_redirect_accesses(&redirect_accesses, bash_allowed);
                 return;
             }
         };
@@ -345,16 +510,16 @@ impl PermissionChecker<'_> {
         }
 
         // eval — always ask (unless a Bash allow rule explicitly covers it).
+        // Its redirects are still checked: `eval x > vault/pwned` writes the
+        // file whether or not the code being evaluated can be analyzed.
         if cmd_name == "eval" {
             if !bash_allowed {
                 self.unmatched
                     .push("Bash(eval ...) -- cannot statically analyze eval".to_string());
             }
+            self.check_redirect_accesses(&redirect_accesses, bash_allowed);
             return;
         }
-
-        // Extract file accesses from redirects
-        let redirect_accesses = extract_redirect_accesses(&cmd.redirects, self.cwd);
 
         // Extract file accesses from well-known command semantics (clap-based parsers)
         let cmd_parse_result =
@@ -445,9 +610,12 @@ impl PermissionChecker<'_> {
             // it is not file-only, exactly as `find -exec` is not. The list is
             // of inert names rather than dangerous ones because no enumeration
             // of dangerous names terminates; see `env_prefix`.
+            // An assignment the comment covers was never set, so it cannot
+            // make anything non-file-only: `ls >&-#c FOO=1` runs plain `ls`.
             let unmodelled_env: Vec<&str> = cmd
                 .assignments
                 .iter()
+                .filter(|a| !self.is_commented_out(a.span.start.0))
                 .map(|a| a.name.as_str())
                 .filter(|name| !env_prefix::is_inert(name))
                 .collect();
@@ -509,6 +677,16 @@ impl PermissionChecker<'_> {
                         unmodelled_env.join(", "),
                     ));
                 }
+            }
+        }
+    }
+
+    /// Check a command's redirect-derived accesses, stopping at the first deny.
+    fn check_redirect_accesses(&mut self, accesses: &[FileAccess], bash_allowed: bool) {
+        for access in accesses {
+            self.check_file_access(access, bash_allowed);
+            if self.denied.is_some() {
+                return;
             }
         }
     }
@@ -638,6 +816,37 @@ impl PermissionChecker<'_> {
         (asked, allowed)
     }
 
+    /// Does a comment cover this offset?
+    fn is_commented_out(&self, position: usize) -> bool {
+        let position = redirect::past_continuations(self.source, position);
+        self.comment
+            .as_ref()
+            .is_some_and(|range| range.contains(&position))
+    }
+
+    /// `source[start..end]`, when there is a source and the range is valid.
+    fn slice(&self, start: usize, end: usize) -> Option<&'a str> {
+        self.source.and_then(|source| source.get(start..end))
+    }
+
+    /// Walk a nested command with the source it was parsed from.
+    ///
+    /// thaum parses a substitution's body separately, so the spans inside it
+    /// restart at zero. Walking those with the outer command's text would read
+    /// another command's bytes, so the source is re-based here — and set to
+    /// `None` where the body cannot be located, which the redirect classifier
+    /// answers by over-approximating rather than by guessing.
+    fn visit_nested(&mut self, stmts: &[Statement], body: Option<&'a str>) {
+        let outer = (self.source, self.comment.take());
+        self.source = body;
+        // A comment inside the substitution ends the substitution's line, and
+        // one outside it never reached here.
+        for stmt in stmts {
+            self.visit_statement(stmt);
+        }
+        (self.source, self.comment) = outer;
+    }
+
     /// The funnel's second storey: descend a fragment into any nested
     /// substitution it carries.
     ///
@@ -648,26 +857,24 @@ impl PermissionChecker<'_> {
     /// Some variants are leaves in thaum's grammar and some are leaves only
     /// because thaum does not parse their interior; the difference matters and
     /// is noted per arm.
-    fn check_fragment_command_subs(&mut self, fragment: &Fragment) {
+    fn check_fragment_command_subs(&mut self, fragment: &Fragment, body: Option<&'a str>) {
         if self.denied.is_some() {
             return;
         }
         match fragment {
             Fragment::CommandSubstitution(stmts) => {
-                for stmt in stmts {
-                    self.visit_statement(stmt);
-                }
+                self.visit_nested(stmts, body);
             }
             // Carriers of further fragments — recurse.
             Fragment::DoubleQuoted(inner) | Fragment::BashLocaleQuoted(inner) => {
                 for f in inner {
-                    self.check_fragment_command_subs(f);
+                    self.check_fragment_command_subs(f, body);
                 }
             }
             Fragment::BashBraceExpansion(BraceExpansionKind::List(alternatives)) => {
                 for alternative in alternatives {
                     for f in alternative {
-                        self.check_fragment_command_subs(f);
+                        self.check_fragment_command_subs(f, body);
                     }
                 }
             }
@@ -682,7 +889,7 @@ impl PermissionChecker<'_> {
                 ..
             }) => {
                 for f in &word.parts {
-                    self.check_fragment_command_subs(f);
+                    self.check_fragment_command_subs(f, body);
                 }
             }
             // True leaves: no nested fragments in the grammar.
@@ -743,36 +950,6 @@ fn rule_suggestion(kind: AccessKind, scope: &AccessScope) -> String {
         );
     }
     format!("{kind_name}({})", scope.display())
-}
-
-// ─── Redirect file access extraction ─────────────────────────────────────────
-
-fn extract_redirect_access(redirect: &Redirect, cwd: &str) -> Option<FileAccess> {
-    let (word, kind) = match &redirect.kind {
-        RedirectKind::Input(w) => (Some(w), AccessKind::Read),
-        RedirectKind::Output(w) | RedirectKind::Clobber(w) => (Some(w), AccessKind::Write),
-        RedirectKind::Append(w) => (Some(w), AccessKind::Write),
-        RedirectKind::ReadWrite(w) => (Some(w), AccessKind::Write),
-        RedirectKind::BashOutputAll(w) | RedirectKind::BashAppendAll(w) => {
-            (Some(w), AccessKind::Write)
-        }
-        RedirectKind::HereDoc { .. } | RedirectKind::BashHereString(_) => return None,
-        RedirectKind::DupInput(_) | RedirectKind::DupOutput(_) => return None,
-    };
-
-    let word = word?;
-    let path = word.try_to_static_string()?;
-    Some(FileAccess::exact(
-        file_access::resolve_path(&path, cwd),
-        kind,
-    ))
-}
-
-fn extract_redirect_accesses(redirects: &[Redirect], cwd: &str) -> Vec<FileAccess> {
-    redirects
-        .iter()
-        .filter_map(|r| extract_redirect_access(r, cwd))
-        .collect()
 }
 
 #[cfg(test)]
@@ -985,7 +1162,10 @@ mod fragment_descent_tests {
                 rm_statements(),
             )]))),
         });
-        let result = check_program(&program_running(vec![fragment]), &deny_rm(), "/tmp");
+        // Hand-built nodes carry no source text, and none is needed: the deny
+        // comes from the command name inside the substitution, not from how
+        // any character was written.
+        let result = check_program(&program_running(vec![fragment]), "", &deny_rm(), "/tmp");
         assert!(
             matches!(result.decision, Decision::Deny(_)),
             "Parameter argument descent did not reach the substitution: {result:?}",
@@ -1007,7 +1187,10 @@ mod fragment_descent_tests {
             inner,
             Fragment::Literal("post".to_string()),
         ]);
-        let result = check_program(&program_running(vec![fragment]), &deny_rm(), "/tmp");
+        // Hand-built nodes carry no source text, and none is needed: the deny
+        // comes from the command name inside the substitution, not from how
+        // any character was written.
+        let result = check_program(&program_running(vec![fragment]), "", &deny_rm(), "/tmp");
         assert!(
             matches!(result.decision, Decision::Deny(_)),
             "descent failed inside double quotes: {result:?}",

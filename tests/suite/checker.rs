@@ -24,22 +24,22 @@ fn make_perms(allow: &[&str], deny: &[&str]) -> ParsedPermissions {
     make_perms_full(allow, deny, &[])
 }
 
-fn check(cmd: &str, allow: &[&str], deny: &[&str]) -> CheckResult {
+pub(crate) fn check(cmd: &str, allow: &[&str], deny: &[&str]) -> CheckResult {
     let perms = make_perms(allow, deny);
     let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
-    check_program(&program, &perms, "/tmp")
+    check_program(&program, cmd, &perms, "/tmp")
 }
 
 fn check_with_ask(cmd: &str, allow: &[&str], deny: &[&str], ask: &[&str]) -> CheckResult {
     let perms = make_perms_full(allow, deny, ask);
     let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
-    check_program(&program, &perms, "/tmp")
+    check_program(&program, cmd, &perms, "/tmp")
 }
 
 fn check_cwd(cmd: &str, allow: &[&str], deny: &[&str], cwd: &str) -> CheckResult {
     let perms = make_perms(allow, deny);
     let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
-    check_program(&program, &perms, cwd)
+    check_program(&program, cmd, &perms, cwd)
 }
 
 /// Parse rules with a specific (cwd, project_root) context and run the
@@ -62,7 +62,7 @@ fn check_ctx(
         project_root,
     );
     let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
-    check_program(&program, &perms, cwd)
+    check_program(&program, cmd, &perms, cwd)
 }
 
 #[skuld::test]
@@ -1199,8 +1199,9 @@ fn rule_path_scoped_does_not_match_different_cwd() {
         "/a",
         "/a",
     );
-    let program = thaum::parse_with("./tools/rg.cmd foo", thaum::Dialect::Bash).unwrap();
-    let result = check_program(&program, &perms, "/b");
+    let cmd = "./tools/rg.cmd foo";
+    let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
+    let result = check_program(&program, cmd, &perms, "/b");
     assert_eq!(result.decision, Decision::Ask);
     // And the original same-cwd case as a sanity check:
     assert_eq!(d.decision, Decision::Allow);
@@ -1232,8 +1233,9 @@ fn rule_project_relative_path_matches_regardless_of_cwd() {
         "/some/cwd",
         "/project",
     );
-    let program = thaum::parse_with("/project/tools/rg.cmd foo", thaum::Dialect::Bash).unwrap();
-    let result = check_program(&program, &perms, "/irrelevant");
+    let cmd = "/project/tools/rg.cmd foo";
+    let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
+    let result = check_program(&program, cmd, &perms, "/irrelevant");
     assert_eq!(result.decision, Decision::Allow);
 }
 
@@ -1460,8 +1462,9 @@ fn rule_tilde_path_matches_absolute_invocation() {
     let mut parsed = ParsedPermissions::default();
     parsed.bash.allow.push(rule);
 
-    let program = thaum::parse_with("/home/anna/bin/rg foo", thaum::Dialect::Bash).unwrap();
-    let result = check_program(&program, &parsed, "/cwd");
+    let cmd = "/home/anna/bin/rg foo";
+    let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
+    let result = check_program(&program, cmd, &parsed, "/cwd");
     assert_eq!(result.decision, Decision::Allow);
 }
 
@@ -1478,12 +1481,14 @@ fn rule_path_glob_matches_subdir_invocation() {
         "/cwd",
         "/project",
     );
-    let program = thaum::parse_with("/opt/tools/rg foo", thaum::Dialect::Bash).unwrap();
-    let result = check_program(&program, &perms, "/cwd");
+    let cmd = "/opt/tools/rg foo";
+    let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
+    let result = check_program(&program, cmd, &perms, "/cwd");
     assert_eq!(result.decision, Decision::Allow);
 
-    let program = thaum::parse_with("/opt/a/b/rg foo", thaum::Dialect::Bash).unwrap();
-    let result = check_program(&program, &perms, "/cwd");
+    let cmd = "/opt/a/b/rg foo";
+    let program = thaum::parse_with(cmd, thaum::Dialect::Bash).unwrap();
+    let result = check_program(&program, cmd, &perms, "/cwd");
     assert_eq!(result.decision, Decision::Ask);
 }
 
@@ -2101,7 +2106,7 @@ fn scoped(scope: AccessScope, kind: AccessKind) -> [FileAccess; 1] {
     [FileAccess::scoped(scope, kind)]
 }
 
-fn canonical(path: &str) -> String {
+pub(crate) fn canonical(path: &str) -> String {
     claude_scriptcheck::canonicalize::best_effort_canonicalize(path)
 }
 
