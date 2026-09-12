@@ -160,9 +160,8 @@ struct PermissionChecker<'a> {
     /// normally, so the range ends at the newline. Scoped like `source`,
     /// because a comment inside `$(...)` ends that line, not the outer one.
     ///
-    /// Needs the source to find the newline, so with no source nothing is
-    /// silenced beyond the words of the command that revealed the comment —
-    /// the over-approximating direction.
+    /// Only ever set when there is a source: a comment is recognised from the
+    /// spelling of a recovered operand, which is unavailable without one.
     comment: Option<Range<usize>>,
     /// The text the AST currently being walked was parsed from, or `None`
     /// where it is not available.
@@ -225,6 +224,14 @@ impl<'ast> Visit<'ast> for PermissionChecker<'_> {
 
     fn visit_redirect(&mut self, redirect: &'ast Redirect) {
         if self.is_commented_out(redirect.span.start.0) {
+            return;
+        }
+        // A compound command's redirects belong to no command, so nothing else
+        // looks for a comment among them: `{ ...; } >&-#c > log` creates no
+        // `log`, and the redirects are walked in source order, so recording it
+        // here silences the ones that follow.
+        if let Some(range) = redirect::comment_started_by(redirect, self.source) {
+            self.comment = Some(range);
             return;
         }
         // Handles redirects for compound / function-def contexts (e.g.
@@ -603,9 +610,12 @@ impl<'a> PermissionChecker<'a> {
             // it is not file-only, exactly as `find -exec` is not. The list is
             // of inert names rather than dangerous ones because no enumeration
             // of dangerous names terminates; see `env_prefix`.
+            // An assignment the comment covers was never set, so it cannot
+            // make anything non-file-only: `ls >&-#c FOO=1` runs plain `ls`.
             let unmodelled_env: Vec<&str> = cmd
                 .assignments
                 .iter()
+                .filter(|a| !self.is_commented_out(a.span.start.0))
                 .map(|a| a.name.as_str())
                 .filter(|name| !env_prefix::is_inert(name))
                 .collect();

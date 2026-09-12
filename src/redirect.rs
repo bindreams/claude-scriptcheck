@@ -467,6 +467,28 @@ fn is_assignment_word(text: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// The comment a single redirect begins, if its operand starts one.
+///
+/// `command_line` finds comments among a *command's* words, but a compound
+/// command's redirect list belongs to no command — `{ ...; } >&-#c > log`
+/// creates no `log`, and nothing else would notice.
+pub fn comment_started_by(redirect: &Redirect, source: Option<&str>) -> Option<Range<usize>> {
+    let operand = closed_descriptor_operand(redirect, source)?;
+    if !operand.starts_a_comment() {
+        return None;
+    }
+    comment_range(operand.position, source)
+}
+
+/// From a comment's `#` to the end of its line, and no further.
+fn comment_range(at: usize, source: Option<&str>) -> Option<Range<usize>> {
+    let source = source?;
+    let end = source[at..]
+        .find('\n')
+        .map_or(source.len(), |offset| at + offset);
+    Some(at..end)
+}
+
 /// The redirect target words that hid an argument.
 ///
 /// bash lexed an argument out of each of these, and an argument's interior is
@@ -506,9 +528,11 @@ pub struct CommandLine {
     pub arguments: Vec<Option<String>>,
     /// What a comment silences, if a recovered operand began one: from its `#`
     /// to the end of that line, and no further — the next line is ordinary
-    /// code. `None` when no comment was found, or when there is no source to
-    /// find the line's end in, which silences nothing beyond this command's own
-    /// words.
+    /// code.
+    ///
+    /// `None` when no comment was found. A comment can only be found when
+    /// there is a source to read it from, since the `#` is a fact about the
+    /// spelling, so there is no "comment without a range" case to handle.
     pub comment: Option<Range<usize>>,
 }
 
@@ -594,19 +618,9 @@ pub fn command_line(cmd: &Command, source: Option<&str>) -> CommandLine {
     // redirect two lines further down while the command filter stopped at the
     // newline — and comparing against `range.start` alone does the same, since
     // a word after the newline is still "after the comment began".
-    let comment = comment_at.and_then(|at| {
-        let source = source?;
-        let end = source[at..]
-            .find('\n')
-            .map_or(source.len(), |offset| at + offset);
-        Some(at..end)
-    });
+    let comment = comment_at.and_then(|at| comment_range(at, source));
     if let Some(range) = &comment {
         words.retain(|(position, _)| !range.contains(&past_continuations(source, *position)));
-    } else if let Some(at) = comment_at {
-        // No source to find the line's end in, so nothing beyond this
-        // command's own words is silenced.
-        words.retain(|(position, _)| *position < at);
     }
 
     // The command name is the first word that is not an assignment; everything

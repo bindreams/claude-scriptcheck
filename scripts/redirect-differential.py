@@ -325,8 +325,10 @@ def main():
     # line's words still attached. The comment range releases them correctly,
     # but they belong to a command the parse never produced, so their roles are
     # read against the wrong command. Counted apart: the checker cannot place
-    # them without a comment-aware parse, and it errs by keeping them, which is
-    # the over-approximating direction.
+    # them without a comment-aware parse. It errs in both directions: keeping a
+    # word the next command owns invents an access, and reading the shortened
+    # argument list against the wrong command can drop one — `cp in.txt` with
+    # its second operand on the next line is a write to bash and a read here.
     def split_by_comment(case):
         _, _, _, _, _, _, _, w = case
         return "#" in w and "\n" in w
@@ -336,14 +338,16 @@ def main():
         miss = r["expected"] - r["actual"]
         extra = r["actual"] - r["expected"]
         if miss and value_is_unresolvable(all_cases[index]):
+            # Only the miss is expected here. An access the checker invents for
+            # such a spelling is still a fabrication and still counts.
             unresolvable += 1
-            continue
+            miss = set()
         if (miss or extra) and split_by_comment(all_cases[index]):
             comment_split += 1
             continue
         if miss:
             bypasses.append((r, miss))
-        if not r["ran"] and (r["args_bear_files"] or (not r["command_runs"] and r["stderr"])):
+        if extra and not r["ran"] and (r["args_bear_files"] or (not r["command_runs"] and r["stderr"])):
             # The evidence does not separate a fabricated access from a real
             # one: either bash never produced the argv the checker derived, or
             # it failed in a way it reports identically for a redirect and for a

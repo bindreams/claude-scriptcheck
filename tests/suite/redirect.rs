@@ -1721,3 +1721,78 @@ fn a_backslash_in_a_comment_does_not_continue_it() {
         );
     }
 }
+
+#[skuld::test]
+fn a_commented_assignment_does_not_demand_a_bash_rule() {
+    // `ls >&-#c FOO=1` runs plain `ls`: the assignment is comment text, so it
+    // sets nothing and cannot make the command non-file-only. Demanding a
+    // `Bash(ls)` rule for it is a prompt on a command that does nothing
+    // unusual, and under `dontAsk` a deny.
+    let result = check("ls /tmp/x >&-#c FOO=1", &[], &[]);
+    assert!(
+        !result.missing_rules.iter().any(|r| r.starts_with("Bash(")),
+        "a commented-out assignment forced a Bash rule: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn an_operand_after_the_comments_newline_is_still_recovered() {
+    // The operand filter tests containment, not "after the comment started".
+    // A second redirect on the next line carries a real argument, and bash
+    // runs it — silencing it loses the read entirely.
+    let cmd = "cat /tmp/in >&-#c\\\ncat >&-/tmp/vault/creds";
+    let result = check(cmd, &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Read({})", canonical("/tmp/vault/creds"))),
+        "an operand past the comment's newline was dropped: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn an_unknown_source_does_not_assume_an_assignment() {
+    // With no source the operand's spelling is unavailable and its *value*
+    // stands in. Treating every such operand as an assignment would drop it
+    // from the argument list, and a dropped operand takes its access with it.
+    let result = check("echo $(:)$(cat >&-/tmp/vault/creds)", &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Read({})", canonical("/tmp/vault/creds"))),
+        "an unresolved operand was assumed to be an assignment: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn a_compound_redirect_inside_a_comment_is_not_performed() {
+    // `visit_redirect` walks redirects that belong to a group rather than a
+    // command. One sitting inside a comment is comment text like any other.
+    let result = check("{ cat /tmp/in; } >&-#c > /tmp/vault/pwned", &[], &[]);
+    assert!(
+        !result
+            .missing_rules
+            .iter()
+            .any(|r| r.contains(&canonical("/tmp/vault/pwned"))),
+        "a commented-out compound redirect was performed: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn a_comment_does_not_escape_its_substitution() {
+    // The range is restored when the walk leaves a substitution body. If it
+    // leaked, the command after the substitution would be silenced — and a
+    // silenced command reaches no rule at all.
+    let result = check("echo $(cat /tmp/in >&-#c) ; cat /tmp/vault/creds", &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Read({})", canonical("/tmp/vault/creds"))),
+        "a comment leaked out of its substitution: {:?}",
+        result.missing_rules,
+    );
+}

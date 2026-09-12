@@ -185,7 +185,7 @@ stdin JSON → parse permission_mode (PermissionMode::from_hook_str) →
 
   - **A backtick substitution's body is never sliced for.** bash resolves `\$`, `` \` `` and `\\` inside backticks *before* parsing, so the text that was parsed is shorter than the bytes between them and every span inside it is shifted. `$( )` takes its body verbatim and is safe; backticks get `None`. Slicing them anyway classified `` `cat \$\$\$\$- >&vault/creds` `` as a *read* of a file bash writes.
 
-  - **A comment ends the line — not the command, and not the program.** `cat x >&-#foo | rm -rf zzz` runs no `rm`, so the words, redirects and commands after the comment's offset are skipped; but the next *line* is ordinary code, so the range stops at the newline. Silencing past it loses real accesses outright. The range is scoped like the source: a comment inside `$(...)` ends that line only, and with no source to find the newline in, nothing beyond the comment's own command is silenced.
+  - **A comment ends the line — not the command, and not the program.** `cat x >&-#foo | rm -rf zzz` runs no `rm`, so the words, redirects and commands after the comment's offset are skipped; but the next *line* is ordinary code, so the range stops at the newline. Silencing past it loses real accesses outright. The range is scoped like the source: a comment inside `$(...)` ends that line only. A comment is only ever recognised when there is a source to read the `#` from, so there is no sourceless case to reason about.
 
   - **A recovered operand is walked like the argument it is.** `cat >&-$(rm -rf x)` runs the `rm`, so the word the operand came out of goes through the word funnel. Redirect *targets* remain unwalked — that is #65 — but an operand is not a target.
 
