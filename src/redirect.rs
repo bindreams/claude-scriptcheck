@@ -93,14 +93,29 @@ pub fn accesses_for_redirect(
     let Some(path) = word.try_to_static_string() else {
         return Vec::new();
     };
-    // An empty target is a redirection error in every form — `> ""` and `<> ""`
-    // report "No such file or directory", `>& ""` reports "Bad file
-    // descriptor" — and bash abandons the command without opening anything.
-    // Resolving it instead names the working directory, which is not a file the
-    // command touches and which a `Deny(Write(...))` would then fire on.
-    if path.is_empty() {
-        return Vec::new();
-    }
+    // An empty *value* is not always an empty target. `> ""` and `> ''` are
+    // redirection errors that open nothing — but a dangling backslash also
+    // resolves to nothing, and `> \` creates a file *named* `\`, because the
+    // backslash quotes a newline that never arrived. The two are told apart by
+    // how the word was written: only an unquoted literal can be empty by
+    // escaping, so a word made entirely of quoted fragments is the error case.
+    let path = if path.is_empty() {
+        let quoted_empty = !word
+            .parts
+            .iter()
+            .any(|f| matches!(f, Fragment::Literal(_) | Fragment::Glob(_)));
+        match source.and_then(|s| s.get(word.span.start.0..word.span.end.0)) {
+            _ if quoted_empty => return Vec::new(),
+            // The spelling is the filename: bash removed nothing from it.
+            Some(spelling) => spelling.to_string(),
+            // No source to read the spelling from. Recording nothing would
+            // drop a write bash performs, so the one spelling that reaches
+            // here is assumed.
+            None => "\\".to_string(),
+        }
+    } else {
+        path
+    };
     let resolved = file_access::resolve_path(&path, cwd);
     kinds
         .iter()
@@ -526,6 +541,13 @@ pub struct CommandLine {
     /// Argument literals in source order, arg0 first, with `None` for a word
     /// that does not resolve statically.
     pub arguments: Vec<Option<String>>,
+    /// Where the command name sits, when there is one.
+    ///
+    /// The words before it are the prefix. The parser's own split cannot be
+    /// trusted for this: it sorted the words *it* saw, and a recovered operand
+    /// can supply a command name earlier than any of them, which demotes what
+    /// the parser called assignments into ordinary arguments.
+    pub command_word_at: Option<usize>,
     /// What a comment silences, if a recovered operand began one: from its `#`
     /// to the end of that line, and no further — the next line is ordinary
     /// code.
@@ -628,11 +650,16 @@ pub fn command_line(cmd: &Command, source: Option<&str>) -> CommandLine {
     // it looks like. Treating `>&-FOO=1 rm -rf zzz` as a command called `FOO=1`
     // would leave every `Bash(rm ...)` rule looking at a name nothing matches.
     let command_name = words.iter().position(|(_, w)| !w.is_prefix_assignment());
+    let command_word_at = command_name.map(|first| words[first].0);
     let arguments = match command_name {
         Some(first) => words[first..].iter().map(|(_, w)| w.literal()).collect(),
         // Every word was an assignment: an assignment-only command, which runs
         // nothing but still performs its redirects.
         None => Vec::new(),
     };
-    CommandLine { arguments, comment }
+    CommandLine {
+        arguments,
+        command_word_at,
+        comment,
+    }
 }

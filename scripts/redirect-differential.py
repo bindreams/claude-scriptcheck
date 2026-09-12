@@ -93,6 +93,8 @@ def words():
         # the next line is ordinary code. thaum joins the lines into one word,
         # which is what makes this worth crossing.
         "-#c\\", "-#c\\\n",
+        # A dangling backslash: the value is empty but the file is named `\`.
+        "\\",
         # A substitution in the operand, which bash runs.
         "-$(:)", "-`:`", "-$(:)f", "$(:)", "-x$(:)",
         # An assignment, which is a prefix rather than a command name.
@@ -141,7 +143,7 @@ COMMANDS = [
     ("eval", roles_none, "eval x {redir}", False, True),
     # A second line, so a comment's right-hand bound is exercised: what follows
     # the newline is ordinary code that bash runs.
-    ("twoline", roles_cat, "cat in.txt {redir}\ncat in.txt", True, True),
+    ("twoline", roles_cat, "cat in.txt {redir}\ncat in2.txt", True, True),
     ("", roles_none, "{redir}", False, False),
     ("assign", roles_none, "FOO=x {redir}", False, False),
 ]
@@ -156,8 +158,9 @@ def run_probe(d, op, w, template, seed):
     """One bash run in a fresh directory; `seed` names files to create first."""
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)
-    with open(os.path.join(d, "in.txt"), "w") as f:
-        f.write("data\n")
+    for name in ("in.txt", "in2.txt"):
+        with open(os.path.join(d, name), "w") as f:
+            f.write("data\n")
     # Words like `d/e` and `sub/f` name a path, and without their parent the
     # redirect fails on every one of them — a whole family quietly testing that
     # bash refuses to run.
@@ -318,6 +321,8 @@ def main():
         argument makes the command demand a `Bash(...)` rule.
         """
         _, _, _, _, _, _, _, w = case
+        # `[` is a glob rather than an expansion, but it has the same effect
+        # here: the word does not resolve statically.
         return any(marker in w for marker in ("$(", "`", "["))
 
     # thaum lexes `>&-#c\<newline>` as one word (thaum#14), so a line that bash

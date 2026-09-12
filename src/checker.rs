@@ -429,6 +429,7 @@ impl<'a> PermissionChecker<'a> {
         // closes stdout and runs `danger`.
         let redirect::CommandLine {
             arguments: arg_literals,
+            command_word_at,
             comment,
         } = redirect::command_line(cmd, self.source);
         // A comment runs to the end of the line, so it silences what follows in
@@ -610,12 +611,15 @@ impl<'a> PermissionChecker<'a> {
             // it is not file-only, exactly as `find -exec` is not. The list is
             // of inert names rather than dangerous ones because no enumeration
             // of dangerous names terminates; see `env_prefix`.
-            // An assignment the comment covers was never set, so it cannot
-            // make anything non-file-only: `ls >&-#c FOO=1` runs plain `ls`.
+            // Only the assignments that are still *prefix* assignments count.
+            // A comment covering one means it was never set, and a command name
+            // recovered ahead of one demotes it to an ordinary argument —
+            // `>&-cat >&-in FOO=1` passes `FOO=1` to `cat` and sets nothing.
             let unmodelled_env: Vec<&str> = cmd
                 .assignments
                 .iter()
                 .filter(|a| !self.is_commented_out(a.span.start.0))
+                .filter(|a| command_word_at.is_none_or(|at| a.span.start.0 < at))
                 .map(|a| a.name.as_str())
                 .filter(|name| !env_prefix::is_inert(name))
                 .collect();

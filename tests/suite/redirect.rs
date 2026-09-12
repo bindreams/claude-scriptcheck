@@ -1796,3 +1796,92 @@ fn a_comment_does_not_escape_its_substitution() {
         result.missing_rules,
     );
 }
+
+#[skuld::test]
+fn a_dangling_backslash_names_a_file() {
+    // `true > \` creates a file called `\`: the backslash quotes a newline that
+    // never arrived, so nothing is removed and the spelling *is* the filename.
+    // An empty *value* therefore does not mean an empty target — `> ""` is the
+    // error case, and only a word made of quoted fragments is one.
+    //
+    // The path the access carries is mangled by #71 (backslashes are rewritten
+    // to separators), so this asserts that the write exists rather than where
+    // it points.
+    for cmd in ["true > \\", "cat /tmp/x > \\"] {
+        let result = check(cmd, &[], &[]);
+        assert!(
+            result.missing_rules.iter().any(|r| r.starts_with("Write(")),
+            "a dangling backslash lost its write: {cmd:?} -> {:?}",
+            result.missing_rules,
+        );
+    }
+    for cmd in ["true > \"\"", "true > ''"] {
+        let result = check(cmd, &[], &[]);
+        assert!(
+            !result.missing_rules.iter().any(|r| r.starts_with("Write(")),
+            "an empty target invented a write: {cmd:?} -> {:?}",
+            result.missing_rules,
+        );
+    }
+}
+
+#[skuld::test]
+fn an_assignment_demoted_to_an_argument_is_not_an_env_prefix() {
+    // `>&-cat >&-/tmp/in FOO=1 zzz` runs `cat` with `FOO=1` as an argument —
+    // the command name came out of the first redirect, so the parser's idea of
+    // which words are assignments is stale. Counting it as an environment
+    // prefix demands a `Bash(...)` rule for a variable nothing sets.
+    let result = check(">&-cat >&-/tmp/in FOO=1 zzz", &[], &[]);
+    assert!(
+        !result
+            .missing_rules
+            .iter()
+            .any(|r| r.contains("environment assignment")),
+        "a demoted assignment was read as an environment prefix: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn a_comment_in_a_compound_redirect_list_stops_at_the_newline() {
+    // The compound path discovers its own comment, so it must end it at the
+    // newline like every other: the redirect on the next line is performed.
+    let cmd = "{ true; } >&-#c\\\n> /tmp/vault/pwned";
+    let result = check(cmd, &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({})", canonical("/tmp/vault/pwned"))),
+        "a compound comment silenced the next line: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn an_operand_substitution_after_a_comment_is_still_walked() {
+    // The comment ends at the newline, so the operand on the line after it is
+    // real — and the substitution inside it runs.
+    let cmd = "cat /tmp/in >&-#c\\\ncat >&-$(cat /tmp/vault/creds)";
+    assert!(
+        matches!(
+            check(cmd, &[], &["Bash(cat *)"]).decision,
+            Decision::Deny(_)
+        ),
+        "a substitution past the comment's newline was not walked",
+    );
+}
+
+#[skuld::test]
+fn a_comment_does_not_silence_a_later_statement_in_a_substitution() {
+    // `$( : ; : ; cat creds )` holds three statements. A comment before the
+    // substitution ends at the newline, so every one of them runs.
+    let cmd = ">&-#cccccc\necho $(: ; : ; cat /tmp/vault/creds)";
+    let result = check(cmd, &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Read({})", canonical("/tmp/vault/creds"))),
+        "a later statement inside a substitution was silenced: {:?}",
+        result.missing_rules,
+    );
+}
