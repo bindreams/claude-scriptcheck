@@ -73,10 +73,12 @@ pub fn accesses_for_redirect(
             if !redirects_stdout {
                 return Vec::new();
             }
-            // Checked before the descriptor rules: "every byte is a digit" is
-            // vacuously true over an empty value, so `>& \` would otherwise be
-            // read as a descriptor and its write lost.
-            if !ends_in_a_dangling_backslash(w, source) && names_a_descriptor(w) {
+            // Checked before the descriptor rules: `>& 2\` writes a file called
+            // `2\`, but thaum drops the dangling backslash and the digits rule
+            // then reads the remaining `2` as a descriptor. The same rule also
+            // covers `>& \`, where the value is empty and "every byte is a
+            // digit" is vacuously true.
+            if !value_understates_the_file(w, source) && names_a_descriptor(w) {
                 return Vec::new();
             }
             // A bare leading dash closes the descriptor and ends the token;
@@ -87,9 +89,7 @@ pub fn accesses_for_redirect(
             // opposite answers, so both are taken: the write is recorded here
             // and the operand is recovered anyway. One of them is spurious and
             // neither is missing.
-            if !ends_in_a_dangling_backslash(w, source)
-                && begins_with_bare_dash(w, source) == Some(true)
-            {
+            if begins_with_bare_dash(w, source) == Some(true) {
                 return Vec::new();
             }
             (w, &[Write])
@@ -101,18 +101,21 @@ pub fn accesses_for_redirect(
     let Some(path) = word.try_to_static_string() else {
         return Vec::new();
     };
-    // An empty *value* is not always an empty target. `> ""` and `> ''` are
-    // redirection errors that open nothing, but a dangling backslash also
-    // resolves to nothing and names a file called `\`.
-    let resolved = if path.is_empty() {
-        if !ends_in_a_dangling_backslash(word, source) {
-            return Vec::new();
-        }
-        // Joined here rather than through `resolve_path`, which reads a leading
-        // backslash as a Windows-style absolute path and collapses this to the
-        // filesystem root — a write inside a denied directory then lands
-        // outside it and the deny stops firing. #71.
-        format!("{}/\\", cwd.trim_end_matches('/'))
+    // Only a run of empty quote pairs opens nothing; everything else names a
+    // file, even when the parsed value is empty or short.
+    if opens_nothing(word, source) {
+        return Vec::new();
+    }
+    let path = if value_understates_the_file(word, source) {
+        format!("{path}\\")
+    } else {
+        path
+    };
+    // A path starting with a backslash is read by `resolve_path` as a
+    // Windows-style absolute one, which collapses it to the filesystem root —
+    // the write then lands outside every denied tree and the deny stops firing.
+    let resolved = if path.starts_with('\\') {
+        format!("{}/{path}", cwd.trim_end_matches('/'))
     } else {
         file_access::resolve_path(&path, cwd)
     };
@@ -433,22 +436,51 @@ fn without_continuations(text: &str) -> String {
     text.replace("\\\n", "")
 }
 
-/// Does this word end in a backslash that quotes nothing?
+/// Is this target one of the spellings that opens nothing?
 ///
-/// A backslash at the very end of the input has no following character to
-/// quote, so it survives as an ordinary one — and it is the *entire* filename
-/// however many empty quoted fragments precede it. Verified against bash 5.3:
-/// `> \`, `>& \`, `> ''\` and `> ""\` each create a file called `\`, while
-/// `> ""` and `> ''` open nothing at all.
-fn ends_in_a_dangling_backslash(word: &Word, source: Option<&str>) -> bool {
-    word.try_to_static_string()
-        .is_some_and(|value| value.is_empty())
-        && source
-            .and_then(|s| s.get(word.span.start.0..word.span.end.0))
-            .is_some_and(|spelling| spelling.ends_with('\\'))
+/// Exactly one family does: a run of empty quote pairs. Verified against bash
+/// 5.3 — `> ""`, `> ''`, `> ''""` and `> ""''""` each report "No such file or
+/// directory" and create nothing, while **every** other spelling names a file.
+///
+/// With no source to read, an empty value is treated as naming a file. Missing
+/// a write is a bypass and inventing one is a prompt, so uncertainty resolves
+/// toward the prompt.
+fn opens_nothing(word: &Word, source: Option<&str>) -> bool {
+    let Some(spelling) = source.and_then(|s| s.get(word.span.start.0..word.span.end.0)) else {
+        return false;
+    };
+    !spelling.is_empty()
+        && spelling
+            .as_bytes()
+            .chunks(2)
+            .all(|pair| pair == b"''" || pair == b"\"\"")
 }
 
-/// Could this word's first source character be a bare `-`?
+/// Does the spelling name a file the parsed value does not describe?
+///
+/// thaum understates two spellings, and both name a file bash really opens:
+///
+/// - a backslash at the end of the input quotes nothing and is dropped, so
+///   `> x\` writes `x\` and `>& 2\` writes `2\` — the latter matters twice
+///   over, because the value `2` then reads as a descriptor
+/// - an escaped backslash inside double quotes is dropped (thaum#49), so
+///   `> "\\"` reports an empty value while bash writes `\`
+///
+/// In both the file is the value with a backslash appended.
+fn value_understates_the_file(word: &Word, source: Option<&str>) -> bool {
+    if opens_nothing(word, source) {
+        return false;
+    }
+    let ends_in_backslash = source
+        .and_then(|s| s.get(word.span.start.0..word.span.end.0))
+        .is_some_and(|spelling| spelling.ends_with('\\'));
+    ends_in_backslash
+        || word
+            .try_to_static_string()
+            .is_some_and(|value| value.is_empty())
+}
+
+/// Could this word's first source character be a bare `-`?/// Could this word's first source character be a bare `-`?
 ///
 /// Answerable without the source, because a fragment's *kind* says what its
 /// first source character can be: a quoted fragment starts with a quote, a

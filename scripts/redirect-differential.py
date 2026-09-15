@@ -93,8 +93,10 @@ def words():
         # the next line is ordinary code. thaum joins the lines into one word,
         # which is what makes this worth crossing.
         "-#c\\", "-#c\\\n",
-        # A dangling backslash: the value is empty but the file is named `\`.
-        "\\",
+        # Backslash filenames. thaum drops an escaped backslash inside double
+        # quotes (thaum#49), so the value it reports is empty or short while
+        # bash still names a file — the classifier has to read the spelling.
+        "\\", "\\\\", "'\\'", '"\\\\"', "x\\", "''\\\\", "a\\b", '2\\', '"2"\\',
         # A substitution in the operand, which bash runs.
         "-$(:)", "-`:`", "-$(:)f", "$(:)", "-x$(:)",
         # An assignment, which is a prefix rather than a command name.

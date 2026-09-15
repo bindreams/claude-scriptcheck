@@ -1921,3 +1921,82 @@ fn a_dangling_backslash_is_denied_like_any_other_write() {
         );
     }
 }
+
+#[skuld::test]
+fn only_empty_quote_pairs_open_nothing() {
+    // The complete error family, verified against bash 5.3: a run of empty
+    // quote pairs reports "No such file or directory" and creates nothing.
+    // Every other spelling names a file, so emptiness is decided from the
+    // spelling and never from the parsed value.
+    for cmd in [
+        "true > \"\"",
+        "true > ''",
+        "true > ''\"\"",
+        "true > \"\"''\"\"",
+    ] {
+        assert!(
+            !matches!(
+                check(cmd, &["Bash(true)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "an empty target invented a write: {cmd:?}",
+        );
+    }
+}
+
+#[skuld::test]
+fn a_backslash_thaum_drops_still_names_a_file() {
+    // thaum drops an escaped backslash inside double quotes (thaum#49), so the
+    // value it reports for `"\\"` is empty while bash writes `\`. Deciding
+    // emptiness from the value let that write escape every rule — `main`
+    // denied it and this branch allowed it, in all six permission modes.
+    for cmd in [
+        "true > \"\\\\\"",
+        "true >> \"\\\\\"",
+        "true >& \"\\\\\"",
+        "true <> \"\\\\\"",
+        "true &> \"\\\\\"",
+    ] {
+        assert!(
+            matches!(
+                check(cmd, &["Bash(true)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "a quoted backslash lost its write: {cmd:?}",
+        );
+    }
+}
+
+#[skuld::test]
+fn a_dangling_backslash_beats_the_descriptor_rules() {
+    // `>& 2\` writes a file called `2\`. thaum drops the dangling backslash,
+    // and the remaining `2` then reads as a descriptor — so the write is lost
+    // twice over. The value understating the file has to be settled before the
+    // descriptor rules run, not after.
+    for cmd in [
+        "true >& 2\\",
+        "true >& \"2\"\\",
+        "true 1>& 2\\",
+        "true >& 22\\",
+        "true > x\\",
+    ] {
+        assert!(
+            matches!(
+                check(cmd, &["Bash(true)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "a dangling backslash was read as a descriptor: {cmd:?}",
+        );
+    }
+    // The control: without the backslash these really are descriptors, and
+    // they must still name no file.
+    for cmd in ["true >& 2", "true >& 22", "true 1>& 2", "true >& -"] {
+        assert!(
+            !matches!(
+                check(cmd, &["Bash(true)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "a descriptor form invented a write: {cmd:?}",
+        );
+    }
+}
