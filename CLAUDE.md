@@ -189,12 +189,18 @@ stdin JSON → parse permission_mode (PermissionMode::from_hook_str) →
 
   - **A recovered operand is walked like the argument it is.** `cat >&-$(rm -rf x)` runs the `rm`, so the word the operand came out of goes through the word funnel. Redirect *targets* remain unwalked — that is #65 — but an operand is not a target.
 
-  - **Emptiness is decided from the spelling, never from the parsed value.** One family of targets opens nothing: a run of **empty quoted fragments** — the `''`, `""`, `$''` and `$""` forms in any combination, with line continuations removed first because bash removes them before tokenising. A fragment with content names a file, so `$'x'` writes `x`. A value that looks empty is not evidence of an empty target.
+  - **Emptiness is decided from the spelling, never from the parsed value.** One family of targets opens nothing: a run of **empty quoted fragments** — `''`, `""`, `$''`, `$""` in any combination. A fragment carrying content names a file, so `$'x'` writes `x`, and so does a bare `$`.
 
-    - Counting the spelling's bytes in pairs is not enough, and got this wrong twice: `$''` is three bytes, and a continuation can split a pair. Both produced a false `Deny` in all six modes, on commands bash itself refuses to run.
+    - **Line continuations are the hard part, and the rule was rewritten around them twice.** bash removes `\` + newline before it tokenises *or* recognises `$'`, but both characters are ordinary content inside `'…'` and `$'…'`. So a continuation comes off between fragments and between a `$` and its quote, and stays inside a single-quoted one: `> "\`⏎`"`, `> ''\`⏎`''` and `> $\`⏎`''` open nothing, while `> '\`⏎`'` and `> $'\`⏎`'` each write a file. Stripping them in one pass over the whole spelling loses the second group; consuming fragments without stripping between `$` and its quote loses the third.
+
+    - Every version of this rule was verified against bash before it landed and was still wrong one spelling over — six times. Extend the differential's alphabet whenever it changes, and check the *verdict* against `main` rather than only whether an access exists.
+
     - thaum understates two spellings, and both name a file bash really opens. A backslash at the end of the input quotes nothing and is dropped, so `> x\` writes `x\`. An escaped backslash inside double quotes is dropped too (thaum#49), so `> "\\"` reports an empty value while bash writes `\`. In both the file is the value with a backslash appended.
+
     - **This has to settle before the descriptor rules run.** `>& 2\` writes a file called `2\`, but with the dangling backslash dropped the remaining `2` reads as a descriptor and the write is lost twice over. `>& 2` without it really is a descriptor and must still name nothing — that control is worth keeping in front of any change here.
+
     - Deciding this from the value instead let `> "\\"` through as no access at all: `main` denied it and this branch allowed it, in all six permission modes. The verdict is what a reviewer must check, not merely whether an access exists — a test asserting only existence is what let the earlier version of this rule ship.
+
     - The path is joined to the working directory directly when it starts with a backslash, because `resolve_path` reads that as a Windows-style absolute path and collapses it to the filesystem root — the write then lands outside every denied tree and the deny stops firing. #71 still mangles a backslash *inside* a path, and that is a verdict bypass rather than a cosmetic difference.
 
   - **A word can begin after its span does.** bash removes `\` followed by a newline before it tokenises, so a redirect target written across a continuation starts past one or more of them. Reading the span's first byte finds the backslash: it invents a write and drops the operand carrying the real read. A continuation can also sit *inside* the operand and split a name — `>&-FOO\`⏎`=1 rm x` assigns `FOO` and runs `rm` — so the text the operand is classified from has its continuations removed before anything looks at it.

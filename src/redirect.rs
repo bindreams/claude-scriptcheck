@@ -438,26 +438,23 @@ fn without_continuations(text: &str) -> String {
 
 /// Is this target one of the spellings that opens nothing?
 ///
-/// One family does: a run of **empty quoted fragments**. Verified against bash
-/// 5.3 — `''`, `""`, `$''` in any combination create nothing, and a fragment
-/// carrying content names a file, so `$'x'` writes `x`.
+/// One family does: a run of **empty quoted fragments** — `''`, `""`, `$''`
+/// and `$""` in any combination. A fragment carrying content names a file, so
+/// `$'x'` writes `x`, and so does a bare `$`.
 ///
-/// A line continuation is where this gets delicate, and three earlier versions
-/// of this rule got it wrong. bash removes `\` + newline before tokenising,
-/// but only outside quotes and inside double quotes. Inside `'…'` and `$'…'`
-/// both characters are ordinary content, so the fragment is *not* empty:
+/// Line continuations are where this keeps going wrong, and the rule has been
+/// rewritten around them twice. bash removes `\` + newline before it tokenises
+/// *or* recognises `$'`, but the characters are ordinary content inside `'…'`
+/// and `$'…'`. So a continuation comes off between fragments and between a `$`
+/// and its quote, and stays inside a single-quoted fragment:
 ///
 /// ```text
-/// > "\<newline>"      opens nothing — the continuation came off
-/// > ''\<newline>''    opens nothing — it sat between two empty fragments
-/// > '\<newline>'      writes a file named backslash-newline
-/// > $'\<newline>'     the same
-/// > ''$'\<newline>'   the same; one non-empty fragment is enough
+/// > "\<newline>"       opens nothing — removed inside double quotes
+/// > ''\<newline>''     opens nothing — removed between fragments
+/// > $\<newline>''      opens nothing — removed between `$` and its quote
+/// > '\<newline>'       writes a file — literal inside single quotes
+/// > $'\<newline>'      writes a file — the same
 /// ```
-///
-/// So the spelling is consumed fragment by fragment rather than stripped in
-/// one pass. `$"…"` is absent deliberately: such a word never resolves
-/// statically, so `accesses_for_redirect` returns before this is consulted.
 ///
 /// With no source to read this returns false, and the word is treated as
 /// naming a file — see `value_understates_the_file` for what that costs.
@@ -468,31 +465,64 @@ fn opens_nothing(word: &Word, source: Option<&str>) -> bool {
     let mut rest = spelling;
     let mut saw_a_fragment = false;
     loop {
-        // Outside a fragment, a continuation is removed.
-        if let Some(tail) = rest.strip_prefix("\\\n") {
-            rest = tail;
-            continue;
-        }
-        if let Some(tail) = rest.strip_prefix("''").or_else(|| rest.strip_prefix("$''")) {
+        rest = past_continuations_in(rest);
+        if let Some(tail) = rest.strip_prefix("''") {
             rest = tail;
             saw_a_fragment = true;
             continue;
         }
-        // Inside double quotes a continuation is removed too, so such a
-        // fragment is empty when nothing but continuations separates the
-        // quotes.
-        if let Some(tail) = rest.strip_prefix('"') {
-            let Some(end) = tail.find('"') else {
-                return false;
-            };
-            if !tail[..end].replace("\\\n", "").is_empty() {
-                return false;
+        // `$` introduces a quoted fragment, and a continuation may sit between
+        // the two. Anything else after it — including nothing — is a filename.
+        if let Some(after_dollar) = rest.strip_prefix('$') {
+            let after_dollar = past_continuations_in(after_dollar);
+            if let Some(tail) = after_dollar.strip_prefix("''") {
+                rest = tail;
+                saw_a_fragment = true;
+                continue;
             }
-            rest = &tail[end + 1..];
-            saw_a_fragment = true;
-            continue;
+            match empty_double_quoted(after_dollar) {
+                Some(tail) => {
+                    rest = tail;
+                    saw_a_fragment = true;
+                    continue;
+                }
+                None => return false,
+            }
+        }
+        if rest.starts_with('"') {
+            match empty_double_quoted(rest) {
+                Some(tail) => {
+                    rest = tail;
+                    saw_a_fragment = true;
+                    continue;
+                }
+                None => return false,
+            }
         }
         return saw_a_fragment && rest.is_empty();
+    }
+}
+
+/// The text past any run of line continuations at the front.
+fn past_continuations_in(text: &str) -> &str {
+    let mut text = text;
+    while let Some(tail) = text.strip_prefix("\\\n") {
+        text = tail;
+    }
+    text
+}
+
+/// Consume a `"…"` fragment, if it is there and empty.
+///
+/// Empty means nothing but continuations between the quotes, because bash
+/// removes those inside double quotes as well.
+fn empty_double_quoted(text: &str) -> Option<&str> {
+    let inner = text.strip_prefix('"')?;
+    let end = inner.find('"')?;
+    if inner[..end].replace("\\\n", "").is_empty() {
+        Some(&inner[end + 1..])
+    } else {
+        None
     }
 }
 

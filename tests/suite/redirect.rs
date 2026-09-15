@@ -2079,3 +2079,38 @@ fn a_continuation_inside_single_quotes_is_content() {
         );
     }
 }
+
+#[skuld::test]
+fn a_continuation_between_the_dollar_and_its_quote_comes_off() {
+    // bash removes `\`+newline before it recognises `$'`, so `$\`⏎`''` is the
+    // same word as `$''` — an empty target. Verified: `printf '[%s]' $\`⏎`''`
+    // prints `[]`, and `true > $\`⏎`''` creates nothing.
+    //
+    // Consuming fragments without allowing for this treated the word as a
+    // filename and fabricated a Deny in all six modes, on a command bash
+    // refuses to run. That is the sixth defect in this rule, and the second
+    // introduced by the fix for the previous one.
+    for cmd in [
+        "true > $\\\n''",
+        "true > $\\\n\"\"",
+        "true > ''$\\\n''",
+        "true > $\\\n\\\n''",
+    ] {
+        assert!(
+            !matches!(
+                check(cmd, &["Bash(true)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "an empty target invented a write: {cmd:?}",
+        );
+    }
+    // A `$` that does not introduce a quoted fragment is an ordinary
+    // filename: bash creates a file called `$`.
+    assert!(
+        matches!(
+            check("true > $", &["Bash(true)"], &["Write(/tmp/**)"]).decision,
+            Decision::Deny(_),
+        ),
+        "a bare dollar lost its write",
+    );
+}

@@ -96,7 +96,7 @@ def words():
         # Backslash filenames. thaum drops an escaped backslash inside double
         # quotes (thaum#49), so the value it reports is empty or short while
         # bash still names a file — the classifier has to read the spelling.
-        "'\\\n'", "$'\\\n'", '""\'\\\n\'', "'\\\n''\\\n'", "''$'\\\n'", "$''", '$""', "''$''", "$''\"\"", "''\\\n''", "\"\"\\\n\"\"", "$'x'", "\\", "\\\\", "'\\'", '"\\\\"', "x\\", "''\\\\", "a\\b", '2\\', '"2"\\',
+        "$\\\n''", '$\\\n""', "''$\\\n''", "$", "'\\\n'", "$'\\\n'", '""\'\\\n\'', "'\\\n''\\\n'", "''$'\\\n'", "$''", '$""', "''$''", "$''\"\"", "''\\\n''", "\"\"\\\n\"\"", "$'x'", "\\", "\\\\", "'\\'", '"\\\\"', "x\\", "''\\\\", "a\\b", '2\\', '"2"\\',
         # A substitution in the operand, which bash runs.
         "-$(:)", "-`:`", "-$(:)f", "$(:)", "-x$(:)",
         # An assignment, which is a prefix rather than a command name.
