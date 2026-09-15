@@ -2011,9 +2011,7 @@ fn every_empty_quoted_fragment_opens_nothing() {
     for cmd in [
         "true > $''",
         "true >& $''",
-        "true > $\"\"",
         "true > ''$''",
-        "true > $''\"\"",
         "true > ''''",
         "true > ''\\\n''",
         "true > \"\"\\\n\"\"",
@@ -2039,6 +2037,45 @@ fn a_quoted_fragment_with_content_still_names_a_file() {
                 Decision::Deny(_),
             ),
             "a non-empty quoted fragment lost its write: {cmd:?}",
+        );
+    }
+}
+
+#[skuld::test]
+fn a_continuation_inside_single_quotes_is_content() {
+    // bash removes `\`+newline before tokenising, but only outside quotes and
+    // inside double quotes. Inside `'…'` and `$'…'` both characters are
+    // ordinary content, so the fragment is not empty and the word names a
+    // file. Verified against bash 5.3: `> '\`⏎`'` and `> $'\`⏎`'` each create
+    // a file, while `> "\`⏎`"` and `> ''\`⏎`''` create nothing.
+    //
+    // Stripping continuations across the whole spelling in one pass discarded
+    // the word entirely, losing the write — a regression against this
+    // branch's own previous commit.
+    for cmd in [
+        "true > '\\\n'",
+        "true > $'\\\n'",
+        "true > ''$'\\\n'",
+        "true > \"\"'\\\n'",
+        "true > '\\\n''\\\n'",
+    ] {
+        assert!(
+            matches!(
+                check(cmd, &["Bash(true)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "a continuation inside quotes lost its write: {cmd:?}",
+        );
+    }
+    // The other side of the same rule: outside quotes, and inside double
+    // quotes, the continuation really does come off and the target is empty.
+    for cmd in ["true > \"\\\n\"", "true > ''\\\n''", "true > \"\"\\\n\"\""] {
+        assert!(
+            !matches!(
+                check(cmd, &["Bash(true)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "an empty target invented a write: {cmd:?}",
         );
     }
 }

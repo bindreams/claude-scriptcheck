@@ -96,7 +96,7 @@ def words():
         # Backslash filenames. thaum drops an escaped backslash inside double
         # quotes (thaum#49), so the value it reports is empty or short while
         # bash still names a file — the classifier has to read the spelling.
-        "$''", '$""', "''$''", "$''\"\"", "''\\\n''", "\"\"\\\n\"\"", "$'x'", "\\", "\\\\", "'\\'", '"\\\\"', "x\\", "''\\\\", "a\\b", '2\\', '"2"\\',
+        "'\\\n'", "$'\\\n'", '""\'\\\n\'', "'\\\n''\\\n'", "''$'\\\n'", "$''", '$""', "''$''", "$''\"\"", "''\\\n''", "\"\"\\\n\"\"", "$'x'", "\\", "\\\\", "'\\'", '"\\\\"', "x\\", "''\\\\", "a\\b", '2\\', '"2"\\',
         # A substitution in the operand, which bash runs.
         "-$(:)", "-`:`", "-$(:)f", "$(:)", "-x$(:)",
         # An assignment, which is a prefix rather than a command name.
@@ -207,7 +207,16 @@ def run_probe(d, op, w, template, seed):
         with open(ap) as f:
             raw = f.read()
         argv = raw.split("\0")[:-1] if raw else []
-    missing = [m for m in re.findall(r"line \d+: (.*): No such file or directory", r.stderr) if m]
+    # Non-greedy and DOTALL: a filename can contain a newline, and without
+    # both, bash naming it in the error is never captured — the read it
+    # attempted then looks like an access the checker invented.
+    missing = [
+        m
+        for m in re.findall(
+            r"line \d+: (.*?): No such file or directory", r.stderr, re.DOTALL
+        )
+        if m
+    ]
     return argv, created, missing, r.stderr.strip()
 
 def bash_observe(idx, op, w, template):
@@ -299,7 +308,10 @@ def main():
             expected |= {("Read", resolve(t)) for t in targets}
         actual = set()
         for r in demands.get(cmd, []):
-            m = re.match(r"^(Read|Write)\((.*)\)$", r)
+            # DOTALL: a filename can contain a newline (`> '\<newline>'` names one),
+            # and without it `.` stops at the newline, the demand never matches,
+            # and a correctly derived access is scored as a bypass.
+            m = re.match(r"^(Read|Write)\((.*)\)$", r, re.DOTALL)
             if m:
                 actual.add((m.group(1), m.group(2)))
         return dict(cmd=cmd, argv=argv, created=created, missing=missing, seeded=seeded,

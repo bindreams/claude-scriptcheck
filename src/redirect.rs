@@ -439,36 +439,60 @@ fn without_continuations(text: &str) -> String {
 /// Is this target one of the spellings that opens nothing?
 ///
 /// One family does: a run of **empty quoted fragments**. Verified against bash
-/// 5.3 — the `''`, `""`, `$''` and `$""` forms, in any combination, each report
-/// "No such file or directory" (or "Bad file descriptor" for `>&`) and create
-/// nothing, including when a line continuation splits them. A quoted fragment
-/// with content names a file: `$'x'` writes `x`.
+/// 5.3 — `''`, `""`, `$''` in any combination create nothing, and a fragment
+/// carrying content names a file, so `$'x'` writes `x`.
 ///
-/// Counting the spelling's bytes in pairs is not enough, and got this wrong
-/// twice: `$''` is three bytes, and a continuation can split a pair.
-/// Continuations come off first because bash removes them before it tokenises.
+/// A line continuation is where this gets delicate, and three earlier versions
+/// of this rule got it wrong. bash removes `\` + newline before tokenising,
+/// but only outside quotes and inside double quotes. Inside `'…'` and `$'…'`
+/// both characters are ordinary content, so the fragment is *not* empty:
 ///
-/// With no source to read this returns false, and the word is treated as naming
-/// a file — see `value_understates_the_file` for what that costs.
+/// ```text
+/// > "\<newline>"      opens nothing — the continuation came off
+/// > ''\<newline>''    opens nothing — it sat between two empty fragments
+/// > '\<newline>'      writes a file named backslash-newline
+/// > $'\<newline>'     the same
+/// > ''$'\<newline>'   the same; one non-empty fragment is enough
+/// ```
+///
+/// So the spelling is consumed fragment by fragment rather than stripped in
+/// one pass. `$"…"` is absent deliberately: such a word never resolves
+/// statically, so `accesses_for_redirect` returns before this is consulted.
+///
+/// With no source to read this returns false, and the word is treated as
+/// naming a file — see `value_understates_the_file` for what that costs.
 fn opens_nothing(word: &Word, source: Option<&str>) -> bool {
     let Some(spelling) = source.and_then(|s| s.get(word.span.start.0..word.span.end.0)) else {
         return false;
     };
-    let spelling = spelling.replace("\\\n", "");
-    if spelling.is_empty() {
-        return false;
-    }
-    let mut rest = spelling.as_str();
+    let mut rest = spelling;
+    let mut saw_a_fragment = false;
     loop {
-        let shorter = rest
-            .strip_prefix("''")
-            .or_else(|| rest.strip_prefix("\"\""))
-            .or_else(|| rest.strip_prefix("$''"))
-            .or_else(|| rest.strip_prefix("$\"\""));
-        match shorter {
-            Some(tail) => rest = tail,
-            None => return rest.is_empty(),
+        // Outside a fragment, a continuation is removed.
+        if let Some(tail) = rest.strip_prefix("\\\n") {
+            rest = tail;
+            continue;
         }
+        if let Some(tail) = rest.strip_prefix("''").or_else(|| rest.strip_prefix("$''")) {
+            rest = tail;
+            saw_a_fragment = true;
+            continue;
+        }
+        // Inside double quotes a continuation is removed too, so such a
+        // fragment is empty when nothing but continuations separates the
+        // quotes.
+        if let Some(tail) = rest.strip_prefix('"') {
+            let Some(end) = tail.find('"') else {
+                return false;
+            };
+            if !tail[..end].replace("\\\n", "").is_empty() {
+                return false;
+            }
+            rest = &tail[end + 1..];
+            saw_a_fragment = true;
+            continue;
+        }
+        return saw_a_fragment && rest.is_empty();
     }
 }
 
