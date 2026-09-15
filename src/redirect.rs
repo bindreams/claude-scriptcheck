@@ -438,22 +438,38 @@ fn without_continuations(text: &str) -> String {
 
 /// Is this target one of the spellings that opens nothing?
 ///
-/// Exactly one family does: a run of empty quote pairs. Verified against bash
-/// 5.3 — `> ""`, `> ''`, `> ''""` and `> ""''""` each report "No such file or
-/// directory" and create nothing, while **every** other spelling names a file.
+/// One family does: a run of **empty quoted fragments**. Verified against bash
+/// 5.3 — the `''`, `""`, `$''` and `$""` forms, in any combination, each report
+/// "No such file or directory" (or "Bad file descriptor" for `>&`) and create
+/// nothing, including when a line continuation splits them. A quoted fragment
+/// with content names a file: `$'x'` writes `x`.
 ///
-/// With no source to read, an empty value is treated as naming a file. Missing
-/// a write is a bypass and inventing one is a prompt, so uncertainty resolves
-/// toward the prompt.
+/// Counting the spelling's bytes in pairs is not enough, and got this wrong
+/// twice: `$''` is three bytes, and a continuation can split a pair.
+/// Continuations come off first because bash removes them before it tokenises.
+///
+/// With no source to read this returns false, and the word is treated as naming
+/// a file — see `value_understates_the_file` for what that costs.
 fn opens_nothing(word: &Word, source: Option<&str>) -> bool {
     let Some(spelling) = source.and_then(|s| s.get(word.span.start.0..word.span.end.0)) else {
         return false;
     };
-    !spelling.is_empty()
-        && spelling
-            .as_bytes()
-            .chunks(2)
-            .all(|pair| pair == b"''" || pair == b"\"\"")
+    let spelling = spelling.replace("\\\n", "");
+    if spelling.is_empty() {
+        return false;
+    }
+    let mut rest = spelling.as_str();
+    loop {
+        let shorter = rest
+            .strip_prefix("''")
+            .or_else(|| rest.strip_prefix("\"\""))
+            .or_else(|| rest.strip_prefix("$''"))
+            .or_else(|| rest.strip_prefix("$\"\""));
+        match shorter {
+            Some(tail) => rest = tail,
+            None => return rest.is_empty(),
+        }
+    }
 }
 
 /// Does the spelling name a file the parsed value does not describe?
@@ -467,6 +483,14 @@ fn opens_nothing(word: &Word, source: Option<&str>) -> bool {
 ///   `> "\\"` reports an empty value while bash writes `\`
 ///
 /// In both the file is the value with a backslash appended.
+/// # With no source
+///
+/// An empty value is treated as naming a file, and that is **not** a prompt: it
+/// derives a write to the working directory, which an enclosing `Deny` turns
+/// into an authoritative refusal in every mode. The trade is deliberate — the
+/// commands it blocks are ones bash itself rejects as redirection errors, so a
+/// false deny costs a no-op, while the alternative misses a real write, and a
+/// backtick substitution has no source to read.
 fn value_understates_the_file(word: &Word, source: Option<&str>) -> bool {
     if opens_nothing(word, source) {
         return false;
@@ -480,7 +504,7 @@ fn value_understates_the_file(word: &Word, source: Option<&str>) -> bool {
             .is_some_and(|value| value.is_empty())
 }
 
-/// Could this word's first source character be a bare `-`?/// Could this word's first source character be a bare `-`?
+/// Could this word's first source character be a bare `-`?
 ///
 /// Answerable without the source, because a fragment's *kind* says what its
 /// first source character can be: a quoted fragment starts with a quote, a

@@ -2000,3 +2000,45 @@ fn a_dangling_backslash_beats_the_descriptor_rules() {
         );
     }
 }
+
+#[skuld::test]
+fn every_empty_quoted_fragment_opens_nothing() {
+    // The family is quoted *fragments*, not two-byte pairs. Verified against
+    // bash 5.3: `$''` and `$""` open nothing just as `''` and `""` do, in any
+    // combination, and a line continuation may split them because bash removes
+    // continuations before it tokenises. Counting bytes in pairs missed both,
+    // and produced a false Deny in all six modes on a command bash refuses.
+    for cmd in [
+        "true > $''",
+        "true >& $''",
+        "true > $\"\"",
+        "true > ''$''",
+        "true > $''\"\"",
+        "true > ''''",
+        "true > ''\\\n''",
+        "true > \"\"\\\n\"\"",
+    ] {
+        assert!(
+            !matches!(
+                check(cmd, &["Bash(true)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "an empty target invented a write: {cmd:?}",
+        );
+    }
+}
+
+#[skuld::test]
+fn a_quoted_fragment_with_content_still_names_a_file() {
+    // The control for the rule above: emptiness is the whole of it, so a
+    // fragment carrying anything names a file. Verified — `> $'x'` writes `x`.
+    for cmd in ["true > $'x'", "true > ''x", "true > x''"] {
+        assert!(
+            matches!(
+                check(cmd, &["Bash(true)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "a non-empty quoted fragment lost its write: {cmd:?}",
+        );
+    }
+}
