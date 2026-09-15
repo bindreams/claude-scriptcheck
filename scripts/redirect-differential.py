@@ -352,6 +352,16 @@ def main():
     # spelling would have suppressed the whole escaped family — thousands of
     # cases that compare correctly and are the point of the corpus.
     def path_is_mangled(r):
+        # Both directions are expected for these: the access bash performed is
+        # missing under its true name and present under the mangled one, so a
+        # mangled case shows up as a paired miss and extra.
+        #
+        # The guard is that an access was derived at all. Deriving *nothing* for
+        # a backslash filename is a bypass, not a spelling difference — that is
+        # exactly how `>& \` hid a write behind the vacuous digits rule, and
+        # suppressing it by name would have hidden the fix as well.
+        if not r["actual"]:
+            return False
         return any("\\" in name for name in list(r["created"]) + list(r["missing"]))
 
     bypasses, extras, unobservable, unresolvable, comment_split, mangled = [], [], 0, 0, 0, 0

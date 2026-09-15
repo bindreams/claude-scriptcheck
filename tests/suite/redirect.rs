@@ -1832,12 +1832,12 @@ fn an_assignment_demoted_to_an_argument_is_not_an_env_prefix() {
     // which words are assignments is stale. Counting it as an environment
     // prefix demands a `Bash(...)` rule for a variable nothing sets.
     let result = check(">&-cat >&-/tmp/in FOO=1 zzz", &[], &[]);
+    // The note lives in `notes`, never in `missing_rules`, so asserting on the
+    // note's text there is vacuously true. What the prefix would actually cost
+    // is a `Bash(...)` demand on a command that is otherwise file-only.
     assert!(
-        !result
-            .missing_rules
-            .iter()
-            .any(|r| r.contains("environment assignment")),
-        "a demoted assignment was read as an environment prefix: {:?}",
+        !result.missing_rules.iter().any(|r| r.starts_with("Bash(")),
+        "a demoted assignment forced a Bash rule: {:?}",
         result.missing_rules,
     );
 }
@@ -1884,4 +1884,40 @@ fn a_comment_does_not_silence_a_later_statement_in_a_substitution() {
         "a later statement inside a substitution was silenced: {:?}",
         result.missing_rules,
     );
+}
+
+#[skuld::test]
+fn a_dangling_backslash_is_denied_like_any_other_write() {
+    // The verdict is what matters, not merely that an access exists. `> \`
+    // creates a file in the working directory, so a deny over that directory
+    // must fire — an earlier fix recorded the write but resolved it to the
+    // filesystem root, which lands outside the denied tree and turns an
+    // authoritative deny into a clean allow.
+    //
+    // Verified against bash 5.3: `> \`, `>& \`, `> ''\` and `> ""\` each
+    // create a file called `\`; `> ""` and `> ''` open nothing.
+    for cmd in [
+        "true > \\",
+        "true >& \\",
+        "true > ''\\",
+        "true > \"\"\\",
+        "cat /tmp/in > \\",
+    ] {
+        assert!(
+            matches!(
+                check(cmd, &["Bash(true)", "Bash(cat *)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "a dangling backslash escaped a deny over its own directory: {cmd:?}",
+        );
+    }
+    for cmd in ["true > \"\"", "true > ''"] {
+        assert!(
+            !matches!(
+                check(cmd, &["Bash(true)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "an empty target invented a write: {cmd:?}",
+        );
+    }
 }

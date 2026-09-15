@@ -70,7 +70,13 @@ pub fn accesses_for_redirect(
             // "ambiguous redirect" error that opens nothing, verified for
             // `0>&f`, `2>&f`, `3>&f` and `10>&f`.
             let redirects_stdout = matches!(redirect.fd, None | Some(1));
-            if !redirects_stdout || names_a_descriptor(w) {
+            if !redirects_stdout {
+                return Vec::new();
+            }
+            // Checked before the descriptor rules: "every byte is a digit" is
+            // vacuously true over an empty value, so `>& \` would otherwise be
+            // read as a descriptor and its write lost.
+            if !ends_in_a_dangling_backslash(w, source) && names_a_descriptor(w) {
                 return Vec::new();
             }
             // A bare leading dash closes the descriptor and ends the token;
@@ -81,7 +87,9 @@ pub fn accesses_for_redirect(
             // opposite answers, so both are taken: the write is recorded here
             // and the operand is recovered anyway. One of them is spurious and
             // neither is missing.
-            if begins_with_bare_dash(w, source) == Some(true) {
+            if !ends_in_a_dangling_backslash(w, source)
+                && begins_with_bare_dash(w, source) == Some(true)
+            {
                 return Vec::new();
             }
             (w, &[Write])
@@ -94,32 +102,20 @@ pub fn accesses_for_redirect(
         return Vec::new();
     };
     // An empty *value* is not always an empty target. `> ""` and `> ''` are
-    // redirection errors that open nothing — but a dangling backslash also
-    // resolves to nothing, and `> \` creates a file *named* `\`, because the
-    // backslash quotes a newline that never arrived. The two are told apart by
-    // how the word was written: only an unquoted literal can be empty by
-    // escaping, so a word made entirely of quoted fragments is the error case.
-    let path = if path.is_empty() {
-        let quoted_empty = !word
-            .parts
-            .iter()
-            .any(|f| matches!(f, Fragment::Literal(_) | Fragment::Glob(_)));
-        match source.and_then(|s| s.get(word.span.start.0..word.span.end.0)) {
-            _ if quoted_empty => return Vec::new(),
-            // The spelling is the filename: bash removed nothing from it. A
-            // backslash *before a newline* would be a line continuation
-            // instead, but thaum rejects that outright — `true > \`⏎ is an
-            // unterminated redirection — so it never reaches here.
-            Some(spelling) => spelling.to_string(),
-            // No source to read the spelling from. Recording nothing would
-            // drop a write bash performs, so the one spelling that reaches
-            // here is assumed.
-            None => "\\".to_string(),
+    // redirection errors that open nothing, but a dangling backslash also
+    // resolves to nothing and names a file called `\`.
+    let resolved = if path.is_empty() {
+        if !ends_in_a_dangling_backslash(word, source) {
+            return Vec::new();
         }
+        // Joined here rather than through `resolve_path`, which reads a leading
+        // backslash as a Windows-style absolute path and collapses this to the
+        // filesystem root — a write inside a denied directory then lands
+        // outside it and the deny stops firing. #71.
+        format!("{}/\\", cwd.trim_end_matches('/'))
     } else {
-        path
+        file_access::resolve_path(&path, cwd)
     };
-    let resolved = file_access::resolve_path(&path, cwd);
     kinds
         .iter()
         .map(|kind| FileAccess::exact(resolved.clone(), *kind))
@@ -158,10 +154,6 @@ fn names_a_descriptor(word: &Word) -> bool {
     if s == "-" || s.bytes().all(|b| b.is_ascii_digit()) {
         return true;
     }
-    // An unquoted trailing dash makes bash read the whole word as a descriptor
-    // spec whatever precedes it — `>&2-` moves fd 2, `>&x-` is an "ambiguous
-    // redirect" — and neither opens a file. Quote that one character and it is
-    // an ordinary filename again: `>&"2"-` moves, but `>&2"-"` writes `2-`.
     // An unquoted trailing dash makes bash read the whole word as a descriptor
     // spec whatever precedes it — `>&2-` moves fd 2, `>&x-` is an "ambiguous
     // redirect" — and neither opens a file. Quote that one character and it is
@@ -439,6 +431,21 @@ impl RecoveredOperand {
 /// `\` followed by a newline removed, as bash removes it before tokenising.
 fn without_continuations(text: &str) -> String {
     text.replace("\\\n", "")
+}
+
+/// Does this word end in a backslash that quotes nothing?
+///
+/// A backslash at the very end of the input has no following character to
+/// quote, so it survives as an ordinary one — and it is the *entire* filename
+/// however many empty quoted fragments precede it. Verified against bash 5.3:
+/// `> \`, `>& \`, `> ''\` and `> ""\` each create a file called `\`, while
+/// `> ""` and `> ''` open nothing at all.
+fn ends_in_a_dangling_backslash(word: &Word, source: Option<&str>) -> bool {
+    word.try_to_static_string()
+        .is_some_and(|value| value.is_empty())
+        && source
+            .and_then(|s| s.get(word.span.start.0..word.span.end.0))
+            .is_some_and(|spelling| spelling.ends_with('\\'))
 }
 
 /// Could this word's first source character be a bare `-`?
