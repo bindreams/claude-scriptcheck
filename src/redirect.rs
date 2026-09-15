@@ -106,7 +106,10 @@ pub fn accesses_for_redirect(
             .any(|f| matches!(f, Fragment::Literal(_) | Fragment::Glob(_)));
         match source.and_then(|s| s.get(word.span.start.0..word.span.end.0)) {
             _ if quoted_empty => return Vec::new(),
-            // The spelling is the filename: bash removed nothing from it.
+            // The spelling is the filename: bash removed nothing from it. A
+            // backslash *before a newline* would be a line continuation
+            // instead, but thaum rejects that outright — `true > \`⏎ is an
+            // unterminated redirection — so it never reaches here.
             Some(spelling) => spelling.to_string(),
             // No source to read the spelling from. Recording nothing would
             // drop a write bash performs, so the one spelling that reaches

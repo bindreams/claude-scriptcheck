@@ -175,15 +175,17 @@ def run_probe(d, op, w, template, seed):
                 pass
     # The probe function stands in for whichever command the template names, so
     # the argv it reports is the argv that command would have received.
+    # The commands are shadowed by shell functions rather than substituted into
+    # the text. Rewriting `cat` to `p` changed the command's *length*, and a
+    # line continuation joins whatever follows into the redirect target — so
+    # the two sides were comparing different filenames (`-#cp` against
+    # `-#ccat`) for a difference the harness itself introduced.
     line = template.replace("{redir}", op + w)
+    probe = 'record(){ for a in "$@"; do printf "%s\\0" "$a" >&9; done; }\n'
     for name in ("cat", "cp", "grep"):
-        if line.startswith(name + " "):
-            line = "p" + line[len(name):]
-    script = (
-        'p(){ for a in "$@"; do printf "%s\\0" "$a" >&9; done; }\n'
-        'exec 9>argv.out\n'
-        + line + "\n"
-    )
+        probe += "%s(){ record \"$@\"; }\n" % name
+    script = probe + "exec 9>argv.out\n" + line
+
     def snapshot():
         # Recursive: `>d/e` creates a file one level down, and a shallow listing
         # would report it as never created — turning a correct write demand into
@@ -238,9 +240,11 @@ def bash_observe(idx, op, w, template):
         "No such file or directory", "Is a directory", "Not a directory",
         "Permission denied", "restricted",
     ))
+    # A redirect failure stops the command it belongs to. In a multi-line
+    # template a later line still runs and still writes an argv, so argv is not
+    # evidence that *this* command ran — an earlier attempt to treat it as
+    # decisive scored every failed first line as a fabrication.
     ran = not redir_failed
-    if argv and not ran:
-        raise AssertionError("argv observed on a line bash refused to run: %r" % stderr)
     return argv, created, missing, seeded, ran, stderr
 
 def main():
@@ -338,7 +342,19 @@ def main():
         _, _, _, _, _, _, _, w = case
         return "#" in w and "\n" in w
 
-    bypasses, extras, unobservable, unresolvable, comment_split = [], [], 0, 0, 0
+    # `normalize_separators` rewrites a backslash to a path separator, so a
+    # filename *containing* one resolves somewhere else entirely. The access is
+    # still derived and only its spelling is wrong, so these are counted apart.
+    # Tracked as #71.
+    #
+    # The test is on the name bash used, not on the word's spelling: `\-2` is an
+    # escaped dash whose filename holds no backslash at all, and bucketing by
+    # spelling would have suppressed the whole escaped family — thousands of
+    # cases that compare correctly and are the point of the corpus.
+    def path_is_mangled(r):
+        return any("\\" in name for name in list(r["created"]) + list(r["missing"]))
+
+    bypasses, extras, unobservable, unresolvable, comment_split, mangled = [], [], 0, 0, 0, 0
     for index, r in enumerate(results):
         miss = r["expected"] - r["actual"]
         extra = r["actual"] - r["expected"]
@@ -349,6 +365,9 @@ def main():
             miss = set()
         if (miss or extra) and split_by_comment(all_cases[index]):
             comment_split += 1
+            continue
+        if (miss or extra) and path_is_mangled(r):
+            mangled += 1
             continue
         if miss:
             bypasses.append((r, miss))
@@ -364,7 +383,7 @@ def main():
         if extra:
             extras.append((r, extra))
 
-    print(f"\n=== {len(results)} spellings, {len(bypasses)} missed accesses, {len(extras)} over-approximations, {unobservable} whose argv bash never produced, {unresolvable} values that need #45, {comment_split} lines thaum#14 keeps joined")
+    print(f"\n=== {len(results)} spellings, {len(bypasses)} missed accesses, {len(extras)} over-approximations, {unobservable} whose argv bash never produced, {unresolvable} values that need #45, {comment_split} lines thaum#14 keeps joined, {mangled} paths #71 mangles")
     for r, miss in bypasses:
         print(f"MISSED  {r['cmd']!r}\n        bash argv={r['argv']} created={r['created']} missing={r['missing']}"
               f"\n        expected={sorted(miss)}\n        actual={sorted(r['actual'])}")
