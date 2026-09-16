@@ -611,13 +611,23 @@ impl<'a> PermissionChecker<'a> {
             // it is not file-only, exactly as `find -exec` is not. The list is
             // of inert names rather than dangerous ones because no enumeration
             // of dangerous names terminates; see `env_prefix`.
-            // Only the assignments that are still *prefix* assignments count.
-            // A comment covering one means it was never set, and a command name
-            // recovered ahead of one demotes it to an ordinary argument —
-            // `>&-cat >&-in FOO=1` passes `FOO=1` to `cat` and sets nothing.
+            // The assignments the *parser* saw that are still prefix
+            // assignments: a command name recovered ahead of one demotes it to
+            // an ordinary argument, since `>&-cat >&-in FOO=1` passes `FOO=1`
+            // to `cat` and sets nothing.
+            //
+            // This is only the subtractive half. An assignment recovered *out*
+            // of a `>&-word` is a prefix assignment bash really applies —
+            // `>&-GIT_EXTERNAL_DIFF=./evil.sh git diff` sets the variable — and
+            // it does not reach this scan, so the inert-name guardrail never
+            // sees it. `main` has the same hole; closing it is #72.
             let unmodelled_env: Vec<&str> = cmd
                 .assignments
                 .iter()
+                // Defensive: no reachable input is known, because a comment
+                // covering a parser-classified assignment also silences every
+                // command word after it, and `check_command` returns before
+                // this scan.
                 .filter(|a| !self.is_commented_out(a.span.start.0))
                 .filter(|a| command_word_at.is_none_or(|at| a.span.start.0 < at))
                 .map(|a| a.name.as_str())

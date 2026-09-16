@@ -640,8 +640,14 @@ pub fn recovered_operand_words<'c>(
         .filter_map(|r| {
             let operand = closed_descriptor_operand(r, source)?;
             // A word the comment covers is comment text: `cat in >&-#$(rm -rf x)`
-            // runs no `rm`. The test is containment, not "after the start" — a
-            // word past the comment's newline is ordinary code.
+            // runs no `rm`.
+            //
+            // Defensive rather than load-bearing: `command_line` already drops
+            // the words a comment covers, and weakening this to "after the
+            // comment started" was measured to change no derived access across
+            // the operand-substitution shapes. Kept because the two filters
+            // answer for different collections and agreeing by construction is
+            // cheaper than re-deriving why they agree.
             if comment
                 .is_some_and(|range| range.contains(&past_continuations(source, operand.position)))
             {

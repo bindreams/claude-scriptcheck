@@ -2114,3 +2114,50 @@ fn a_continuation_between_the_dollar_and_its_quote_comes_off() {
         "a bare dollar lost its write",
     );
 }
+
+#[skuld::test]
+fn a_comment_silences_a_compound_commands_word_list() {
+    // `for`/`case`/`select` words arrive through the word funnel, not through
+    // `check_command`'s argument filter, so the funnel's own comment gate is
+    // the only thing covering them. Verified: the for-clause after a comment
+    // never runs — an `echo` placed inside it prints nothing.
+    let result = check(
+        "cat /tmp/in >&-#c; for i in $(rm -rf /tmp/vault); do :; done",
+        &[],
+        &[],
+    );
+    assert_eq!(
+        result.missing_rules,
+        vec![format!("Read({})", canonical("/tmp/in"))],
+        "a commented-out for-clause was walked",
+    );
+}
+
+#[skuld::test]
+fn a_comment_silences_a_process_substitution() {
+    // A commented-out `<(...)` reaches `visit_nested` straight from
+    // `visit_argument`, bypassing the word funnel, so the filter there is the
+    // only protection. bash runs nothing.
+    let result = check("cat /tmp/in >&-#c <(rm -rf /tmp/vault)", &[], &[]);
+    assert_eq!(
+        result.missing_rules,
+        vec![format!("Read({})", canonical("/tmp/in"))],
+        "a commented-out process substitution was walked",
+    );
+}
+
+#[skuld::test]
+fn an_operand_substitution_past_the_newline_is_walked() {
+    // Pins the containment test in `recovered_operand_words` specifically: the
+    // comment ends at the newline, so the operand on the next line is real and
+    // the substitution inside it runs. Weakening containment to "after the
+    // comment started" drops this write while every other test stays green.
+    let result = check("cat /tmp/in >&-#c\\\ncat >&-$(rm -rf /tmp/vault)", &[], &[]);
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Write({}/**)", canonical("/tmp/vault"))),
+        "an operand substitution past the comment's newline was dropped: {:?}",
+        result.missing_rules,
+    );
+}
