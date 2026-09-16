@@ -14,6 +14,8 @@ mod integration;
 mod path_util;
 #[path = "suite/permission.rs"]
 mod permission;
+#[path = "suite/redirect.rs"]
+mod redirect;
 #[path = "suite/repo_infra.rs"]
 mod repo_infra;
 #[path = "suite/settings.rs"]

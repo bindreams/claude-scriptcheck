@@ -1,0 +1,421 @@
+#!/usr/bin/env python3
+"""Differential test: every generated redirect spelling, real bash vs the hook.
+
+Redirect classification is derived from bash's tokenisation rather than from a
+table of spellings, and this is what checks the derivation. For each spelling it
+observes what bash actually did — the argv the command received, the files it
+created, the file it reported it could not open — and compares that against the
+accesses `src/redirect.rs` derives. A file bash touched with no demand is a
+bypass; a demand bash's behaviour does not justify is an over-approximation.
+
+Needs a real bash, so it is not part of `cargo test`. Run it before trusting a
+change to redirect classification, and extend its alphabet before trusting it
+against a new spelling — an earlier version crossed the right dimensions using
+only `"` and `'`, passed every case, and said nothing about the escaped family
+bash treats asymmetrically.
+
+    scripts/redirect-differential.py
+
+Exits non-zero if any access was missed or fabricated.
+"""
+import os, re, shutil, subprocess, sys, tempfile
+from concurrent.futures import ThreadPoolExecutor
+
+BASH = shutil.which("bash") or "/bin/bash"
+ROOT = os.path.realpath(sys.argv[1]) if len(sys.argv) > 1 else os.path.dirname(
+    os.path.dirname(os.path.realpath(__file__)))
+OUT = os.path.realpath(sys.argv[2]) if len(sys.argv) > 2 else tempfile.mkdtemp(
+    prefix="redirect-differential-")
+os.makedirs(OUT, exist_ok=True)
+
+# Operators that can name a file, and how the named word is used.
+OPS = {
+    ">":   "write",
+    ">>":  "write",
+    ">|":  "write",
+    "<":   "read",
+    "<>":  "readwrite",
+    ">&":  "write",
+    "1>&": "write",
+    "&>":  "write",
+    "&>>": "write",
+    "<&":  "none",
+    "2>&": "none",
+}
+
+def spellings_of(ch):
+    """Every way to write one character that bash reduces to `ch`."""
+    return [ch, "\\" + ch, '"%s"' % ch, "'%s'" % ch]
+
+BODIES = ["f", "ff", "2", "22", "x", "d/e"]
+
+def words():
+    """Redirect target words, crossing dash position with how it is written."""
+    seen = set()
+    out = []
+    def add(w):
+        if w not in seen:
+            seen.add(w)
+            out.append(w)
+    for body in BODIES:
+        for b in (body, '"%s"' % body, "'%s'" % body, body[0] + '"%s"' % body[1:] if len(body) > 1 else body):
+            add(b)
+            for d in spellings_of("-"):
+                add(d + b)          # leading dash
+                add(b + d)          # trailing dash
+                add(d + b + d)      # both
+    for d in spellings_of("-"):
+        add(d)                      # the bare close form and its disguises
+        add(d + d)
+    # Whole words that are already complete spellings: crossing these with the
+    # quoting loop above would produce a backslash inside quotes, which bash
+    # keeps literally and which is a filename question rather than a redirect
+    # one.
+    for w in ["a\\ b", '"a b"', "'a b'", "-a\\ b", "\\-a\\ b", '-"a b"',
+              "d\\/e", "-d\\/e", '2"2"', '\\-2"2"', '"-2"suffix', "\\-2suffix",
+              "sub/-f", "-sub/f", "f\\-", '"2"-', '2"-"']:
+        add(w)
+    add('""')
+    add("''")
+    add('""' + "-")
+    add("-" + '""')
+    # The constructs the classifier reads the *source* for. Without these the
+    # sweep says nothing about the code that decides them, and two defects in
+    # that code survived six review rounds while this reported zero.
+    for w in [
+        # A line continuation: bash removes it before tokenising, so a word can
+        # begin, and a name can be split, across one.
+        "\\\n-f", "-\\\nf", "-F\\\nOO=1", "\\\n-FOO=1", "-f\\\n-",
+        # A comment: ends the line, and what follows it is text — including a
+        # substitution in the same word, and a continuation at its end.
+        "-#f", "-#f zzz", '-"#"f', "-\\#f", "-#$(:)", "-#f\\\n",
+        # A backslash inside a comment is comment text, not a continuation, so
+        # the next line is ordinary code. thaum joins the lines into one word,
+        # which is what makes this worth crossing.
+        "-#c\\", "-#c\\\n",
+        # Backslash filenames. thaum drops an escaped backslash inside double
+        # quotes (thaum#49), so the value it reports is empty or short while
+        # bash still names a file — the classifier has to read the spelling.
+        "$\\\n''", '$\\\n""', "''$\\\n''", "$", "'\\\n'", "$'\\\n'", '""\'\\\n\'', "'\\\n''\\\n'", "''$'\\\n'", "$''", '$""', "''$''", "$''\"\"", "''\\\n''", "\"\"\\\n\"\"", "$'x'", "\\", "\\\\", "'\\'", '"\\\\"', "x\\", "''\\\\", "a\\b", '2\\', '"2"\\',
+        # A substitution in the operand, which bash runs.
+        "-$(:)", "-`:`", "-$(:)f", "$(:)", "-x$(:)",
+        # An assignment, which is a prefix rather than a command name.
+        "-FOO=1", "-a[0]=1", "-1FOO=1", "-FOO+=1", '-FOO="a b"',
+    ]:
+        add(w)
+    return out
+
+WORDS = words()
+
+# Each command maps argument *positions* to roles differently, so a spliced
+# operand landing in the wrong slot changes the derived accesses rather than
+# disappearing into an undifferentiated set of reads.
+def roles_cat(argv):
+    return [("Read", a) for a in argv]
+
+def roles_cp(argv):
+    if len(argv) < 2:
+        return [("Write", a) for a in argv]
+    return [("Read", a) for a in argv[:-1]] + [("Write", argv[-1])]
+
+def roles_grep(argv):
+    return [("Read", a) for a in argv[1:]]
+
+def roles_none(argv):
+    # A redirect with no command word: bash performs the redirections and, for
+    # a close form, runs whatever operand it recovered. Either way no file
+    # access comes from the argument list.
+    return []
+
+# The fourth field says whether the command's own arguments can name files.
+# Where they cannot, every access the checker derives came from the redirect, so
+# the comparison holds even for a line bash refused to run — bash performed no
+# accesses at all, and the checker should have derived none.
+# Fields: whether the command's own arguments can name files, and whether it is
+# guaranteed to run. The second matters because bash reports a redirect it could
+# not open and a command it could not execute in the same words, and where the
+# recovered operand *becomes* the command — `>&-d/e` runs `d/e` — the message is
+# about the command. Only a family whose command always runs can attribute that
+# message to the redirect.
+COMMANDS = [
+    ("cat", roles_cat, "cat in.txt {redir} zzz", True, True),
+    ("cp", roles_cp, "cp in.txt {redir} zzz", True, True),
+    ("grep", roles_grep, "grep in.txt {redir} zzz", True, True),
+    ("true", roles_none, "true {redir}", False, True),
+    ("eval", roles_none, "eval x {redir}", False, True),
+    # A second line, so a comment's right-hand bound is exercised: what follows
+    # the newline is ordinary code that bash runs.
+    ("twoline", roles_cat, "cat in.txt {redir}\ncat in2.txt", True, True),
+    ("", roles_none, "{redir}", False, False),
+    ("assign", roles_none, "FOO=x {redir}", False, False),
+]
+
+def cases():
+    for name, roles, template, args_bear_files, command_runs in COMMANDS:
+        for op, mode in OPS.items():
+            for w in WORDS:
+                yield name, roles, template, args_bear_files, command_runs, op, mode, w
+
+def run_probe(d, op, w, template, seed):
+    """One bash run in a fresh directory; `seed` names files to create first."""
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    for name in ("in.txt", "in2.txt"):
+        with open(os.path.join(d, name), "w") as f:
+            f.write("data\n")
+    # Words like `d/e` and `sub/f` name a path, and without their parent the
+    # redirect fails on every one of them — a whole family quietly testing that
+    # bash refuses to run.
+    for parent in ("d", "sub"):
+        os.makedirs(os.path.join(d, parent), exist_ok=True)
+    for name in seed:
+        if name and not os.path.isabs(name):
+            try:
+                with open(os.path.join(d, name), "w") as f:
+                    f.write("seed\n")
+            except OSError:
+                pass
+    # The probe function stands in for whichever command the template names, so
+    # the argv it reports is the argv that command would have received.
+    # The commands are shadowed by shell functions rather than substituted into
+    # the text. Rewriting `cat` to `p` changed the command's *length*, and a
+    # line continuation joins whatever follows into the redirect target — so
+    # the two sides were comparing different filenames (`-#cp` against
+    # `-#ccat`) for a difference the harness itself introduced.
+    line = template.replace("{redir}", op + w)
+    probe = 'record(){ for a in "$@"; do printf "%s\\0" "$a" >&9; done; }\n'
+    for name in ("cat", "cp", "grep"):
+        probe += "%s(){ record \"$@\"; }\n" % name
+    script = probe + "exec 9>argv.out\n" + line
+
+    def snapshot():
+        # Recursive: `>d/e` creates a file one level down, and a shallow listing
+        # would report it as never created — turning a correct write demand into
+        # a fabricated one.
+        return {
+            os.path.relpath(os.path.join(root, f), d)
+            for root, _, files in os.walk(d)
+            for f in files
+        }
+
+    before = snapshot()
+    r = subprocess.run([BASH, "-c", script], cwd=d, capture_output=True, text=True)
+    created = sorted(c for c in (snapshot() - before) if c != "argv.out")
+    argv = []
+    ap = os.path.join(d, "argv.out")
+    if os.path.exists(ap):
+        with open(ap) as f:
+            raw = f.read()
+        argv = raw.split("\0")[:-1] if raw else []
+    # Non-greedy and DOTALL: a filename can contain a newline, and without
+    # both, bash naming it in the error is never captured — the read it
+    # attempted then looks like an access the checker invented.
+    missing = [
+        m
+        for m in re.findall(
+            r"line \d+: (.*?): No such file or directory", r.stderr, re.DOTALL
+        )
+        if m
+    ]
+    return argv, created, missing, r.stderr.strip()
+
+def bash_observe(idx, op, w, template):
+    """What bash did, with a second pass so a read target exists to be opened.
+
+    Pass one runs in an empty directory; if bash reports it could not open the
+    target, pass two creates exactly the file bash named and runs again, so the
+    command actually executes and its argv becomes observable. `ran` is false
+    when bash abandoned the command either way (an ambiguous redirect, an empty
+    target) — there is no argv to compare against then.
+    """
+    d = os.path.join(OUT, "c%05d" % idx)
+    argv, created, missing, stderr = run_probe(d, op, w, template, [])
+    seeded = []
+    if missing and not argv:
+        seeded = [m for m in missing if m]
+        argv2, created2, missing2, stderr2 = run_probe(d, op, w, template, seeded)
+        if argv2:
+            argv, created2_all, stderr = argv2, created2, stderr2
+            # A file bash opened for reading was seeded, so it is not "created";
+            # keep pass one's report of what the redirect named.
+            created = sorted(set(created) | (set(created2) - set(seeded)))
+            missing = missing2 or missing
+    shutil.rmtree(d, ignore_errors=True)
+    # "Did bash execute this command line?" — not "did it produce an argv",
+    # which is always false for a template with no command word and would have
+    # excluded every command-less spelling from the over-approximation check.
+    # A redirection that fails is the one thing that stops the line running;
+    # `command not found` means it ran.
+    redir_failed = any(e in stderr for e in (
+        "ambiguous redirect", "Bad file descriptor", "cannot duplicate fd",
+        "No such file or directory", "Is a directory", "Not a directory",
+        "Permission denied", "restricted",
+    ))
+    # A redirect failure stops the command it belongs to. In a multi-line
+    # template a later line still runs and still writes an argv, so argv is not
+    # evidence that *this* command ran — an earlier attempt to treat it as
+    # decisive scored every failed first line as a fabrication.
+    ran = not redir_failed
+    return argv, created, missing, seeded, ran, stderr
+
+def main():
+    all_cases = list(cases())
+    print(f"{len(all_cases)} spellings", file=sys.stderr)
+    # scriptcheck side, one batch.
+    cmds = [t.replace("{redir}", op + w) for _, _, t, _, _, op, _, w in all_cases]
+    tmp = os.path.join(OUT, "cmds")
+    with open(tmp, "w") as f:
+        f.write("\0".join(cmds))
+    casedir = os.path.join(OUT, "cwd")
+    os.makedirs(casedir, exist_ok=True)
+    real_casedir = os.path.realpath(casedir)
+    # Build the helper here rather than trusting whatever is in target/: a
+    # stale binary reports the bugs it had when it was built, against a tree
+    # that no longer has them.
+    subprocess.run(["cargo", "build", "--quiet", "--example", "file_demands"],
+                   cwd=ROOT, check=True)
+    dump = subprocess.run(
+        [os.path.join(ROOT, "target/debug/examples/file_demands"), casedir, tmp],
+        capture_output=True, text=True, check=True,
+    )
+    demands = {}
+    # NUL-terminated records: a spelling can contain a newline.
+    for line in dump.stdout.split("\0")[:-1]:
+        cmd, _, rules = line.partition("\t")
+        demands[cmd] = [r for r in rules.split("\x1f") if r]
+
+    def resolve(name):
+        return os.path.realpath(os.path.join(real_casedir, name)) if not os.path.isabs(name) else name
+
+    def run_one(i):
+        name, roles, template, args_bear_files, command_runs, op, mode, w = all_cases[i]
+        cmd = cmds[i]
+        argv, created, missing, seeded, ran, stderr = bash_observe(i, op, w, template)
+        expected = set()
+        for kind, a in roles(argv):
+            expected.add((kind, resolve(a)))
+        # What the redirect named, however bash reported it. A file it could not
+        # open is still a file it tried to open: `true >-d/e` fails only because
+        # `-d` does not exist, and the checker is right to demand the write.
+        # Reading "created nothing" as "named nothing" would score that as a
+        # fabrication.
+        targets = set(created)
+        if command_runs:
+            targets |= set(missing) | set(seeded)
+        if mode in ("write", "readwrite"):
+            expected |= {("Write", resolve(t)) for t in targets}
+        if mode in ("read", "readwrite"):
+            expected |= {("Read", resolve(t)) for t in targets}
+        actual = set()
+        for r in demands.get(cmd, []):
+            # DOTALL: a filename can contain a newline (`> '\<newline>'` names one),
+            # and without it `.` stops at the newline, the demand never matches,
+            # and a correctly derived access is scored as a bypass.
+            m = re.match(r"^(Read|Write)\((.*)\)$", r, re.DOTALL)
+            if m:
+                actual.add((m.group(1), m.group(2)))
+        return dict(cmd=cmd, argv=argv, created=created, missing=missing, seeded=seeded,
+                    ran=ran, args_bear_files=args_bear_files, command_runs=command_runs,
+                    stderr=stderr, expected=expected, actual=actual)
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        results = list(pool.map(run_one, range(len(all_cases))))
+
+    # A redirect target that does not resolve statically is dropped on purpose:
+    # recording it is issue #45's job, on its own branch. Those misses are
+    # counted apart so the alphabet can still carry expansions — they are what
+    # exercises the *operand* side — without the known gap masking a new one.
+    def value_is_unresolvable(case):
+        """Does the word's *value* need issue #45 rather than this unit?
+
+        A redirect word that cannot resolve statically is dropped on purpose,
+        and so is the value of an operand recovered from one — including from
+        `<&-` and `2>&-`, which open no file themselves but still hide an
+        argument. What this unit fixes is where the operand *sits*, not what it
+        expands to. Both are
+        counted apart so the alphabet can carry expansions — they are what
+        exercises the operand's position — without the known gap masking a new
+        defect. The checker does not silently allow these: an unresolved
+        argument makes the command demand a `Bash(...)` rule.
+        """
+        _, _, _, _, _, _, _, w = case
+        # `[` is a glob rather than an expansion, but it has the same effect
+        # here: the word does not resolve statically.
+        return any(marker in w for marker in ("$(", "`", "["))
+
+    # thaum lexes `>&-#c\<newline>` as one word (thaum#14), so a line that bash
+    # splits at the comment's newline arrives as a single command with the next
+    # line's words still attached. The comment range releases them correctly,
+    # but they belong to a command the parse never produced, so their roles are
+    # read against the wrong command. Counted apart: the checker cannot place
+    # them without a comment-aware parse. It errs in both directions: keeping a
+    # word the next command owns invents an access, and reading the shortened
+    # argument list against the wrong command can drop one — `cp in.txt` with
+    # its second operand on the next line is a write to bash and a read here.
+    def split_by_comment(case):
+        _, _, _, _, _, _, _, w = case
+        return "#" in w and "\n" in w
+
+    # `normalize_separators` rewrites a backslash to a path separator, so a
+    # filename *containing* one resolves somewhere else entirely. The access is
+    # still derived and only its spelling is wrong, so these are counted apart.
+    # Tracked as #71.
+    #
+    # The test is on the name bash used, not on the word's spelling: `\-2` is an
+    # escaped dash whose filename holds no backslash at all, and bucketing by
+    # spelling would have suppressed the whole escaped family — thousands of
+    # cases that compare correctly and are the point of the corpus.
+    def path_is_mangled(r):
+        # Both directions are expected for these: the access bash performed is
+        # missing under its true name and present under the mangled one, so a
+        # mangled case shows up as a paired miss and extra.
+        #
+        # The guard is that an access was derived at all. Deriving *nothing* for
+        # a backslash filename is a bypass, not a spelling difference — that is
+        # exactly how `>& \` hid a write behind the vacuous digits rule, and
+        # suppressing it by name would have hidden the fix as well.
+        if not r["actual"]:
+            return False
+        return any("\\" in name for name in list(r["created"]) + list(r["missing"]))
+
+    bypasses, extras, unobservable, unresolvable, comment_split, mangled = [], [], 0, 0, 0, 0
+    for index, r in enumerate(results):
+        miss = r["expected"] - r["actual"]
+        extra = r["actual"] - r["expected"]
+        if miss and value_is_unresolvable(all_cases[index]):
+            # Only the miss is expected here. An access the checker invents for
+            # such a spelling is still a fabrication and still counts.
+            unresolvable += 1
+            miss = set()
+        if (miss or extra) and split_by_comment(all_cases[index]):
+            comment_split += 1
+            continue
+        if (miss or extra) and path_is_mangled(r):
+            mangled += 1
+            continue
+        if miss:
+            bypasses.append((r, miss))
+        if extra and not r["ran"] and (r["args_bear_files"] or (not r["command_runs"] and r["stderr"])):
+            # The evidence does not separate a fabricated access from a real
+            # one: either bash never produced the argv the checker derived, or
+            # it failed in a way it reports identically for a redirect and for a
+            # command. Only over-approximation is excluded — a missed access
+            # still counts everywhere, and the `true` family, whose command
+            # always runs, keeps both directions across every spelling.
+            unobservable += 1
+            continue
+        if extra:
+            extras.append((r, extra))
+
+    print(f"\n=== {len(results)} spellings, {len(bypasses)} missed accesses, {len(extras)} over-approximations, {unobservable} whose argv bash never produced, {unresolvable} values that need #45, {comment_split} lines thaum#14 keeps joined, {mangled} paths #71 mangles")
+    for r, miss in bypasses:
+        print(f"MISSED  {r['cmd']!r}\n        bash argv={r['argv']} created={r['created']} missing={r['missing']}"
+              f"\n        expected={sorted(miss)}\n        actual={sorted(r['actual'])}")
+    for r, extra in extras:
+        print(f"EXTRA   {r['cmd']!r}\n        bash argv={r['argv']} created={r['created']} missing={r['missing']}"
+              f"\n        extra={sorted(extra)}")
+    # Both directions fail the run: a missed access is a bypass, and a
+    # fabricated one is a deny the user cannot lift.
+    return 1 if bypasses or extras else 0
+
+sys.exit(main())
