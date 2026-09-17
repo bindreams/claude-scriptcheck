@@ -24,15 +24,17 @@ pub enum AccessScope {
     ///
     /// **Not dead code.** Nothing constructs this variant on its own: shell
     /// words are resolved by the caller, and the word resolver that can tell a
-    /// globbed word from a literal one is the unresolved-path work (#45, #48,
-    /// #49), which populates it. Its matching is implemented and tested here so
-    /// that work has a scope to emit — do not remove it as unused.
+    /// globbed word from a literal one is the unresolved-path work (#45), which
+    /// populates it. Its matching is implemented and tested here so that work
+    /// has a scope to emit — do not remove it as unused.
     Pattern(String),
     /// A path-shaped word whose value could not be determined. Matches no rule
     /// and satisfies none, so it always prompts.
     ///
     /// **Not dead code**, for the same reason as `Pattern`: the unresolved-path
-    /// work (#45, #48, #49) is what constructs it.
+    /// work (#45) is what constructs it. Redirect classification (#48, #49)
+    /// decides *whether* a redirect names a file, not what to do when the word
+    /// naming it cannot be resolved, so it constructs neither variant.
     Unresolved(String),
 }
 
