@@ -2161,3 +2161,47 @@ fn an_operand_substitution_past_the_newline_is_walked() {
         result.missing_rules,
     );
 }
+
+#[skuld::test]
+fn a_process_substitution_body_is_located_for_its_own_source() {
+    // `<(...)` bodies are parsed separately, so their spans restart at zero.
+    // Without re-basing, the leading-dash rule reads the outer command's bytes
+    // and invents a write to `-vault/creds` — a deny no rule can lift, on a
+    // command that opens nothing.
+    let result = check(": <(cat /tmp/in >&-/tmp/vault/creds)", &[], &[]);
+    assert!(
+        !result.missing_rules.iter().any(|r| r.contains("/-/")),
+        "a process substitution body fabricated a write: {:?}",
+        result.missing_rules,
+    );
+    assert!(
+        result
+            .missing_rules
+            .contains(&format!("Read({})", canonical("/tmp/vault/creds"))),
+        "the operand inside a process substitution was lost: {:?}",
+        result.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn an_unclosed_subscript_is_not_an_assignment() {
+    // Verified against bash 5.3: `>&-a[0]=1 rm -rf zzz` prints
+    // "`a[0]': not a valid identifier" and *does* delete `zzz`, so the word is
+    // a prefix assignment and `rm` is the command. `>&-a[0=1 rm -rf zzz` is a
+    // syntax error and `zzz` survives — an unclosed subscript is not a name,
+    // so the word is not an assignment.
+    let closed = check(">&-a[0]=1 rm -rf /tmp/zzz", &[], &[]);
+    assert_eq!(
+        closed.missing_rules,
+        vec![format!("Write({}/**)", canonical("/tmp/zzz"))],
+        "a subscripted assignment was read as the command name",
+    );
+    let unclosed = check(">&-a[0=1 rm -rf /tmp/zzz", &[], &[]);
+    assert!(
+        !unclosed
+            .missing_rules
+            .contains(&format!("Write({}/**)", canonical("/tmp/zzz"))),
+        "an unclosed subscript was treated as a prefix assignment: {:?}",
+        unclosed.missing_rules,
+    );
+}
