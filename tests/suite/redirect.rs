@@ -2050,8 +2050,7 @@ fn a_continuation_inside_single_quotes_is_content() {
     // a file, while `> "\`⏎`"` and `> ''\`⏎`''` create nothing.
     //
     // Stripping continuations across the whole spelling in one pass discarded
-    // the word entirely, losing the write — a regression against this
-    // branch's own previous commit.
+    // the word entirely, losing the write.
     for cmd in [
         "true > '\\\n'",
         "true > $'\\\n'",
@@ -2088,8 +2087,7 @@ fn a_continuation_between_the_dollar_and_its_quote_comes_off() {
     //
     // Consuming fragments without allowing for this treated the word as a
     // filename and fabricated a Deny in all six modes, on a command bash
-    // refuses to run. That is the sixth defect in this rule, and the second
-    // introduced by the fix for the previous one.
+    // refuses to run.
     for cmd in [
         "true > $\\\n''",
         "true > $\\\n\"\"",
@@ -2204,4 +2202,108 @@ fn an_unclosed_subscript_is_not_an_assignment() {
         "an unclosed subscript was treated as a prefix assignment: {:?}",
         unclosed.missing_rules,
     );
+}
+
+#[skuld::test]
+fn an_empty_quote_after_a_trailing_dash_names_a_file() {
+    // The trailing-dash rule is about the last character *as written*, so a
+    // quoted fragment after the dash makes the word an ordinary filename even
+    // when that fragment is empty. Verified against bash 5.3: `>&vault/f-""`,
+    // `>&vault/g-''`, `1>&vault/h-""` and `>&vault/i-$''` each create the file
+    // ending in `-`.
+    //
+    // Skipping empty fragments when picking the last one made the dash look
+    // final and dropped the write entirely — the same bypass class #48 set out
+    // to close.
+    for cmd in [
+        "cat /tmp/in >&/tmp/f-\"\"",
+        "cat /tmp/in >&/tmp/g-''",
+        "cat /tmp/in 1>&/tmp/h-\"\"",
+        "cat /tmp/in >&/tmp/i-$''",
+    ] {
+        assert!(
+            matches!(
+                check(cmd, &["Bash(cat *)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "an empty quote after a trailing dash hid the write: {cmd:?}",
+        );
+    }
+    // The control, and the reason the skip cannot simply be inverted: a dash
+    // that really is the last character written moves the descriptor and opens
+    // nothing.
+    assert!(
+        !matches!(
+            check(
+                "cat /tmp/in >&/tmp/j-",
+                &["Bash(cat *)"],
+                &["Write(/tmp/**)"]
+            )
+            .decision,
+            Decision::Deny(_),
+        ),
+        "a bare trailing dash invented a write",
+    );
+}
+
+#[skuld::test]
+fn a_locale_quoted_target_names_the_file_it_spells() {
+    // `$"…"` is a quoting form, not an expansion: with no translation
+    // catalogue bash yields the literal text. Verified against bash 5.3:
+    // `>$"vault/k"` creates `vault/k` and `>vault/l$""` creates `vault/l`.
+    //
+    // thaum's `try_to_static_string` returns `None` for the fragment, so
+    // reading the value alone dropped the access. A dropped *target* is worse
+    // than a dropped argument: an argument still demands a `Bash(...)` rule,
+    // while a target leaves nothing to prompt on.
+    for cmd in ["cat /tmp/in >$\"/tmp/k\"", "cat /tmp/in >/tmp/l$\"\""] {
+        assert!(
+            matches!(
+                check(cmd, &["Bash(cat *)"], &["Write(/tmp/**)"]).decision,
+                Decision::Deny(_),
+            ),
+            "a locale-quoted target lost its write: {cmd:?}",
+        );
+    }
+    // Resolving the value must reach the descriptor rules too, or fixing the
+    // line above turns a correct silence into a false deny: `>&$"2"` duplicates
+    // fd 2 and creates no file, verified against bash 5.3.
+    let descriptor = check("cat /tmp/in >&$\"2\"", &[], &[]);
+    assert!(
+        !descriptor
+            .missing_rules
+            .iter()
+            .any(|rule| rule.starts_with("Write(")),
+        "a locale-quoted descriptor was read as a filename: {:?}",
+        descriptor.missing_rules,
+    );
+}
+
+#[skuld::test]
+fn a_locale_quoted_operand_keeps_its_position() {
+    // The operand recovered out of `>&-word` reads the same value, and it is
+    // the third site that resolves one. Verified against bash 5.3:
+    // `grep in.txt <&-$"f" zzz` receives argv `[in.txt, f, zzz]`, so `f` and
+    // `zzz` are both file operands and `in.txt` is the pattern.
+    //
+    // Dropping the operand does not merely lose it: every later positional
+    // slides one slot left, which moves a path out of grep's file slot into
+    // its pattern slot, where nothing reads it. Fixing the two target-side
+    // sites left this one leaking, and the differential is what found it.
+    for cmd in [
+        "grep /tmp/in >&-$\"/tmp/f\" /tmp/zzz",
+        "grep /tmp/in <&-$\"/tmp/f\" /tmp/zzz",
+        "grep /tmp/in 2>&-$\"/tmp/f\" /tmp/zzz",
+    ] {
+        let result = check(cmd, &[], &[]);
+        for path in ["/tmp/f", "/tmp/zzz"] {
+            assert!(
+                result
+                    .missing_rules
+                    .contains(&format!("Read({})", canonical(path))),
+                "a locale-quoted operand lost its position: {cmd:?} missed {path}, got {:?}",
+                result.missing_rules,
+            );
+        }
+    }
 }

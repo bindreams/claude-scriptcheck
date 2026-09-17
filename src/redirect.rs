@@ -98,7 +98,7 @@ pub fn accesses_for_redirect(
 
     // A target that does not resolve statically is dropped, exactly as before.
     // Recording it instead is #45's job, and deliberately not this change's.
-    let Some(path) = word.try_to_static_string() else {
+    let Some(path) = static_value(word) else {
         return Vec::new();
     };
     // Only a run of empty quote pairs opens nothing; everything else names a
@@ -146,7 +146,7 @@ pub fn accesses_for_redirect(
 /// Of those readings only the file one needs checking, so it is not treated as
 /// a descriptor.
 fn names_a_descriptor(word: &Word) -> bool {
-    let Some(s) = word.try_to_static_string() else {
+    let Some(s) = static_value(word) else {
         return false;
     };
     // Closing and duplicating survive quoting: `>&"-"` closes and `>&"2"`
@@ -177,13 +177,19 @@ fn names_a_descriptor(word: &Word) -> bool {
 /// `>&2-` and `>&2\-` both move fd 2. Quoting is what differs, and a quoted
 /// dash arrives in a quoted fragment.
 ///
+/// Only an empty *literal* is skipped when picking the last fragment. An empty
+/// quoted one is text that was written, and it decides: `>&vault/f-""` is an
+/// ordinary filename and bash creates `vault/f-`. Skipping it read the dash as
+/// the last character and dropped the write. `may_begin_with_bare_dash` skips
+/// the same way at the other edge.
+///
 /// `None` when the last fragment does not resolve, since its expansion decides.
 fn ends_with_descriptor_dash(word: &Word) -> Option<bool> {
     let last = word
         .parts
         .iter()
         .rev()
-        .find(|f| !fragment_text(f).is_some_and(|(_, t)| t.is_empty()))?;
+        .find(|f| !matches!(f, Fragment::Literal(s) if s.is_empty()))?;
     match fragment_text(last) {
         // A literal `-` at the end: bare or escaped, bash reads a descriptor.
         Some((false, text)) => Some(text.ends_with('-')),
@@ -209,6 +215,30 @@ fn fragment_text(fragment: &Fragment) -> Option<(bool, String)> {
         }
         _ => None,
     }
+}
+
+/// The word's value, when every fragment's text is known without expanding it.
+///
+/// `Word::try_to_static_string` gives up on a `$"…"` fragment even though its
+/// value is decided: `$"…"` is a quoting form, and with no translation
+/// catalogue bash yields the literal text, so `>$"vault/k"` writes `vault/k`.
+/// Dropping the target lost the write outright — and a dropped *target* is
+/// worse than a dropped argument, which still demands a `Bash(...)` rule and
+/// prompts; a target leaves nothing to prompt on.
+///
+/// Falling back to the fragments widens nothing else: `fragment_text` is `None`
+/// for every kind whose text a parameter, substitution or glob decides. Both
+/// the file path and the descriptor rules read this, so `>&$"2"` stays a
+/// descriptor move instead of becoming a write to a file called `2`.
+fn static_value(word: &Word) -> Option<String> {
+    if let Some(value) = word.try_to_static_string() {
+        return Some(value);
+    }
+    let mut value = String::new();
+    for part in &word.parts {
+        value.push_str(&fragment_text(part)?.1);
+    }
+    Some(value)
 }
 
 /// Is this word's first character a `-` that bash saw bare?
@@ -341,7 +371,7 @@ fn closed_descriptor_operand(
     // With no source to read, a value starting with `-` is recovered anyway:
     // the write was recorded as well, so one reading is spurious and the
     // operand — which can hide a denied path — is not missed.
-    let value = word.try_to_static_string();
+    let value = static_value(word);
     match begins_with_bare_dash(word, source) {
         Some(true) => {}
         Some(false) => return None,
@@ -442,8 +472,8 @@ fn without_continuations(text: &str) -> String {
 /// and `$""` in any combination. A fragment carrying content names a file, so
 /// `$'x'` writes `x`, and so does a bare `$`.
 ///
-/// Line continuations are where this keeps going wrong, and the rule has been
-/// rewritten around them twice. bash removes `\` + newline before it tokenises
+/// Line continuations are where this keeps going wrong. bash removes `\` +
+/// newline before it tokenises
 /// *or* recognises `$'`, but the characters are ordinary content inside `'…'`
 /// and `$'…'`. So a continuation comes off between fragments and between a `$`
 /// and its quote, and stays inside a single-quoted fragment:

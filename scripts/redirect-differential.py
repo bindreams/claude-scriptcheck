@@ -73,15 +73,19 @@ def words():
     # one.
     for w in ["a\\ b", '"a b"', "'a b'", "-a\\ b", "\\-a\\ b", '-"a b"',
               "d\\/e", "-d\\/e", '2"2"', '\\-2"2"', '"-2"suffix', "\\-2suffix",
-              "sub/-f", "-sub/f", "f\\-", '"2"-', '2"-"']:
+              "sub/-f", "-sub/f", "f\\-", '"2"-', '2"-"',
+              # A dash followed by an empty quoted fragment. The fragment is
+              # written text, so the dash is not the last character and the
+              # word is a filename — crossing quoting with position never
+              # placed an empty quote *after* a non-empty body.
+              '2-""', "f-''", "d/e-$''", '2-$""', 'f-""', "2-''"]:
         add(w)
     add('""')
     add("''")
     add('""' + "-")
     add("-" + '""')
     # The constructs the classifier reads the *source* for. Without these the
-    # sweep says nothing about the code that decides them, and two defects in
-    # that code survived six review rounds while this reported zero.
+    # sweep says nothing about the code that decides them.
     for w in [
         # A line continuation: bash removes it before tokenising, so a word can
         # begin, and a name can be split, across one.
@@ -97,6 +101,11 @@ def words():
         # quotes (thaum#49), so the value it reports is empty or short while
         # bash still names a file — the classifier has to read the spelling.
         "$\\\n''", '$\\\n""', "''$\\\n''", "$", "'\\\n'", "$'\\\n'", '""\'\\\n\'', "'\\\n''\\\n'", "''$'\\\n'", "$''", '$""', "''$''", "$''\"\"", "''\\\n''", "\"\"\\\n\"\"", "$'x'", "\\", "\\\\", "'\\'", '"\\\\"', "x\\", "''\\\\", "a\\b", '2\\', '"2"\\',
+        # Locale quoting carrying content. `$"…"` is a quoting form rather than
+        # an expansion, so bash yields the literal text with no catalogue
+        # installed; it appeared here only as an empty run, which says nothing
+        # about a target that names a file.
+        '$"f"', 'f$"g"', '$"d/e"', '-$"f"', '$"2"', '$"-"', '$"f"-', '2$"-"',
         # A substitution in the operand, which bash runs.
         "-$(:)", "-`:`", "-$(:)f", "$(:)", "-x$(:)",
         # An assignment, which is a prefix rather than a command name.
@@ -171,10 +180,19 @@ def run_probe(d, op, w, template, seed):
     for name in seed:
         if name and not os.path.isabs(name):
             try:
-                with open(os.path.join(d, name), "w") as f:
+                # A seeded name can carry its own parent (`-sub/f`). Without it
+                # the open fails and the family quietly tests that bash refuses
+                # to run, which is not what it was added to cover.
+                path = os.path.join(d, name)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w") as f:
                     f.write("seed\n")
-            except OSError:
-                pass
+            except OSError as error:
+                # A seed that does not land leaves the probe comparing against a
+                # differently-shaped filesystem than the one it meant to set up,
+                # which reads as a bash/checker disagreement rather than as the
+                # harness bug it is.
+                print(f"seed failed for {name!r}: {error}", file=sys.stderr)
     # The probe function stands in for whichever command the template names, so
     # the argv it reports is the argv that command would have received.
     # The commands are shadowed by shell functions rather than substituted into
